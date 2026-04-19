@@ -2,7 +2,12 @@
 
 Java 语义上下文引擎，基于 Eclipse JDT Core 构建，为 LLM 提供代码语义分析能力。
 
-## 与业界工具对比
+## 技术选型
+
+采用 Eclipse JDT Core 而非其他方案的原因：
+- **语义精准**：JDT Binding 直接解析类型，比正则/Tree-sitter 更准确
+- **零配置**：单个 JAR，无需编译
+- **LLM 直接可用**：输出 Markdown，无需二次处理
 
 详见 [COMPARISON.md](./COMPARISON.md)
 
