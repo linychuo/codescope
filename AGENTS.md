@@ -19,9 +19,61 @@ java -jar target/codescope-*.jar <command> <file.java> [method|line]
 | Command | Description |
 |---------|-------------|
 | `context` | Build semantic context for LLM (default) |
-| `calls` | Show method call relationships + callers |
+| `calls` | Show method call relationships (callees) |
+| `callers` | Show methods that call a given method |
+| `dot` | Generate Graphviz DOT call graph |
+| `classpath` | Show Maven dependencies |
 | `ast` | Show AST structure |
 | `index` | Build project index for large projects |
+
+## dot Options
+| Option | Description |
+|--------|-------------|
+| `--no-jdk` | Exclude JDK method calls |
+| `--cycles` | Detect call cycles |
+| `--heatmap` | Show call frequency heatmap |
+
+## Agent Integration
+
+### Option 1: Shell Command (simplest)
+LLM executes via shell:
+```bash
+cd /path/to/codescope && java -jar target/codescope-*.jar context /project/src/MyClass.java methodName
+```
+
+### Option 2: MCP Server
+Start MCP server:
+```bash
+java -jar target/codescope-*.jar mcp
+```
+Then invoke from LLM.
+
+### Option 3: Tool Definition for LLM
+Define as tool:
+```
+name: java_code_context
+description: Get semantic context for a Java method (class, imports, fields, calls, definition)
+parameters:
+  - name: filePath
+    type: string
+    required: true
+  - name: methodName  
+    type: string
+    required: false
+command: java -jar target/codescope-*.jar context {{filePath}} {{methodName}}
+```
+
+### Example Prompts
+```
+# Analyze a method
+"使用 codescope 分析 /project/src/MyClass.java 中的 main 方法调用关系"
+
+# Find all callers
+"查找项目中调用 foo 方法的所有位置"
+
+# Generate call graph
+"生成 /project/src/ 的调用图，输出 Graphviz DOT 格式"
+```
 
 ## Usage Examples (CLI)
 ```bash
@@ -34,8 +86,17 @@ java -jar target/codescope-*.jar context Test.java main
 # By line number
 java -jar target/codescope-*.jar context Test.java 10
 
-# Show callees + callers
+# Show callees
 java -jar target/codescope-*.jar calls Test.java main
+
+# Show callers
+java -jar target/codescope-*.jar callers Test.java main
+
+# Generate call graph
+java -jar target/codescope-*.jar dot src/ > callgraph.dot
+
+# Exclude JDK calls
+java -jar target/codescope-*.jar dot src/ --no-jdk > project_calls.dot
 
 # Show AST structure
 java -jar target/codescope-*.jar ast Test.java
@@ -43,6 +104,9 @@ java -jar target/codescope-*.jar ast Test.java
 # Index project
 java -jar target/codescope-*.jar index src                 # Summary
 java -jar target/codescope-*.jar index src init             # Find method across project
+
+# Maven dependencies
+java -jar target/codescope-*.jar classpath .
 ```
 
 ## Library API
@@ -73,11 +137,13 @@ engine.close();
 - **Method and line number lookup** — Can find methods by name or line number
 - **AST Caching** — Avoids re-parsing unchanged files
 - **Public API** — JavaCodeEngine library for programmatic access
+- **Multi-module support** — Auto-discovers module-*/src/main/java
+- **Graphviz output** — DOT format call graph with cycle detection and heatmap
 
 ## Performance
 - First run: ~800ms (parses all files)
 - Subsequent runs: Uses cached AST
 
 ## Known Limitations
-- No cross-module resolution (handles single directory)
+- No Maven classpath resolution for third-party JAR bindings
 - Unit tests using JDT directly may fail due to OSGi signing conflicts in Maven test classpath (CLI tests work fine)
