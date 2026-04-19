@@ -253,12 +253,20 @@ Options:
   -v, --version  Show version
   --json         Output as JSON
 
+dot Options:
+  --no-jdk      Exclude JDK method calls
+  --cycles      Detect call cycles
+  --heatmap    Show call frequency heatmap
+
 Examples:
   Main context Test.java           # Full file context
   Main context Test.java main    # Method-specific context
   Main calls Test.java main      # Show callees of main
   Main callers Test.java main    # Show callers of main
   Main dot Test.java            # Graphviz DOT output
+  Main dot src/ --no-jdk       # Exclude JDK calls
+  Main dot src/ --cycles       # Detect cycles
+  Main dot src/ --heatmap     # Show heatmap
   Main ast Test.java             # Show AST
   Main index .                   # Index current directory
   Main index . init             # Find method 'init' in project
