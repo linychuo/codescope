@@ -81,9 +81,20 @@ java -jar target/codescope-*.jar callers UserRepository.java save
 java -jar target/codescope-*.jar index project-dir hello
 ```
 
+### 单文件调用图
+```bash
+java -jar target/codescope-*.jar dot Test.java
+```
+
 ### Graphviz 调用图
 ```bash
+# 单文件
 java -jar target/codescope-*.jar dot Test.java > callgraph.dot
+
+# 整个目录
+java -jar target/codescope-*.jar dot src/ > callgraph.dot
+
+# 生成图片
 dot -Tpng callgraph.dot -o callgraph.png
 ```
 
