@@ -7,6 +7,10 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * CLI entry point for CodeScope.
+ * Parses arguments and delegates to CommandHandler.
+ */
 public class Main {
 
     public static void main(String[] args) {

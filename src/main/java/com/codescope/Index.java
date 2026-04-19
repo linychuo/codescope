@@ -9,6 +9,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Full-project index for method lookup across multiple modules.
+ * Builds method index and supports cross-module queries.
+ */
 public class Index {
 
     private final List<ProjectModel> models = new ArrayList<>();

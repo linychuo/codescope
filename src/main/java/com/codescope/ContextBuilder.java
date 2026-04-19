@@ -7,10 +7,19 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * Builds semantic context for LLM from Java source files.
+ * Integrates multiple ProjectModels and provides unified API.
+ */
 public class ContextBuilder {
 
+    /** List of project models (one per module) */
     private final List<ProjectModel> models = new ArrayList<>();
 
+    /**
+     * Creates a context builder for the given directory.
+     * Auto-discovers Java roots and initializes all modules.
+     */
     public ContextBuilder(Path dir) throws IOException {
         if (dir == null) return;
 
@@ -44,6 +53,9 @@ public class ContextBuilder {
         return javaRoots;
     }
 
+    /**
+     * Returns all files across all models.
+     */
     public Set<Path> getFiles() {
         Set<Path> files = new HashSet<>();
         for (ProjectModel model : models) {
@@ -52,18 +64,35 @@ public class ContextBuilder {
         return files;
     }
 
+    /**
+     * Returns all project models.
+     */
     public List<ProjectModel> getModels() {
         return models;
     }
 
+    /**
+     * Generates call graph DOT output (default options).
+     */
     public String buildDot() {
         return buildDot(false, false, false);
     }
 
+    /**
+     * Generates call graph DOT with options.
+     * @param noJdk filter out JDK calls
+     * @param cycles detect call cycles
+     * @param heatmap show call frequency
+     */
     public String buildDot(boolean noJdk, boolean cycles, boolean heatmap) {
         return DotGenerator.generate(models, noJdk, cycles, heatmap);
     }
 
+    /**
+     * Builds semantic context for a file.
+     * @param file source file to analyze
+     * @param query method name or line number (optional)
+     */
     public String build(Path file, String query) {
         if (models.isEmpty()) return "No files found";
         

@@ -1,26 +1,16 @@
 package com.codescope;
 
-import org.eclipse.jdt.core.dom.CompilationUnit;
-import org.eclipse.jdt.core.dom.TypeDeclaration;
-import org.eclipse.jdt.core.dom.MethodDeclaration;
+import org.eclipse.jdt.core.dom.*;
 
 import java.io.IOException;
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.*;
 
 /**
- * Main entry point for the Java Code Engine library.
- * Provides semantic analysis of Java source code using Eclipse JDT.
- *
- * <p>Example usage:
- * <pre>{@code
- * JavaCodeEngine engine = new JavaCodeEngine(Path.of("src"));
- * SemanticContext ctx = engine.getSemanticContext(Path.of("src/MyClass.java"));
- * System.out.println(ctx.getClassName());
- * engine.close();
- * }</pre>
+ * Public API for programmatic access to CodeScope.
+ * Provides high-level interface for semantic analysis.
  */
 public class JavaCodeEngine {
 

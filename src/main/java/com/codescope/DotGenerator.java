@@ -2,10 +2,17 @@ package com.codescope;
 
 import org.eclipse.jdt.core.dom.*;
 
-import java.nio.file.*;
 import java.nio.file.Path;
 import java.util.*;
 
+/**
+ * Generates Graphviz DOT format output from call graphs.
+ * Supports filtering (--no-jdk), cycle detection (--cycles), and heatmap (--heatmap).
+ * @param models list of project models
+ * @param noJdk exclude JDK method calls
+ * @param cycles detect call cycles
+ * @param heatmap show call frequency heatmap
+ */
 public class DotGenerator {
 
     public static String generate(List<ProjectModel> models, boolean noJdk, boolean cycles, boolean heatmap) {

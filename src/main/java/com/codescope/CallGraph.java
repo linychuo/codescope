@@ -5,11 +5,17 @@ import org.eclipse.jdt.core.dom.*;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * Analyzes method call relationships within a single Java file.
+ * Parses method invocations and builds caller/callee maps.
+ */
 public class CallGraph {
 
     private final Path file;
     private final ProjectModel model;
+    /** Maps methodKey -> set of called methods */
     public final Map<String, Set<CallSite>> callSites = new HashMap<>();
+    /** Maps method name -> set of callers */
     private final Map<String, Set<CallSite>> callers = new HashMap<>();
 
     public CallGraph(Path file, ProjectModel model) {
@@ -158,6 +164,9 @@ public class CallGraph {
         return s.replace("\"", "\\\"");
     }
 
+    /**
+     * Represents a method call site with line number and resolved type.
+     */
     public static class CallSite implements Comparable<CallSite> {
         public final String method;
         public final int line;

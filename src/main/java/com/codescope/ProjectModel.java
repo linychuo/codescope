@@ -8,6 +8,10 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Manages AST cache and Java source file parsing for a single module.
+ * Uses Virtual Threads for parallel parsing.
+ */
 public class ProjectModel {
 
     private final Map<Path, CompilationUnit> astCache = new ConcurrentHashMap<>();

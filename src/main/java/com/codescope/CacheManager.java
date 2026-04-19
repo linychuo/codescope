@@ -4,6 +4,10 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * Manages AST serialization cache to avoid re-parsing.
+ * Stores parsed ASTs in .jdt-cache directory.
+ */
 public class CacheManager {
 
     private static final String CACHE_FILE = ".jdt-cache";

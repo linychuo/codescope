@@ -5,6 +5,10 @@ import org.eclipse.jdt.core.dom.*;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * Handles all CLI commands.
+ * Routes commands to appropriate builders and formatters.
+ */
 public class CommandHandler {
 
     public static String handle(String command, Path sourceFile, String query, 
