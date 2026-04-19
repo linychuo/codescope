@@ -26,10 +26,17 @@ public class Main {
         }
     }
 
+private static boolean noJdk = false;
+    private static boolean cycles = false;
+    private static boolean heatmap = false;
+
     private static void run(String[] args) throws IOException {
         String command = args[0];
         boolean json = Arrays.asList(args).contains("--json");
-
+        noJdk = Arrays.asList(args).contains("--no-jdk");
+        cycles = Arrays.asList(args).contains("--cycles");
+        heatmap = Arrays.asList(args).contains("--heatmap");
+        
         if (command.equals("-h") || command.equals("--help")) {
             printUsage();
             return;
@@ -118,7 +125,7 @@ public class Main {
         } else if (args[0].equals("callers")) {
             output = buildCallers(cb, sourceFile, query);
         } else if (args[0].equals("dot")) {
-            output = cb.buildDot();
+            output = cb.buildDot(noJdk, cycles, heatmap);
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
