@@ -468,6 +468,16 @@ public class ContextBuilder {
                             callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
                                    .add(new CallSite(typeName + "." + method.getName().getIdentifier(), call.getStartPosition(), ""));
                         }
+
+                        for (Object fieldAssign : findFieldAssignments(stmt)) {
+                            var fa = (org.eclipse.jdt.core.dom.FieldAccess) fieldAssign;
+                            IVariableBinding binding = fa.resolveFieldBinding();
+                            String fieldRef = binding != null ? 
+                                binding.getDeclaringClass().getName() + "." + binding.getName() : 
+                                fa.getName().getIdentifier();
+                            callers.computeIfAbsent(fa.getName().getIdentifier(), k -> new TreeSet<>())
+                                   .add(new CallSite(typeName + "." + method.getName().getIdentifier(), fa.getStartPosition(), "FieldAccess:" + fieldRef));
+                        }
                     }
                 }
             }
@@ -483,6 +493,20 @@ public class ContextBuilder {
                 @Override
                 public boolean visit(MethodInvocation n) {
                     result.add(n);
+                    return super.visit(n);
+                }
+            });
+            return result;
+        }
+
+        private List<ASTNode> findFieldAssignments(ASTNode node) {
+            List<ASTNode> result = new ArrayList<>();
+            node.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(FieldAccess n) {
+                    if (n.getExpression() != null) {
+                        result.add(n);
+                    }
                     return super.visit(n);
                 }
             });

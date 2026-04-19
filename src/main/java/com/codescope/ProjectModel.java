@@ -15,14 +15,24 @@ public class ProjectModel {
     private final Path rootDir;
     private final ExecutorService executor;
     private CacheManager cacheManager;
+    private String[] classpath;
 
     public ProjectModel(Path rootDir) {
+        this(rootDir, null);
+    }
+
+    public ProjectModel(Path rootDir, String[] classpath) {
         this.rootDir = rootDir;
+        this.classpath = classpath;
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         
         if (rootDir != null) {
             this.cacheManager = new CacheManager(rootDir);
         }
+    }
+
+    public String[] getClasspath() {
+        return classpath;
     }
 
     public void init() throws IOException {
