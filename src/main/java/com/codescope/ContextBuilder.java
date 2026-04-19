@@ -193,13 +193,41 @@ public class ContextBuilder {
 
     public static class CallGraph {
         private final Path file;
-final ProjectModel model;
+        final ProjectModel model;
         private final Map<String, Set<CallSite>> callSites = new HashMap<>();
+        private final Map<String, Set<CallSite>> callers = new HashMap<>();
 
         public CallGraph(Path file, ProjectModel model) {
             this.file = file;
             this.model = model;
             analyze();
+        }
+
+        public Set<CallSite> getCallers(Path f, String methodName) {
+            Set<CallSite> result = new TreeSet<>();
+            if (!f.equals(file)) return result;
+
+            CompilationUnit cu = model.getAst(f);
+            if (cu == null) return result;
+
+            for (Object obj : cu.types()) {
+                if (!(obj instanceof TypeDeclaration type)) continue;
+                for (Object member : type.bodyDeclarations()) {
+                    if (!(member instanceof MethodDeclaration method)) continue;
+                    if (method.getBody() == null) continue;
+
+                    String methodKey = type.getName().getIdentifier() + "." + method.getName().getIdentifier();
+                    Set<CallSite> calls = callSites.get(methodKey);
+                    if (calls == null) continue;
+
+                    for (CallSite cs : calls) {
+                        if (cs.method.equals(methodName) || cs.resolved.contains(methodName)) {
+                            result.add(new CallSite(method.getName().getIdentifier(), cs.line, type.getName().getIdentifier() + "." + methodName));
+                        }
+                    }
+                }
+            }
+            return result;
         }
 
         private void analyze() {
@@ -225,10 +253,16 @@ final ProjectModel model;
                             }
                             callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
                                    .add(new CallSite(call.getName().getIdentifier(), call.getStartPosition(), resolved));
+                            callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
+                                   .add(new CallSite(typeName + "." + method.getName().getIdentifier(), call.getStartPosition(), ""));
                         }
                     }
                 }
             }
+        }
+
+        public Set<CallSite> getCallersByName(String methodName) {
+            return callers.getOrDefault(methodName, Collections.emptySet());
         }
 
         private List<MethodInvocation> findMethodCalls(ASTNode node) {

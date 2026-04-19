@@ -115,6 +115,8 @@ public class Main {
             output = cb.build(sourceFile, query);
         } else if (args[0].equals("calls")) {
             output = buildCalls(cb, sourceFile);
+        } else if (args[0].equals("callers")) {
+            output = buildCallers(cb, sourceFile, query);
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
@@ -181,6 +183,27 @@ public class Main {
         return sb.toString();
     }
 
+    private static String buildCallers(ContextBuilder cb, Path sourceFile, String methodName) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Callers of: ").append(methodName != null ? methodName : sourceFile.getFileName()).append("\n\n");
+
+        if (methodName == null) {
+            return buildCalls(cb, sourceFile);
+        }
+
+        sb.append("## Callers\n");
+        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.model);
+        Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodName);
+        if (callers.isEmpty()) {
+            sb.append("(no callers found)\n");
+        } else {
+            for (var caller : callers) {
+                sb.append("- ").append(caller.resolved).append(" at line ").append(caller.line).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
     private static String buildAst(ContextBuilder cb, Path sourceFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
@@ -211,6 +234,7 @@ Usage: Main <command> <source> [query]
 Commands:
   context   Build semantic context for LLM
   calls     Show method call relationships
+  callers   Show methods that call a given method
   ast       Show AST structure
   index     Build project index (for large projects)
 
@@ -223,6 +247,7 @@ Examples:
   Main context Test.java           # Full file context
   Main context Test.java main    # Method-specific context
   Main calls Test.java main      # Show callees of main
+  Main callers Test.java main    # Show callers of main
   Main ast Test.java             # Show AST
   Main index .                   # Index current directory
   Main index . init             # Find method 'init' in project

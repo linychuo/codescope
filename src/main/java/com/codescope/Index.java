@@ -56,10 +56,29 @@ public class Index {
     public Index(List<Path> dirs) throws IOException {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         for (Path dir : dirs) {
-            ProjectModel model = new ProjectModel(dir);
-            model.init();
-            models.add(model);
+            if (Files.isRegularFile(dir)) {
+                dir = dir.getParent();
+            }
+            Set<Path> javaRoots = findJavaRoots(dir);
+            if (javaRoots.isEmpty() && dir.toString().endsWith("java")) {
+                javaRoots.add(dir);
+            }
+            for (Path javaRoot : javaRoots) {
+                ProjectModel model = new ProjectModel(javaRoot);
+                model.init();
+                models.add(model);
+            }
         }
+    }
+
+    private Set<Path> findJavaRoots(Path root) throws IOException {
+        Set<Path> javaRoots = new HashSet<>();
+        Files.walk(root)
+            .filter(Files::isDirectory)
+            .filter(p -> p.endsWith("java"))
+            .filter(p -> !p.toString().contains("/target/"))
+            .forEach(javaRoots::add);
+        return javaRoots;
     }
 
     public void build() throws IOException {
@@ -129,6 +148,25 @@ public class Index {
                                      .append(" at ").append(file.getFileName()).append("\n");
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        sb.append("\n## Implementations\n");
+        for (ProjectModel model : models) {
+            for (Path file : model.getFiles()) {
+                CompilationUnit cu = model.getAst(file);
+                if (cu == null) continue;
+
+                for (Object obj : cu.types()) {
+                    if (!(obj instanceof TypeDeclaration type)) continue;
+                    for (Object member : type.bodyDeclarations()) {
+                        if (!(member instanceof MethodDeclaration method)) continue;
+                        if (method.getName().getIdentifier().equals(name) && method.getBody() != null) {
+                            sb.append("- ").append(type.getName().getIdentifier())
+                              .append(" at ").append(file.getFileName()).append("\n");
                         }
                     }
                 }

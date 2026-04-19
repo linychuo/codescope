@@ -28,7 +28,8 @@ java -jar target/codescope-*.jar context Test.java main
 | 命令 | 说明 | 示例 |
 |------|------|------|
 | `context` | 构建语义上下文 | `context Test.java main` |
-| `calls` | 方法调用关系 | `calls Test.java main` |
+| `calls` | 方法调用关系 (callees) | `calls Test.java main` |
+| `callers` | 反向调用查找 | `callers Test.java main` |
 | `ast` | AST 结构 | `ast Test.java` |
 | `index` | 项目索引 | `index src init` |
 
