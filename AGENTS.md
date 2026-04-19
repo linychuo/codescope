@@ -41,29 +41,7 @@ LLM executes via shell:
 cd /path/to/codescope && java -jar target/codescope-*.jar context /project/src/MyClass.java methodName
 ```
 
-### Option 2: MCP Server (JSON over stdin/stdout)
-Start MCP server and send JSON requests:
-```bash
-# Start server
-java -cp target/codescope-*.jar com.codescope.McpServer
-
-# Or pipe JSON request
-echo '{"method":"context","filePath":"/path/to/File.java","method":"main"}' | \
-  java -cp target/codescope-*.jar com.codescope.McpServer
-```
-
-JSON format:
-```json
-{"method":"context","filePath":"/path/to/Class.java","method":"methodName"}
-{"method":"calls","filePath":"/path/to/Class.java","method":"methodName"}
-{"method":"callers","filePath":"/path/to/Class.java","method":"methodName"}
-{"method":"impact","filePath":"/path/to/project/","method":"methodName"}
-{"method":"dot","filePath":"/path/to/project/"}
-{"method":"classpath","filePath":"/path/to/project/"}
-{"method":"index","filePath":"/path/to/project/","method":"methodName"}
-```
-
-### Option 3: Tool Definition for LLM
+### Option 2: Tool Definition for LLM
 Define as tool:
 ```
 name: java_code_context
