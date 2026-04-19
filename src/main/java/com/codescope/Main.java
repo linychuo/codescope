@@ -115,32 +115,18 @@ private static boolean noJdk = false;
         Path dir = sourceFile.getParent();
 
         long start = System.currentTimeMillis();
-        ContextBuilder cb = new ContextBuilder(dir);
         String output;
 
-        if (args[0].equals("context")) {
-            output = cb.build(sourceFile, query);
-        } else if (args[0].equals("calls")) {
-            output = buildCalls(cb, sourceFile);
-        } else if (args[0].equals("callers")) {
-            output = buildCallers(cb, sourceFile, query);
-        } else if (args[0].equals("dot")) {
-            output = cb.buildDot(noJdk, cycles, heatmap);
-        } else if (args[0].equals("classpath")) {
-            output = buildClasspath(sourceFile);
-        } else if (args[0].equals("impact")) {
-            output = buildImpact(sourceFile, query);
-        } else if (args[0].equals("ast")) {
-            output = buildAst(cb, sourceFile);
-        } else {
-            output = "Unknown command: " + args[0];
+        try {
+            output = CommandHandler.handle(args[0], sourceFile, query, noJdk, cycles, heatmap);
+        } catch (Exception e) {
+            output = "Error: " + e.getMessage();
         }
 
         if (json) {
-            System.out.println(toJson(output));
-        } else {
-            System.out.println(output);
+            output = toJson(output);
         }
+        System.out.println(output);
         System.out.println("Done in " + (System.currentTimeMillis() - start) + "ms");
     }
 
@@ -166,155 +152,6 @@ private static boolean noJdk = false;
 
     private static String escape(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private static String buildCalls(ContextBuilder cb, Path sourceFile) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Call Graph for: ").append(sourceFile.getFileName()).append("\n\n");
-
-        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
-        if (cu == null) return "File not found: " + sourceFile;
-
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
-
-        for (Object obj : cu.types()) {
-            if (!(obj instanceof TypeDeclaration type)) continue;
-            for (Object member : type.bodyDeclarations()) {
-                if (!(member instanceof MethodDeclaration method)) continue;
-                String methodName = method.getName().getIdentifier();
-                sb.append("## ").append(methodName).append("\n");
-                Set<ContextBuilder.CallGraph.CallSite> calls = cg.getCallees(sourceFile, methodName);
-                if (calls.isEmpty()) {
-                    sb.append("(no calls)\n");
-                } else {
-                    for (var call : calls) {
-                        sb.append("- ").append(call).append("\n");
-                    }
-                }
-            }
-        }
-        return sb.toString();
-    }
-
-    private static String buildCallers(ContextBuilder cb, Path sourceFile, String methodName) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Callers of: ").append(methodName != null ? methodName : sourceFile.getFileName()).append("\n\n");
-
-        if (methodName == null) {
-            return buildCalls(cb, sourceFile);
-        }
-
-        sb.append("## Callers\n");
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
-        Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodName);
-        if (callers.isEmpty()) {
-            sb.append("(no callers found)\n");
-        } else {
-            for (var caller : callers) {
-                sb.append("- ").append(caller.resolved).append(" at line ").append(caller.line).append("\n");
-            }
-        }
-        return sb.toString();
-    }
-
-    private static String buildImpact(Path sourceFile, String methodQuery) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Impact Analysis\n\n");
-        
-        Path dir = sourceFile;
-        if (Files.isRegularFile(sourceFile)) {
-            dir = sourceFile.getParent();
-        }
-        
-        sb.append("Scanning: ").append(dir).append("\n\n");
-        
-        ContextBuilder cb = new ContextBuilder(dir);
-        
-        if (methodQuery != null) {
-            sb.append("## Method: ").append(methodQuery).append("\n\n");
-            
-            Set<Path> files = cb.getFiles();
-            int impactCount = 0;
-            
-            for (Path f : files) {
-                ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-                Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
-                if (!callers.isEmpty()) {
-                    sb.append("### ").append(f.getFileName()).append("\n");
-                    for (var caller : callers) {
-                        sb.append("- line ").append(caller.line).append(": ")
-                          .append(caller.resolved).append("\n");
-                        impactCount++;
-                    }
-                }
-            }
-            
-            sb.append("\n## Impact Summary\n");
-            sb.append("Total calls: ").append(impactCount).append("\n");
-        } else {
-            sb.append("Analyzing all file changes...\n");
-            sb.append("\n## Usage\n");
-            sb.append("java -jar codescope.jar impact /path/to/file.java methodName\n");
-        }
-        
-        return sb.toString();
-    }
-
-    private static String buildClasspath(Path dir) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# Classpath for: ").append(dir).append("\n\n");
-
-        Path pom = dir.resolve("pom.xml");
-        if (Files.exists(pom)) {
-            sb.append("Detected pom.xml\n\n");
-            List<String> deps = parseMavenDeps(pom);
-            for (String dep : deps) {
-                sb.append("- ").append(dep).append("\n");
-            }
-        } else {
-            sb.append("No pom.xml found\n");
-        }
-
-        return sb.toString();
-    }
-
-    private static List<String> parseMavenDeps(Path pom) throws IOException {
-        List<String> deps = new ArrayList<>();
-        String content = Files.readString(pom);
-        
-        String dependencyPattern = "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?(?:<version>(.*?)</version>)?.*?</dependency>";
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(dependencyPattern, java.util.regex.Pattern.DOTALL);
-        java.util.regex.Matcher matcher = pattern.matcher(content);
-        
-        while (matcher.find()) {
-            String groupId = matcher.group(1).trim();
-            String artifactId = matcher.group(2).trim();
-            String version = matcher.group(3) != null ? matcher.group(3).trim() : "unknown";
-            deps.add(groupId + ":" + artifactId + ":" + version);
-        }
-        
-        return deps;
-    }
-
-    private static String buildAst(ContextBuilder cb, Path sourceFile) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
-
-        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
-        if (cu == null) return "File not found: " + sourceFile;
-
-        for (Object obj : cu.types()) {
-            if (obj instanceof TypeDeclaration type) {
-                sb.append("## Class: ").append(type.getName().getIdentifier()).append("\n");
-                for (Object member : type.bodyDeclarations()) {
-                    if (member instanceof MethodDeclaration m) {
-                        sb.append("### Method: ").append(m.getName().getIdentifier()).append("\n");
-                        sb.append("```java\n").append(m.toString()).append("\n```\n");
-                    }
-                }
-            }
-        }
-        return sb.toString();
     }
 
     private static void printUsage() {
