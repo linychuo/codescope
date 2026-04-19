@@ -19,8 +19,18 @@ public class ContextBuilder {
     /**
      * Creates a context builder for the given directory.
      * Auto-discovers Java roots and initializes all modules.
+     * Resolves Maven dependencies from pom.xml if present.
      */
     public ContextBuilder(Path dir) throws IOException {
+        this(dir, ClasspathResolver.resolveClasspath(dir));
+    }
+
+    /**
+     * Creates a context builder for the given directory with explicit classpath.
+     * @param dir directory to scan for Java files
+     * @param classpath resolved classpath entries (JAR file paths), may be null
+     */
+    public ContextBuilder(Path dir, String[] classpath) throws IOException {
         if (dir == null) return;
 
         if (Files.isRegularFile(dir)) {
@@ -31,7 +41,7 @@ public class ContextBuilder {
             javaRoots.add(dir);
         }
         for (Path javaRoot : javaRoots) {
-            ProjectModel model = new ProjectModel(javaRoot);
+            ProjectModel model = new ProjectModel(javaRoot, classpath);
             model.init();
             Files.walk(javaRoot)
                 .filter(p -> p.toString().endsWith(".java"))
@@ -326,19 +336,22 @@ public class ContextBuilder {
                     String methodKey = typeName + "." + method.getName().getIdentifier();
                     if (method.getBody() == null) continue;
 
-                    for (Object stmtObj : method.getBody().statements()) {
-                        ASTNode stmt = (ASTNode) stmtObj;
-                        for (MethodInvocation call : findMethodCalls(stmt)) {
-                            IMethodBinding binding = call.resolveMethodBinding();
-                            String resolved = "";
-                            if (binding != null) {
-                                resolved = binding.getDeclaringClass().getName() + "." + binding.getName() + "()";
-                            }
-                            callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
-                                   .add(new CallSite(call.getName().getIdentifier(), call.getStartPosition(), resolved));
-                            callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
-                                   .add(new CallSite(typeName + "." + method.getName().getIdentifier(), call.getStartPosition(), ""));
+                for (Object stmtObj : method.getBody().statements()) {
+                    ASTNode stmt = (ASTNode) stmtObj;
+                    for (MethodInvocation call : findMethodCalls(stmt)) {
+                        IMethodBinding binding = call.resolveMethodBinding();
+                        String resolved = "";
+                        if (binding != null) {
+                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName() + "()";
+                            System.err.println("Resolved binding for call " + call.getName() + ": " + resolved);
+                        } else {
+                            System.err.println("Binding is null for call " + call.getName());
                         }
+                        callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
+                                .add(new CallSite(call.getName().getIdentifier(), call.getStartPosition(), resolved));
+                        callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
+                                .add(new CallSite(typeName + "." + method.getName().getIdentifier(), call.getStartPosition(), ""));
+                    }
 
                         for (Object fieldAssign : findFieldAssignments(stmt)) {
                             var fa = (org.eclipse.jdt.core.dom.FieldAccess) fieldAssign;

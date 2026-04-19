@@ -125,6 +125,9 @@ private static boolean noJdk = false;
             output = CommandHandler.handle(args[0], sourceFile, query, noJdk, cycles, heatmap);
         } catch (Exception e) {
             output = "Error: " + e.getMessage();
+            if (Boolean.parseBoolean(System.getProperty("debug", "false"))) {
+                e.printStackTrace();
+            }
         }
 
         if (json) {

@@ -90,11 +90,11 @@ public class CommandHandler {
         return sb.toString();
     }
 
-    private static List<String> parseMavenDeps(Path pom) throws Exception {
+    public static List<String> parseMavenDeps(Path pom) throws Exception {
         List<String> deps = new ArrayList<>();
         String content = Files.readString(pom);
         
-        String pattern = "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?(?:<version>(.*?)</version>)?.*?</dependency>";
+        String pattern = "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?<version>(.*?)</version>.*?</dependency>";
         java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.DOTALL);
         java.util.regex.Matcher m = p.matcher(content);
         
