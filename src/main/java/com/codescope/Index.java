@@ -42,7 +42,8 @@ public class Index {
             System.exit(1);
         }
 
-        Index index = new Index(dirs);
+        String[] cp = parseMavenClasspath(dirs.get(0));
+        Index index = new Index(dirs, cp);
         index.build();
 
         if (query != null) {
@@ -117,6 +118,27 @@ public class Index {
         executor.shutdown();
     }
 
+    private String[] classpath;
+
+    public Index(List<Path> dirs, String[] classpath) throws IOException {
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        this.classpath = classpath;
+        for (Path dir : dirs) {
+            if (Files.isRegularFile(dir)) {
+                dir = dir.getParent();
+            }
+            Set<Path> javaRoots = findJavaRoots(dir);
+            if (javaRoots.isEmpty() && dir.toString().endsWith("java")) {
+                javaRoots.add(dir);
+            }
+            for (Path javaRoot : javaRoots) {
+                ProjectModel model = new ProjectModel(javaRoot, classpath);
+                model.init();
+                models.add(model);
+            }
+        }
+    }
+
     public String findMethod(String name) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Method: ").append(name).append("\n\n");
@@ -125,6 +147,13 @@ public class Index {
         sb.append("## Definitions (").append(found.size()).append(")\n");
         for (var m : found) {
             sb.append("- ").append(m.type).append(" at ").append(m.file.getFileName()).append("\n");
+        }
+
+        if (classpath != null && classpath.length > 0) {
+            sb.append("\n## Maven Dependencies\n");
+            for (String cp : classpath) {
+                sb.append("- ").append(cp).append("\n");
+            }
         }
 
         sb.append("\n## Callers\n");
@@ -223,4 +252,28 @@ public class Index {
     }
 
     public record MethodInfo(Path file, String type, MethodDeclaration method) {}
+
+    private static String[] parseMavenClasspath(Path dir) {
+        Path pom = dir.resolve("pom.xml");
+        if (!Files.exists(pom)) {
+            return null;
+        }
+        try {
+            String content = Files.readString(pom);
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?(?:<version>(.*?)</version>)?.*?</dependency>",
+                java.util.regex.Pattern.DOTALL);
+            java.util.regex.Matcher matcher = pattern.matcher(content);
+            List<String> deps = new ArrayList<>();
+            while (matcher.find()) {
+                String g = matcher.group(1).trim();
+                String a = matcher.group(2).trim();
+                String v = matcher.group(3) != null ? matcher.group(3).trim() : "latest";
+                deps.add(g + ":" + a + ":" + v);
+            }
+            return deps.isEmpty() ? null : deps.toArray(new String[0]);
+        } catch (IOException e) {
+            return null;
+        }
+    }
 }

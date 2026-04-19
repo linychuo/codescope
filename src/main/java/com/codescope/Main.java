@@ -126,6 +126,8 @@ private static boolean noJdk = false;
             output = buildCallers(cb, sourceFile, query);
         } else if (args[0].equals("dot")) {
             output = cb.buildDot(noJdk, cycles, heatmap);
+        } else if (args[0].equals("classpath")) {
+            output = buildClasspath(sourceFile);
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
@@ -213,6 +215,42 @@ private static boolean noJdk = false;
         return sb.toString();
     }
 
+    private static String buildClasspath(Path dir) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Classpath for: ").append(dir).append("\n\n");
+
+        Path pom = dir.resolve("pom.xml");
+        if (Files.exists(pom)) {
+            sb.append("Detected pom.xml\n\n");
+            List<String> deps = parseMavenDeps(pom);
+            for (String dep : deps) {
+                sb.append("- ").append(dep).append("\n");
+            }
+        } else {
+            sb.append("No pom.xml found\n");
+        }
+
+        return sb.toString();
+    }
+
+    private static List<String> parseMavenDeps(Path pom) throws IOException {
+        List<String> deps = new ArrayList<>();
+        String content = Files.readString(pom);
+        
+        String dependencyPattern = "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?(?:<version>(.*?)</version>)?.*?</dependency>";
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(dependencyPattern, java.util.regex.Pattern.DOTALL);
+        java.util.regex.Matcher matcher = pattern.matcher(content);
+        
+        while (matcher.find()) {
+            String groupId = matcher.group(1).trim();
+            String artifactId = matcher.group(2).trim();
+            String version = matcher.group(3) != null ? matcher.group(3).trim() : "unknown";
+            deps.add(groupId + ":" + artifactId + ":" + version);
+        }
+        
+        return deps;
+    }
+
     private static String buildAst(ContextBuilder cb, Path sourceFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
@@ -245,6 +283,7 @@ Commands:
   calls     Show method call relationships
   callers   Show methods that call a given method
   dot       Generate Graphviz DOT format
+  classpath Show classpath (Maven JARs)
   ast       Show AST structure
   index     Build project index (for large projects)
 
@@ -267,6 +306,7 @@ Examples:
   Main dot src/ --no-jdk       # Exclude JDK calls
   Main dot src/ --cycles       # Detect cycles
   Main dot src/ --heatmap     # Show heatmap
+  Main classpath .            # Show Maven dependencies
   Main ast Test.java             # Show AST
   Main index .                   # Index current directory
   Main index . init             # Find method 'init' in project
