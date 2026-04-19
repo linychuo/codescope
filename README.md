@@ -38,6 +38,14 @@ java -jar target/codescope-*.jar context Test.java main
 | `ast` | AST 结构 | `ast Test.java` |
 | `index` | 项目索引 | `index src init` |
 
+### dot 选项
+
+| 选项 | 说明 |
+|------|------|
+| `--no-jdk` | 排除 JDK 方法调用 |
+| `--cycles` | 检测调用循环 |
+| `--heatmap` | 显示调用热度 |
+
 ## 使用示例
 
 ### 方法上下文（带调用解析）
@@ -104,7 +112,7 @@ java -jar target/codescope-*.jar dot project-dir/ > callgraph.dot
 dot -Tpng callgraph.dot -o callgraph.png
 ```
 
-### 过滤选项
+### dot 选项
 ```bash
 # 排除 JDK 方法
 java -jar target/codescope-*.jar dot src/ --no-jdk > callgraph.dot
