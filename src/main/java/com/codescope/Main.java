@@ -118,7 +118,7 @@ public class Main {
         } else if (args[0].equals("callers")) {
             output = buildCallers(cb, sourceFile, query);
         } else if (args[0].equals("dot")) {
-            output = buildDot(cb, sourceFile);
+            output = cb.buildDot();
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
@@ -204,11 +204,6 @@ public class Main {
             }
         }
         return sb.toString();
-    }
-
-    private static String buildDot(ContextBuilder cb, Path sourceFile) {
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.model);
-        return cg.toDot();
     }
 
     private static String buildAst(ContextBuilder cb, Path sourceFile) {

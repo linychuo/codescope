@@ -15,12 +15,57 @@ public class ContextBuilder {
         this.model = new ProjectModel(dir);
         if (dir != null) {
             model.init();
-            Files.list(dir)
-                .filter(p -> p.toString().endsWith(".java"))
-                .forEach(p -> {
-                    try { model.addFile(p); } catch (IOException e) {}
-                });
+            if (Files.isRegularFile(dir)) {
+                model.addFile(dir);
+            } else {
+                Files.walk(dir)
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .filter(p -> !p.toString().contains("/target/"))
+                    .forEach(p -> {
+                        try { model.addFile(p); } catch (IOException e) {}
+                    });
+            }
         }
+    }
+
+    public Set<Path> getFiles() {
+        return model.getFiles();
+    }
+
+    public String buildDot() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("digraph callgraph {\n");
+        sb.append("  rankdir=LR;\n");
+        sb.append("  node [shape=box];\n\n");
+
+        Set<String> nodes = new TreeSet<>();
+        Set<String> edges = new TreeSet<>();
+
+        for (Path file : model.getFiles()) {
+            CompilationUnit cu = model.getAst(file);
+            if (cu == null) continue;
+
+            CallGraph cg = new CallGraph(file, model);
+            for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.callSites.entrySet()) {
+                String caller = entry.getKey();
+                nodes.add("  \"" + CallGraph.escapeDot(caller) + "\";");
+                for (CallGraph.CallSite cs : entry.getValue()) {
+                    String callee = cs.resolved.isEmpty() ? caller.substring(0, caller.lastIndexOf('.')) + "." + cs.method : cs.resolved;
+                    nodes.add("  \"" + CallGraph.escapeDot(callee) + "\";");
+                    edges.add("  \"" + CallGraph.escapeDot(caller) + "\" -> \"" + CallGraph.escapeDot(callee) + "\";");
+                }
+            }
+        }
+
+        for (String node : nodes) {
+            sb.append(node).append("\n");
+        }
+        sb.append("\n");
+        for (String edge : edges) {
+            sb.append(edge).append("\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
     }
 
     public String build(Path file, String query) {
@@ -345,7 +390,7 @@ public class ContextBuilder {
             return sb.toString();
         }
 
-        private String escapeDot(String s) {
+        public static String escapeDot(String s) {
             return s.replace("\"", "\\\"");
         }
 
