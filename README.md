@@ -2,6 +2,10 @@
 
 Java 语义上下文引擎，基于 Eclipse JDT Core 构建，为 LLM 提供代码语义分析能力。
 
+## 与业界工具对比
+
+详见 [COMPARISON.md](./COMPARISON.md)
+
 ## 特性
 
 - **跨文件方法解析** - 解析同目录下的方法调用
