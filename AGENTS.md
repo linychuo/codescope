@@ -21,11 +21,25 @@ java -jar target/codescope-*.jar <command> <file.java> [method|line]
 | `context` | Build semantic context for LLM |
 | `calls` | Show method call relationships (callees) |
 | `callers` | Show methods that call a given method |
-| `impact` | Analyze method impact (who calls this method) |
+| `impact` | Analyze modified method's impact |
 | `dot` | Generate Graphviz DOT call graph |
 | `classpath` | Show Maven dependencies |
 | `ast` | Show AST structure |
 | `index` | Build project index for large projects |
+
+## Code Structure
+```
+com/codescope/
+├── Main              - CLI entry point
+├── CommandHandler   - Command routing
+├── ContextBuilder   - Semantic context builder
+├── CallGraph        - Call graph analysis
+├── DotGenerator     - DOT output generator
+├── Index            - Project index
+├── JavaCodeEngine   - Public API
+├── ProjectModel     - AST management
+└── CacheManager     - AST cache
+```
 
 ## dot Options
 | Option | Description |
