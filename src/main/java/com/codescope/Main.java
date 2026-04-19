@@ -128,6 +128,8 @@ private static boolean noJdk = false;
             output = cb.buildDot(noJdk, cycles, heatmap);
         } else if (args[0].equals("classpath")) {
             output = buildClasspath(sourceFile);
+        } else if (args[0].equals("impact")) {
+            output = buildImpact(sourceFile, query);
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
@@ -215,6 +217,49 @@ private static boolean noJdk = false;
         return sb.toString();
     }
 
+    private static String buildImpact(Path sourceFile, String methodQuery) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Impact Analysis\n\n");
+        
+        Path dir = sourceFile;
+        if (Files.isRegularFile(sourceFile)) {
+            dir = sourceFile.getParent();
+        }
+        
+        sb.append("Scanning: ").append(dir).append("\n\n");
+        
+        ContextBuilder cb = new ContextBuilder(dir);
+        
+        if (methodQuery != null) {
+            sb.append("## Method: ").append(methodQuery).append("\n\n");
+            
+            Set<Path> files = cb.getFiles();
+            int impactCount = 0;
+            
+            for (Path f : files) {
+                ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
+                Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
+                if (!callers.isEmpty()) {
+                    sb.append("### ").append(f.getFileName()).append("\n");
+                    for (var caller : callers) {
+                        sb.append("- line ").append(caller.line).append(": ")
+                          .append(caller.resolved).append("\n");
+                        impactCount++;
+                    }
+                }
+            }
+            
+            sb.append("\n## Impact Summary\n");
+            sb.append("Total calls: ").append(impactCount).append("\n");
+        } else {
+            sb.append("Analyzing all file changes...\n");
+            sb.append("\n## Usage\n");
+            sb.append("java -jar codescope.jar impact /path/to/file.java methodName\n");
+        }
+        
+        return sb.toString();
+    }
+
     private static String buildClasspath(Path dir) throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("# Classpath for: ").append(dir).append("\n\n");
@@ -282,6 +327,7 @@ Commands:
   context   Build semantic context for LLM
   calls     Show method call relationships
   callers   Show methods that call a given method
+  impact    Analyze method impact (who calls this method)
   dot       Generate Graphviz DOT format
   classpath Show classpath (Maven JARs)
   ast       Show AST structure
