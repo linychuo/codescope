@@ -35,6 +35,7 @@ java -jar target/codescope-*.jar context Test.java main
 | `calls` | 方法调用关系 (callees) | `calls Test.java main` |
 | `callers` | 反向调用查找 | `callers Test.java main` |
 | `dot` | Graphviz DOT 输出 | `dot Test.java` |
+| `classpath` | Maven 依赖 | `classpath .` |
 | `ast` | AST 结构 | `ast Test.java` |
 | `index` | 项目索引 | `index src init` |
 
@@ -90,6 +91,11 @@ java -jar target/codescope-*.jar callers UserRepository.java save
 ### 多模块项目
 ```bash
 java -jar target/codescope-*.jar index project-dir hello
+```
+
+### Maven 依赖
+```bash
+java -jar target/codescope-*.jar classpath .
 ```
 
 ### 单文件调用图
