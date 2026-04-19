@@ -9,27 +9,51 @@ import java.util.*;
 
 public class ContextBuilder {
 
-    public final ProjectModel model;
+    private final List<ProjectModel> models = new ArrayList<>();
 
     public ContextBuilder(Path dir) throws IOException {
-        this.model = new ProjectModel(dir);
-        if (dir != null) {
+        if (dir == null) return;
+
+        if (Files.isRegularFile(dir)) {
+            dir = dir.getParent();
+        }
+        Set<Path> javaRoots = findJavaRoots(dir);
+        if (javaRoots.isEmpty()) {
+            javaRoots.add(dir);
+        }
+        for (Path javaRoot : javaRoots) {
+            ProjectModel model = new ProjectModel(javaRoot);
             model.init();
-            if (Files.isRegularFile(dir)) {
-                model.addFile(dir);
-            } else {
-                Files.walk(dir)
-                    .filter(p -> p.toString().endsWith(".java"))
-                    .filter(p -> !p.toString().contains("/target/"))
-                    .forEach(p -> {
-                        try { model.addFile(p); } catch (IOException e) {}
-                    });
-            }
+            Files.walk(javaRoot)
+                .filter(p -> p.toString().endsWith(".java"))
+                .filter(p -> !p.toString().contains("/target/"))
+                .forEach(p -> {
+                    try { model.addFile(p); } catch (IOException e) {}
+                });
+            models.add(model);
         }
     }
 
+    private Set<Path> findJavaRoots(Path root) throws IOException {
+        Set<Path> javaRoots = new HashSet<>();
+        Files.walk(root)
+            .filter(Files::isDirectory)
+            .filter(p -> p.endsWith("java"))
+            .filter(p -> !p.toString().contains("/target/"))
+            .forEach(javaRoots::add);
+        return javaRoots;
+    }
+
     public Set<Path> getFiles() {
-        return model.getFiles();
+        Set<Path> files = new HashSet<>();
+        for (ProjectModel model : models) {
+            files.addAll(model.getFiles());
+        }
+        return files;
+    }
+
+    public List<ProjectModel> getModels() {
+        return models;
     }
 
     public String buildDot() {
@@ -41,18 +65,20 @@ public class ContextBuilder {
         Set<String> nodes = new TreeSet<>();
         Set<String> edges = new TreeSet<>();
 
-        for (Path file : model.getFiles()) {
-            CompilationUnit cu = model.getAst(file);
-            if (cu == null) continue;
+        for (ProjectModel model : models) {
+            for (Path file : model.getFiles()) {
+                CompilationUnit cu = model.getAst(file);
+                if (cu == null) continue;
 
-            CallGraph cg = new CallGraph(file, model);
-            for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.callSites.entrySet()) {
-                String caller = entry.getKey();
-                nodes.add("  \"" + CallGraph.escapeDot(caller) + "\";");
-                for (CallGraph.CallSite cs : entry.getValue()) {
-                    String callee = cs.resolved.isEmpty() ? caller.substring(0, caller.lastIndexOf('.')) + "." + cs.method : cs.resolved;
-                    nodes.add("  \"" + CallGraph.escapeDot(callee) + "\";");
-                    edges.add("  \"" + CallGraph.escapeDot(caller) + "\" -> \"" + CallGraph.escapeDot(callee) + "\";");
+                CallGraph cg = new CallGraph(file, model);
+                for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.callSites.entrySet()) {
+                    String caller = entry.getKey();
+                    nodes.add("  \"" + CallGraph.escapeDot(caller) + "\";");
+                    for (CallGraph.CallSite cs : entry.getValue()) {
+                        String callee = cs.resolved.isEmpty() ? caller.substring(0, caller.lastIndexOf('.')) + "." + cs.method : cs.resolved;
+                        nodes.add("  \"" + CallGraph.escapeDot(callee) + "\";");
+                        edges.add("  \"" + CallGraph.escapeDot(caller) + "\" -> \"" + CallGraph.escapeDot(callee) + "\";");
+                    }
                 }
             }
         }
@@ -69,10 +95,23 @@ public class ContextBuilder {
     }
 
     public String build(Path file, String query) {
-        CompilationUnit cu = model.getAst(file);
+        if (models.isEmpty()) return "No files found";
+        
+        ProjectModel targetModel = null;
+        for (ProjectModel m : models) {
+            if (m.getFiles().contains(file)) {
+                targetModel = m;
+                break;
+            }
+        }
+        if (targetModel == null) {
+            targetModel = models.get(0);
+        }
+
+        CompilationUnit cu = targetModel.getAst(file);
         if (cu == null) return "File not found: " + file;
 
-        CallGraph cg = new CallGraph(file, model);
+        CallGraph cg = new CallGraph(file, targetModel);
         return buildContext(cu, query, file, cg);
     }
 

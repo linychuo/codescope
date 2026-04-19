@@ -161,10 +161,10 @@ public class Main {
         StringBuilder sb = new StringBuilder();
         sb.append("# Call Graph for: ").append(sourceFile.getFileName()).append("\n\n");
 
-        CompilationUnit cu = cb.model.getAst(sourceFile);
+        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
         if (cu == null) return "File not found: " + sourceFile;
 
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.model);
+        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
 
         for (Object obj : cu.types()) {
             if (!(obj instanceof TypeDeclaration type)) continue;
@@ -194,7 +194,7 @@ public class Main {
         }
 
         sb.append("## Callers\n");
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.model);
+        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
         Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodName);
         if (callers.isEmpty()) {
             sb.append("(no callers found)\n");
@@ -210,7 +210,7 @@ public class Main {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
 
-        CompilationUnit cu = cb.model.getAst(sourceFile);
+        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
         if (cu == null) return "File not found: " + sourceFile;
 
         for (Object obj : cu.types()) {
