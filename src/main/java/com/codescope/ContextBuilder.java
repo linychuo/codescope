@@ -315,6 +315,40 @@ public class ContextBuilder {
             return result;
         }
 
+        public String toDot() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("digraph callgraph {\n");
+            sb.append("  rankdir=LR;\n");
+            sb.append("  node [shape=box];\n\n");
+
+            Set<String> nodes = new TreeSet<>();
+            Set<String> edges = new TreeSet<>();
+
+            for (Map.Entry<String, Set<CallSite>> entry : callSites.entrySet()) {
+                String caller = entry.getKey();
+                nodes.add("  \"" + escapeDot(caller) + "\";");
+                for (CallSite cs : entry.getValue()) {
+                    String callee = cs.resolved.isEmpty() ? caller.substring(0, caller.lastIndexOf('.')) + "." + cs.method : cs.resolved;
+                    nodes.add("  \"" + escapeDot(callee) + "\";");
+                    edges.add("  \"" + escapeDot(caller) + "\" -> \"" + escapeDot(callee) + "\";");
+                }
+            }
+
+            for (String node : nodes) {
+                sb.append(node).append("\n");
+            }
+            sb.append("\n");
+            for (String edge : edges) {
+                sb.append(edge).append("\n");
+            }
+            sb.append("}\n");
+            return sb.toString();
+        }
+
+        private String escapeDot(String s) {
+            return s.replace("\"", "\\\"");
+        }
+
         public static class CallSite implements Comparable<CallSite> {
             public final String method;
             public final int line;

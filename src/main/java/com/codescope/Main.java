@@ -117,6 +117,8 @@ public class Main {
             output = buildCalls(cb, sourceFile);
         } else if (args[0].equals("callers")) {
             output = buildCallers(cb, sourceFile, query);
+        } else if (args[0].equals("dot")) {
+            output = buildDot(cb, sourceFile);
         } else if (args[0].equals("ast")) {
             output = buildAst(cb, sourceFile);
         } else {
@@ -204,6 +206,11 @@ public class Main {
         return sb.toString();
     }
 
+    private static String buildDot(ContextBuilder cb, Path sourceFile) {
+        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.model);
+        return cg.toDot();
+    }
+
     private static String buildAst(ContextBuilder cb, Path sourceFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
@@ -235,6 +242,7 @@ Commands:
   context   Build semantic context for LLM
   calls     Show method call relationships
   callers   Show methods that call a given method
+  dot       Generate Graphviz DOT format
   ast       Show AST structure
   index     Build project index (for large projects)
 
@@ -248,6 +256,7 @@ Examples:
   Main context Test.java main    # Method-specific context
   Main calls Test.java main      # Show callees of main
   Main callers Test.java main    # Show callers of main
+  Main dot Test.java            # Graphviz DOT output
   Main ast Test.java             # Show AST
   Main index .                   # Index current directory
   Main index . init             # Find method 'init' in project
