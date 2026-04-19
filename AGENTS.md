@@ -18,9 +18,10 @@ java -jar target/codescope-*.jar <command> <file.java> [method|line]
 ## Commands
 | Command | Description |
 |---------|-------------|
-| `context` | Build semantic context for LLM (default) |
+| `context` | Build semantic context for LLM |
 | `calls` | Show method call relationships (callees) |
 | `callers` | Show methods that call a given method |
+| `impact` | Analyze method impact (who calls this method) |
 | `dot` | Generate Graphviz DOT call graph |
 | `classpath` | Show Maven dependencies |
 | `ast` | Show AST structure |
@@ -33,30 +34,63 @@ java -jar target/codescope-*.jar <command> <file.java> [method|line]
 | `--cycles` | Detect call cycles |
 | `--heatmap` | Show call frequency heatmap |
 
-## Agent Integration
+## Agent Integration (LLM / Code Agent)
 
-### Option 1: Shell Command (simplest)
-LLM executes via shell:
+### 方式 1: Shell 命令（最简单）
+
+让 LLM 直接执行 CLI：
 ```bash
-cd /path/to/codescope && java -jar target/codescope-*.jar context /project/src/MyClass.java methodName
+cd /path/to/codescope && java -jar target/codescope-*.jar context /project/src/Class.java methodName
+
+# 示例
+java -jar target/codescope-*.jar context /home/ivan/project/src/UserService.java save
+
+java -jar target/codescope-*.jar callers src/AuthService.java login
 ```
 
-### Option 2: Tool Definition for LLM
-Define as tool:
-```
-name: java_code_context
-description: Get semantic context for a Java method (class, imports, fields, calls, definition)
-parameters:
-  - name: filePath
-    type: string
-    required: true
-  - name: methodName  
-    type: string
-    required: false
-command: java -jar target/codescope-*.jar context {{filePath}} {{methodName}}
+### 方式 2: Tool 定义（LLM Tool）
+
+在 LLM Agent 中定义为 Tool：
+```json
+{
+  "name": "java_code_context",
+  "description": "获取 Java 方法的语义上下文（类、导入、字段、调用、定义）",
+  "parameters": [
+    {"name": "filePath", "type": "string", "required": true},
+    {"name": "methodName", "type": "string", "required": false}
+  ],
+  "command": "java -jar /path/to/codescope/target/codescope-*.jar context {{filePath}} {{methodName}}"
+}
 ```
 
-### Example Prompts
+或者多个 Tool：
+```json
+[
+  {
+    "name": "java_context",
+    "description": "获取 Java 类/方法的语义上下文",
+    "command": "java -jar codescope.jar context {{filePath}} {{methodName}}"
+  },
+  {
+    "name": "java_callers",
+    "description": "查找调用某方法的所有位置",
+    "command": "java -jar codescope.jar callers {{filePath}} {{methodName}}"
+  },
+  {
+    "name": "java_impact",
+    "description": "分析修改的方法的影响范围",
+    "command": "java -jar codescope.jar impact {{filePath}} {{methodName}}"
+  },
+  {
+    "name": "java_callgraph",
+    "description": "生成 Graphviz 调用图",
+    "command": "java -jar codescope.jar dot {{filePath}}"
+  }
+]
+```
+
+### 常见使用场景
+
 ```
 # Analyze a method
 "使用 codescope 分析 /project/src/MyClass.java 中的 main 方法调用关系"
@@ -85,11 +119,20 @@ java -jar target/codescope-*.jar calls Test.java main
 # Show callers
 java -jar target/codescope-*.jar callers Test.java main
 
+# Impact analysis (before commit)
+java -jar target/codescope-*.jar impact src/ methodName
+
 # Generate call graph
 java -jar target/codescope-*.jar dot src/ > callgraph.dot
 
 # Exclude JDK calls
 java -jar target/codescope-*.jar dot src/ --no-jdk > project_calls.dot
+
+# Detect cycles
+java -jar target/codescope-*.jar dot src/ --cycles > callgraph.dot
+
+# Show heatmap
+java -jar target/codescope-*.jar dot src/ --heatmap > callgraph.dot
 
 # Show AST structure
 java -jar target/codescope-*.jar ast Test.java
