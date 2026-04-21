@@ -30,7 +30,7 @@ public class CommandHandler {
         };
     }
 
-    private static String buildCalls(ContextBuilder cb, Path sourceFile, String methodName) {
+    static String buildCalls(ContextBuilder cb, Path sourceFile, String methodName) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Call Graph for: ").append(sourceFile.getFileName()).append("\n\n");
 
@@ -58,7 +58,7 @@ public class CommandHandler {
         return sb.toString();
     }
 
-    private static String buildCallers(ContextBuilder cb, Path sourceFile, String methodName) {
+    static String buildCallers(ContextBuilder cb, Path sourceFile, String methodName) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Callers of: ").append(methodName != null ? methodName : sourceFile.getFileName()).append("\n\n");
 
@@ -80,7 +80,7 @@ public class CommandHandler {
         return sb.toString();
     }
 
-    private static String buildClasspath(Path dir) throws Exception {
+    static String buildClasspath(Path dir) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("# Classpath for: ").append(dir).append("\n\n");
 
@@ -120,7 +120,7 @@ public class CommandHandler {
         return deps;
     }
 
-    private static String buildImpact(Path sourceFile, String methodQuery) throws Exception {
+    static String buildImpact(Path sourceFile, String methodQuery) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("# Impact Analysis\n\n");
 
@@ -164,7 +164,7 @@ public class CommandHandler {
         return sb.toString();
     }
 
-    public static String buildImpactDot(Path sourceFile, String methodQuery) throws Exception {
+    static String buildImpactDot(Path sourceFile, String methodQuery) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("digraph impact_").append(methodQuery).append(" {\n");
         sb.append("  rankdir=LR;\n");
@@ -200,7 +200,7 @@ public class CommandHandler {
         return s.replace("\"", "\\\"");
     }
 
-    private static String buildAst(ContextBuilder cb, Path sourceFile) {
+    static String buildAst(ContextBuilder cb, Path sourceFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
 

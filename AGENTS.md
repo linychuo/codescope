@@ -183,7 +183,30 @@ java -jar target/codescope-*.jar callers src/AuthService.java login
 
 ## MCP Integration (Model Context Protocol)
 
-### Claude Desktop 配置
+### MCP Server (Recommended for Code Agents)
+
+MCP Server 保持进程存活，AST 只需解析一次，性能比 Shell 调用高 10-100 倍。
+
+**启动 MCP Server:**
+```bash
+java -cp target/codescope-*.jar com.codescope.McpServer
+```
+
+**支持的工具:**
+
+| Tool | Description |
+|------|-------------|
+| `context` | 获取类/方法的语义上下文 |
+| `calls` | 查看方法调用的其他方法 |
+| `callers` | 查找调用某方法的所有位置 |
+| `impact` | 分析方法影响范围 (文本) |
+| `impact_dot` | 生成方法影响范围的 DOT 图 |
+| `dot` | 生成完整调用图 |
+| `ast` | 显示 AST 结构 |
+| `index` | 构建项目索引 |
+| `classpath` | 显示 Maven 依赖 |
+
+**Claude Desktop 配置**
 
 在 `~/.config/claude/claude_desktop_config.json` 添加：
 
@@ -191,14 +214,35 @@ java -jar target/codescope-*.jar callers src/AuthService.java login
 {
   "mcpServers": {
     "codescope": {
-      "command": "bash",
-      "args": ["-c", "cd /path/to/codescope && java -jar target/codescope-*.jar ${command} ${path} ${method}"]
+      "command": "java",
+      "args": ["-cp", "/path/to/codescope/target/codescope-*.jar", "com.codescope.McpServer"]
     }
   }
 }
 ```
 
-**注意**: 当前 MCP 集成是基于 Shell 命令的，不是原生 MCP 协议。如需原生 MCP 支持需要额外开发 MCP Server。
+**Claude Code 配置**
+
+在项目根目录创建 `.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "codescope": {
+      "command": "java",
+      "args": ["-cp", "/path/to/codescope/target/codescope-*.jar", "com.codescope.McpServer"]
+    }
+  }
+}
+```
+
+### Shell 方式 (备用)
+
+通过 Shell 命令调用 CLI:
+
+```bash
+java -jar target/codescope-*.jar context /project/src/Class.java methodName
+```
 
 ### Claude Code 配置
 
