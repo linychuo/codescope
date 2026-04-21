@@ -70,7 +70,7 @@ Java Virtual Threads
 
 # 4. 系统架构设计
 
-Go CLI -> Java Engine -> JDT Core -> Project Model
+Java CLI -> CommandHandler -> ContextBuilder/CallGraph -> JDT Core -> ProjectModel
 
 ---
 

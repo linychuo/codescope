@@ -65,13 +65,14 @@ java -jar target/codescope-*.jar context Test.java main
 | `ast` | AST 结构 | `ast Test.java` |
 | `index` | 项目索引 | `index src init` |
 
-### dot 选项
+### 全局选项
 
 | 选项 | 说明 |
 |------|------|
-| `--no-jdk` | 排除 JDK 方法调用 |
-| `--cycles` | 检测调用循环 |
-| `--heatmap` | 显示调用热度 |
+| `--json` | JSON 格式输出 |
+| `--no-jdk` | (dot 命令) 排除 JDK 方法调用 |
+| `--cycles` | (dot 命令) 检测调用循环 |
+| `--heatmap` | (dot 命令) 显示调用热度 |
 
 ## 使用示例
 

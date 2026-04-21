@@ -152,8 +152,8 @@ java -jar target/codescope-*.jar dot src/ --heatmap > callgraph.dot
 java -jar target/codescope-*.jar ast Test.java
 
 # Index project
-java -jar target/codescope-*.jar index src                 # Summary
-java -jar target/codescope-*.jar index src init             # Find method across project
+java -jar target/codescope-*.jar index src                   # Index summary
+java -jar target/codescope-*.jar index src init             # Find method 'init' in project
 
 # Maven dependencies
 java -jar target/codescope-*.jar classpath .
@@ -164,15 +164,22 @@ java -jar target/codescope-*.jar classpath .
 import com.codescope.JavaCodeEngine;
 
 JavaCodeEngine engine = new JavaCodeEngine(Path.of("src"));
-SemanticContext ctx = engine.getSemanticContext(Path.of("src/MyClass.java"));
+
+// Get semantic context
+JavaCodeEngine.SemanticContext ctx = engine.getSemanticContext(Path.of("src/MyClass.java"));
 System.out.println(ctx.getClassName());         // "MyClass"
-System.out.println(ctx.getPackageName());     // "com.example"
-System.out.println(ctx.getSuperclass());       // "Parent" or null
+System.out.println(ctx.getPackageName());       // "com.example"
+System.out.println(ctx.getSuperclass());        // "Parent" or null
+
 ctx.getMethods().forEach(m -> System.out.println(m.getName()));
 ctx.getFields().forEach(f -> System.out.println(f.getName()));
 
+// Get method calls
+var calls = engine.getMethodCalls(Path.of("src/MyClass.java"), "main");
+calls.forEach(System.out::println);
+
 // Markdown output
-String md = engine.getContextMarkdown(Path.of("src/MyClass.java"));
+String md = engine.getContextBuilder().build(Path.of("src/MyClass.java"), null);
 
 engine.close();
 ```

@@ -47,7 +47,7 @@ private static boolean noJdk = false;
         }
 
         if (command.equals("-v") || command.equals("--version")) {
-            System.out.println("JDT Context Engine v0.1.0");
+            System.out.println("CodeScope v" + getVersion());
             return;
         }
 
@@ -161,9 +161,13 @@ private static boolean noJdk = false;
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    private static String getVersion() {
+        return "0.1.0";
+    }
+
     private static void printUsage() {
         System.out.println("""
-JDT Context Engine - Java Semantic Context for LLM
+CodeScope - Java Semantic Context Engine
 
 Usage: Main <command> <source> [query]
 
