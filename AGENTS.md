@@ -181,6 +181,98 @@ java -jar target/codescope-*.jar callers src/AuthService.java login
 "生成 /project/src/ 的调用图，输出 Graphviz DOT 格式"
 ```
 
+## MCP Integration (Model Context Protocol)
+
+### Claude Desktop 配置
+
+在 `~/.config/claude/claude_desktop_config.json` 添加：
+
+```json
+{
+  "mcpServers": {
+    "codescope": {
+      "command": "bash",
+      "args": ["-c", "cd /path/to/codescope && java -jar target/codescope-*.jar ${command} ${path} ${method}"]
+    }
+  }
+}
+```
+
+**注意**: 当前 MCP 集成是基于 Shell 命令的，不是原生 MCP 协议。如需原生 MCP 支持需要额外开发 MCP Server。
+
+### Claude Code 配置
+
+在项目根目录创建 `.claude/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "codescope": {
+      "command": "bash",
+      "args": ["-c", "cd /path/to/codescope && java -jar target/codescope-*.jar ${command} ${path} ${method}"]
+    }
+  }
+}
+```
+
+### MCP Tool 定义示例
+
+在 LLM Agent 中配置为 Tool：
+
+```json
+{
+  "name": "codescope",
+  "description": "Java 代码语义分析工具 - 查询方法调用关系、影响范围、生成调用图",
+  "commands": {
+    "context": {
+      "description": "获取类/方法的语义上下文",
+      "args": ["filePath", "methodName?"]
+    },
+    "calls": {
+      "description": "查看方法调用的其他方法",
+      "args": ["filePath", "methodName"]
+    },
+    "callers": {
+      "description": "查找调用某方法的所有位置",
+      "args": ["filePath", "methodName"]
+    },
+    "impact": {
+      "description": "分析方法影响范围 (文本)",
+      "args": ["filePath", "methodName"]
+    },
+    "impact-dot": {
+      "description": "生成方法影响范围的 DOT 调用图",
+      "args": ["filePath", "methodName"]
+    },
+    "dot": {
+      "description": "生成完整调用图",
+      "args": ["filePath"]
+    }
+  }
+}
+```
+
+### 使用示例
+
+```bash
+# 在 Claude Code 或支持 MCP 的 AI 助手中：
+
+# 分析方法上下文
+/codescope context src/AuthService.java login
+
+# 查看方法调用
+/codescope calls UserService save
+
+# 查找调用者（跨文件）
+/codescope callers PaymentService process
+
+# 生成影响图
+/codescope impact-dot OrderService create
+
+# 生成完整调用图
+/codescope dot src/
+```
+
 ## Library API
 ```java
 import com.codescope.JavaCodeEngine;
