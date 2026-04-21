@@ -110,19 +110,62 @@ private static boolean noJdk = false;
     }
 
     private static void runContext(String[] args, boolean json) throws IOException {
-        Path sourceFile = Path.of(args[1]).toAbsolutePath();
-        if (!Files.exists(sourceFile)) {
+        String command = args[0];
+        String input = args[1];
+        String query = args.length > 2 ? args[2] : null;
+
+        Path sourceFile = Path.of(input).toAbsolutePath();
+        Path dir = sourceFile.getParent();
+
+        if (command.equals("impact-dot") && !Files.exists(sourceFile)) {
+            if (!input.contains("/")) {
+                List<Path> dirs = new ArrayList<>();
+                if (dir != null && Files.exists(dir)) {
+                    dirs.add(dir);
+                }
+                if (dirs.isEmpty()) {
+                    dirs.add(Path.of(".").toAbsolutePath());
+                }
+
+                Index index = new Index(dirs);
+                index.build();
+                List<Path> found = index.findClass(input);
+
+                if (found.isEmpty()) {
+                    throw new IOException("Class not found: " + input);
+                }
+                sourceFile = found.get(0);
+            }
+            dir = sourceFile.getParent();
+            System.err.println("Found " + input + " at " + sourceFile);
+        } else if (!Files.exists(sourceFile) && !input.contains("/")) {
+            List<Path> dirs = new ArrayList<>();
+            if (dir != null && Files.exists(dir)) {
+                dirs.add(dir);
+            }
+            if (dirs.isEmpty()) {
+                dirs.add(Path.of(".").toAbsolutePath());
+            }
+
+            Index index = new Index(dirs);
+            index.build();
+            List<Path> found = index.findClass(input);
+
+            if (found.isEmpty()) {
+                throw new IOException("Class not found: " + input);
+            }
+            sourceFile = found.get(0);
+            dir = sourceFile.getParent();
+            System.err.println("Found " + input + " at " + sourceFile);
+        } else if (!Files.exists(sourceFile)) {
             throw new IOException("File not found: " + sourceFile);
         }
-
-        String query = args.length > 2 ? args[2] : null;
-        Path dir = sourceFile.getParent();
 
         long start = System.currentTimeMillis();
         String output;
 
         try {
-            output = CommandHandler.handle(args[0], sourceFile, query, noJdk, cycles, heatmap);
+            output = CommandHandler.handle(command, sourceFile, query, noJdk, cycles, heatmap);
         } catch (Exception e) {
             output = "Error: " + e.getMessage();
             if (Boolean.parseBoolean(System.getProperty("debug", "false"))) {

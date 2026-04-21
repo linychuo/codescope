@@ -21,11 +21,66 @@ java -jar target/codescope-*.jar <command> <file.java> [method|line]
 | `context` | Build semantic context for LLM |
 | `calls` | Show method call relationships (callees) |
 | `callers` | Show methods that call a given method |
-| `impact` | Analyze modified method's impact |
+| `impact` | Analyze modified method's impact (text) |
+| `impact-dot` | Generate impact call graph (DOT format) |
 | `dot` | Generate Graphviz DOT call graph |
 | `classpath` | Show Maven dependencies |
 | `ast` | Show AST structure |
 | `index` | Build project index for large projects |
+
+**Note:** For `calls`, `callers`, `impact`, `impact-dot` commands, you can either provide:
+- Full path: `calls src/AuthService.java login`
+- Class name only (auto-search): `calls AuthService login`
+
+## Usage Examples (CLI)
+```bash
+# Full file context (includes inheritance info)
+java -jar target/codescope-*.jar context Test.java
+
+# Method-specific context (with resolved calls)
+java -jar target/codescope-*.jar context Test.java main
+
+# By line number
+java -jar target/codescope-*.jar context Test.java 10
+
+# Show callees (which methods this method calls)
+java -jar target/codescope-*.jar calls Test.java main
+java -jar target/codescope-*.jar calls AuthService login   # auto-search by class name
+
+# Show callers (which methods call this method, cross-file)
+java -jar target/codescope-*.jar callers Test.java main
+java -jar target/codescope-*.jar callers AuthService login # auto-search by class name
+
+# Impact analysis (text format, cross-file)
+java -jar target/codescope-*.jar impact AuthService login
+java -jar target/codescope-*.jar impact /path/to/AuthService.java login
+
+# Impact analysis (DOT graph format)
+java -jar target/codescope-*.jar impact-dot Index findMethod > impact.dot
+dot -Tpng impact.dot -o impact.png
+
+# Generate call graph
+java -jar target/codescope-*.jar dot src/ > callgraph.dot
+
+# Exclude JDK calls
+java -jar target/codescope-*.jar dot src/ --no-jdk > project_calls.dot
+
+# Detect cycles
+java -jar target/codescope-*.jar dot src/ --cycles > callgraph.dot
+
+# Show heatmap
+java -jar target/codescope-*.jar dot src/ --heatmap > callgraph.dot
+
+# Show AST structure
+java -jar target/codescope-*.jar ast Test.java
+
+# Index project
+java -jar target/codescope-*.jar index src                   # Index summary
+java -jar target/codescope-*.jar index src init             # Find method 'init' in project
+
+# Maven dependencies
+java -jar target/codescope-*.jar classpath .
+```
 
 ## Code Structure
 ```
@@ -86,14 +141,24 @@ java -jar target/codescope-*.jar callers src/AuthService.java login
     "command": "java -jar codescope.jar context {{filePath}} {{methodName}}"
   },
   {
+    "name": "java_calls",
+    "description": "查看方法调用的其他方法 (callees)",
+    "command": "java -jar codescope.jar calls {{filePath}} {{methodName}}"
+  },
+  {
     "name": "java_callers",
     "description": "查找调用某方法的所有位置",
     "command": "java -jar codescope.jar callers {{filePath}} {{methodName}}"
   },
   {
     "name": "java_impact",
-    "description": "分析修改的方法的影响范围",
+    "description": "分析修改的方法的影响范围 (文本格式)",
     "command": "java -jar codescope.jar impact {{filePath}} {{methodName}}"
+  },
+  {
+    "name": "java_impact_dot",
+    "description": "生成方法影响范围的 DOT 调用图",
+    "command": "java -jar codescope.jar impact-dot {{filePath}} {{methodName}}"
   },
   {
     "name": "java_callgraph",
@@ -114,49 +179,6 @@ java -jar target/codescope-*.jar callers src/AuthService.java login
 
 # Generate call graph
 "生成 /project/src/ 的调用图，输出 Graphviz DOT 格式"
-```
-
-## Usage Examples (CLI)
-```bash
-# Full file context (includes inheritance info)
-java -jar target/codescope-*.jar context Test.java
-
-# Method-specific context (with resolved calls)
-java -jar target/codescope-*.jar context Test.java main
-
-# By line number
-java -jar target/codescope-*.jar context Test.java 10
-
-# Show callees
-java -jar target/codescope-*.jar calls Test.java main
-
-# Show callers
-java -jar target/codescope-*.jar callers Test.java main
-
-# Impact analysis (before commit)
-java -jar target/codescope-*.jar impact src/ methodName
-
-# Generate call graph
-java -jar target/codescope-*.jar dot src/ > callgraph.dot
-
-# Exclude JDK calls
-java -jar target/codescope-*.jar dot src/ --no-jdk > project_calls.dot
-
-# Detect cycles
-java -jar target/codescope-*.jar dot src/ --cycles > callgraph.dot
-
-# Show heatmap
-java -jar target/codescope-*.jar dot src/ --heatmap > callgraph.dot
-
-# Show AST structure
-java -jar target/codescope-*.jar ast Test.java
-
-# Index project
-java -jar target/codescope-*.jar index src                   # Index summary
-java -jar target/codescope-*.jar index src init             # Find method 'init' in project
-
-# Maven dependencies
-java -jar target/codescope-*.jar classpath .
 ```
 
 ## Library API

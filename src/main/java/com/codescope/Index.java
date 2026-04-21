@@ -257,6 +257,22 @@ public class Index {
 
     public record MethodInfo(Path file, String type, MethodDeclaration method) {}
 
+    public List<Path> findClass(String simpleName) {
+        List<Path> result = new ArrayList<>();
+        for (ProjectModel model : models) {
+            for (Path file : model.getFiles()) {
+                CompilationUnit cu = model.getAst(file);
+                if (cu == null) continue;
+                for (Object obj : cu.types()) {
+                    if (obj instanceof TypeDeclaration type && type.getName().getIdentifier().equals(simpleName)) {
+                        result.add(file);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     private static String[] parseMavenClasspath(Path dir) {
         Path pom = dir.resolve("pom.xml");
         if (!Files.exists(pom)) {

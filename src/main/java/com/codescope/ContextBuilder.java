@@ -347,20 +347,22 @@ public class ContextBuilder {
                         } else {
                             System.err.println("Binding is null for call " + call.getName());
                         }
+                        int line = cu.getLineNumber(call.getStartPosition());
                         callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
-                                .add(new CallSite(call.getName().getIdentifier(), call.getStartPosition(), resolved));
+                                .add(new CallSite(call.getName().getIdentifier(), line, resolved));
                         callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
-                                .add(new CallSite(typeName + "." + method.getName().getIdentifier(), call.getStartPosition(), ""));
+                                .add(new CallSite(typeName + "." + method.getName().getIdentifier(), line, resolved));
                     }
 
                         for (Object fieldAssign : findFieldAssignments(stmt)) {
                             var fa = (org.eclipse.jdt.core.dom.FieldAccess) fieldAssign;
                             IVariableBinding binding = fa.resolveFieldBinding();
-                            String fieldRef = binding != null ? 
-                                binding.getDeclaringClass().getName() + "." + binding.getName() : 
+                            String fieldRef = binding != null ?
+                                binding.getDeclaringClass().getName() + "." + binding.getName() :
                                 fa.getName().getIdentifier();
+                            int line = cu.getLineNumber(fa.getStartPosition());
                             callers.computeIfAbsent(fa.getName().getIdentifier(), k -> new TreeSet<>())
-                                   .add(new CallSite(typeName + "." + method.getName().getIdentifier(), fa.getStartPosition(), "FieldAccess:" + fieldRef));
+                                   .add(new CallSite(typeName + "." + method.getName().getIdentifier(), line, "FieldAccess:" + fieldRef));
                         }
                     }
                 }

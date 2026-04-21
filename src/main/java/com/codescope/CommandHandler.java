@@ -18,18 +18,19 @@ public class CommandHandler {
         
         return switch (command) {
             case "context" -> cb.build(sourceFile, query);
-            case "calls" -> buildCalls(cb, sourceFile);
+            case "calls" -> buildCalls(cb, sourceFile, query);
             case "callers" -> buildCallers(cb, sourceFile, query);
             case "dot" -> cb.buildDot(noJdk, cycles, heatmap);
             case "classpath" -> buildClasspath(sourceFile);
             case "impact" -> buildImpact(sourceFile, query);
+            case "impact-dot" -> buildImpactDot(sourceFile, query);
             case "ast" -> buildAst(cb, sourceFile);
             case "index" -> buildIndex(sourceFile, query);
             default -> "Unknown command: " + command;
         };
     }
 
-    private static String buildCalls(ContextBuilder cb, Path sourceFile) {
+    private static String buildCalls(ContextBuilder cb, Path sourceFile, String methodName) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Call Graph for: ").append(sourceFile.getFileName()).append("\n\n");
 
@@ -37,11 +38,21 @@ public class CommandHandler {
         if (cu == null) return "File not found: " + sourceFile;
 
         ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
-        Set<ContextBuilder.CallGraph.CallSite> calls = cg.getCallees(sourceFile, sourceFile.getFileName().toString().replace(".java", ""));
         
-        sb.append("## Callees\n");
-        for (var call : calls) {
-            sb.append("- ").append(call).append("\n");
+        if (methodName == null) {
+            sb.append("(use: calls <file> <methodName>)\n");
+            return sb.toString();
+        }
+        
+        Set<ContextBuilder.CallGraph.CallSite> calls = cg.getCallees(sourceFile, methodName);
+        
+        sb.append("## Callees of ").append(methodName).append("\n");
+        if (calls.isEmpty()) {
+            sb.append("(no calls found)\n");
+        } else {
+            for (var call : calls) {
+                sb.append("- ").append(call).append("\n");
+            }
         }
         
         return sb.toString();
@@ -52,10 +63,11 @@ public class CommandHandler {
         sb.append("# Callers of: ").append(methodName != null ? methodName : sourceFile.getFileName()).append("\n\n");
 
         if (methodName == null) {
-            return buildCalls(cb, sourceFile);
+            sb.append("(use: callers <file> <methodName>)\n");
+            return sb.toString();
         }
 
-        sb.append("## Callers\n");
+        sb.append("## Callers of ").append(methodName).append("\n");
         ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
         Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodName);
         if (callers.isEmpty()) {
@@ -111,35 +123,36 @@ public class CommandHandler {
     private static String buildImpact(Path sourceFile, String methodQuery) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("# Impact Analysis\n\n");
-        
+
         Path dir = sourceFile;
         if (Files.isRegularFile(sourceFile)) {
             dir = sourceFile.getParent();
         }
-        
+
         sb.append("Scanning: ").append(dir).append("\n\n");
-        
+
         ContextBuilder cb = new ContextBuilder(dir);
-        
+
         if (methodQuery != null) {
             sb.append("## Method: ").append(methodQuery).append("\n\n");
-            
+
             Set<Path> files = cb.getFiles();
             int impactCount = 0;
-            
+
             for (Path f : files) {
                 ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
                 Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
                 if (!callers.isEmpty()) {
                     sb.append("### ").append(f.getFileName()).append("\n");
                     for (var caller : callers) {
+                        String callerInfo = caller.resolved.isEmpty() ? caller.method : caller.resolved;
                         sb.append("- line ").append(caller.line).append(": ")
-                          .append(caller.resolved).append("\n");
+                          .append(callerInfo).append("\n");
                         impactCount++;
                     }
                 }
             }
-            
+
             sb.append("\n## Impact Summary\n");
             sb.append("Total calls: ").append(impactCount).append("\n");
         } else {
@@ -147,8 +160,44 @@ public class CommandHandler {
             sb.append("\n## Usage\n");
             sb.append("java -jar codescope.jar impact /path/to/file.java methodName\n");
         }
-        
+
         return sb.toString();
+    }
+
+    public static String buildImpactDot(Path sourceFile, String methodQuery) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        sb.append("digraph impact_").append(methodQuery).append(" {\n");
+        sb.append("  rankdir=LR;\n");
+        sb.append("  node [shape=box];\n");
+
+        Path dir = sourceFile;
+        if (Files.isRegularFile(sourceFile)) {
+            dir = sourceFile.getParent();
+        }
+
+        ContextBuilder cb = new ContextBuilder(dir);
+        Set<Path> files = cb.getFiles();
+
+        for (Path f : files) {
+            ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
+            Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
+            if (!callers.isEmpty()) {
+                String callerClass = f.getFileName().toString().replace(".java", "");
+                for (var caller : callers) {
+                    String callerMethod = caller.method;
+                    String callerNode = callerClass + "." + callerMethod;
+                    String targetNode = methodQuery;
+                    sb.append("  \"").append(escapeDot(callerNode)).append("\" -> \"").append(escapeDot(targetNode)).append("\" [label=\"line ").append(caller.line).append("\"];\n");
+                }
+            }
+        }
+
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    private static String escapeDot(String s) {
+        return s.replace("\"", "\\\"");
     }
 
     private static String buildAst(ContextBuilder cb, Path sourceFile) {
