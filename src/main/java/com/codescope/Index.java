@@ -74,6 +74,7 @@ public class Index {
                 models.add(model);
             }
         }
+        build();
     }
 
     private Set<Path> findJavaRoots(Path root) throws IOException {
@@ -114,6 +115,17 @@ public class Index {
                               .add(new MethodInfo(file, typeName, method));
                     }
                 }
+                for (Object obj : cu.types()) {
+                    if (!(obj instanceof RecordDeclaration record)) continue;
+                    String typeName = record.getName().getIdentifier();
+
+                    for (Object member : record.bodyDeclarations()) {
+                        if (!(member instanceof MethodDeclaration method)) continue;
+                        String methodName = method.getName().getIdentifier();
+                        methods.computeIfAbsent(methodName, k -> Collections.synchronizedList(new ArrayList<>()))
+                              .add(new MethodInfo(file, typeName, method));
+                    }
+                }
             }
         }
     }
@@ -141,6 +153,7 @@ public class Index {
                 models.add(model);
             }
         }
+        build();
     }
 
     public String findMethod(String name) {
@@ -246,6 +259,9 @@ public class Index {
                     if (obj instanceof TypeDeclaration type) {
                         typeNames.add(type.getName().getIdentifier());
                     }
+                    if (obj instanceof RecordDeclaration record) {
+                        typeNames.add(record.getName().getIdentifier());
+                    }
                 }
             }
         }
@@ -267,9 +283,33 @@ public class Index {
                     if (obj instanceof TypeDeclaration type && type.getName().getIdentifier().equals(simpleName)) {
                         result.add(file);
                     }
+                    if (obj instanceof RecordDeclaration record && record.getName().getIdentifier().equals(simpleName)) {
+                        result.add(file);
+                    }
                 }
             }
         }
+
+        if (result.isEmpty()) {
+            for (ProjectModel model : models) {
+                for (Path file : model.getFiles()) {
+                    try {
+                        String source = Files.readString(file);
+                        int recordIdx = source.indexOf("record " + simpleName);
+                        if (recordIdx >= 0) {
+                            int startIdx = Math.max(0, recordIdx - 50);
+                            int endIdx = Math.min(source.length(), recordIdx + simpleName.length() + 20);
+                            String context = source.substring(startIdx, endIdx);
+                            if (!context.contains("class " + simpleName) && !context.contains("interface " + simpleName)) {
+                                result.add(file);
+                            }
+                        }
+                    } catch (IOException e) {
+                    }
+                }
+            }
+        }
+
         return result;
     }
 

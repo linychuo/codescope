@@ -197,23 +197,66 @@ public class ProjectModel {
     }
 
     private CompilationUnit parse(String source) {
-        ASTParser parser = ASTParser.newParser(ASTParser.K_COMPILATION_UNIT);
-        parser.setSource(source.toCharArray());
-        parser.setResolveBindings(true);
-        parser.setBindingsRecovery(true);
+        boolean hasRecordInSource = source.contains("record ");
+        String workingSource = source;
+
+        if (hasRecordInSource && source.contains("package ") && source.contains(";")) {
+            int packageStart = source.indexOf("package ");
+            int semiColon = source.indexOf(";", packageStart);
+            if (semiColon > packageStart) {
+                workingSource = source.substring(0, packageStart) + source.substring(semiColon + 1);
+            }
+        }
+
+        ASTParser parser = ASTParser.newParser(AST.JLS21);
+        parser.setSource(workingSource.toCharArray());
+        parser.setResolveBindings(false);
+        parser.setBindingsRecovery(false);
         parser.setStatementsRecovery(true);
-        if (classpath != null && classpath.length > 0) {
-            String bootclasspath = System.getProperty("sun.boot.class.path");
-            String extdirs = System.getProperty("java.ext.dirs");
-            if (bootclasspath != null && !bootclasspath.isEmpty() && extdirs != null && !extdirs.isEmpty()) {
-                String[] bootPath = bootclasspath.split(java.io.File.pathSeparator);
-                String[] extPath = extdirs.split(java.io.File.pathSeparator);
+
+        CompilationUnit cu = (CompilationUnit) parser.createAST(null);
+
+        if (hasRecordInSource && workingSource != source && cu.types().isEmpty()) {
+            ASTParser recordParser = ASTParser.newParser(AST.JLS21);
+            recordParser.setSource(source.toCharArray());
+            recordParser.setResolveBindings(false);
+            recordParser.setBindingsRecovery(false);
+            recordParser.setStatementsRecovery(true);
+            CompilationUnit recordCu = (CompilationUnit) recordParser.createAST(null);
+
+            if (!recordCu.types().isEmpty()) {
                 try {
-                    parser.setEnvironment(bootPath, extPath, classpath, true);
-                } catch (IllegalArgumentException e) {
+                    java.lang.reflect.Method typesMethod = CompilationUnit.class.getMethod("types");
+                    Object nodeListObj = typesMethod.invoke(cu);
+                    if (nodeListObj instanceof java.util.List) {
+                        java.util.List<Object> nodeList = (java.util.List<Object>) nodeListObj;
+                        for (Object type : recordCu.types()) {
+                            if (type instanceof TypeDeclaration td) {
+                                AST ast = cu.getAST();
+                                TypeDeclaration newTd = ast.newTypeDeclaration();
+                                newTd.setName(td.getName());
+                                newTd.setModifiers(td.getModifiers());
+                                for (Object bd : td.bodyDeclarations()) {
+                                    newTd.bodyDeclarations().add(ASTNode.copySubtree(ast, (ASTNode) bd));
+                                }
+                                nodeList.add(newTd);
+                            } else if (type instanceof RecordDeclaration rd) {
+                                AST ast = cu.getAST();
+                                RecordDeclaration newRd = ast.newRecordDeclaration();
+                                newRd.setName(rd.getName());
+                                newRd.setModifiers(rd.getModifiers());
+                                for (Object bd : rd.bodyDeclarations()) {
+                                    newRd.bodyDeclarations().add(ASTNode.copySubtree(ast, (ASTNode) bd));
+                                }
+                                nodeList.add(newRd);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
                 }
             }
         }
-        return (CompilationUnit) parser.createAST(null);
+
+        return cu;
     }
 }

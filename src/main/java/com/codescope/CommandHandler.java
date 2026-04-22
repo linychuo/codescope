@@ -184,8 +184,7 @@ public class CommandHandler {
             if (!callers.isEmpty()) {
                 String callerClass = f.getFileName().toString().replace(".java", "");
                 for (var caller : callers) {
-                    String callerMethod = caller.method;
-                    String callerNode = callerClass + "." + callerMethod;
+                    String callerNode = caller.method;
                     String targetNode = methodQuery;
                     sb.append("  \"").append(escapeDot(callerNode)).append("\" -> \"").append(escapeDot(targetNode)).append("\" [label=\"line ").append(caller.line).append("\"];\n");
                 }
