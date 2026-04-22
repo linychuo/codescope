@@ -341,11 +341,8 @@ public class ContextBuilder {
                     for (MethodInvocation call : findMethodCalls(stmt)) {
                         IMethodBinding binding = call.resolveMethodBinding();
                         String resolved = "";
-                        if (binding != null) {
+                        if (binding != null && binding.getDeclaringClass() != null) {
                             resolved = binding.getDeclaringClass().getName() + "." + binding.getName() + "()";
-                            System.err.println("Resolved binding for call " + call.getName() + ": " + resolved);
-                        } else {
-                            System.err.println("Binding is null for call " + call.getName());
                         }
                         int line = cu.getLineNumber(call.getStartPosition());
                         callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())

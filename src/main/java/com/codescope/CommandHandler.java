@@ -74,7 +74,7 @@ public class CommandHandler {
             sb.append("(no callers found)\n");
         } else {
             for (var caller : callers) {
-                sb.append("- ").append(caller.resolved).append(" at line ").append(caller.line).append("\n");
+                sb.append("- ").append(caller).append("\n");
             }
         }
         return sb.toString();

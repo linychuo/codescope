@@ -203,19 +203,15 @@ public class ProjectModel {
         parser.setBindingsRecovery(true);
         parser.setStatementsRecovery(true);
         if (classpath != null && classpath.length > 0) {
-            System.err.println("Setting classpath: " + java.util.Arrays.toString(classpath));
-            String bootclasspath = System.getProperty("sun.boot.classpath");
+            String bootclasspath = System.getProperty("sun.boot.class.path");
             String extdirs = System.getProperty("java.ext.dirs");
-            System.err.println("bootclasspath: " + bootclasspath);
-            System.err.println("extdirs: " + extdirs);
-            String[] bootPath = (bootclasspath != null) ? bootclasspath.split(java.io.File.pathSeparator) : null;
-            String[] extPath = (extdirs != null) ? extdirs.split(java.io.File.pathSeparator) : null;
-            String[] userPath = classpath;
-            try {
-                parser.setEnvironment(bootPath, extPath, userPath, true);
-                System.err.println("Environment set successfully");
-            } catch (IllegalArgumentException e) {
-                System.err.println("Failed to set environment: " + e);
+            if (bootclasspath != null && !bootclasspath.isEmpty() && extdirs != null && !extdirs.isEmpty()) {
+                String[] bootPath = bootclasspath.split(java.io.File.pathSeparator);
+                String[] extPath = extdirs.split(java.io.File.pathSeparator);
+                try {
+                    parser.setEnvironment(bootPath, extPath, classpath, true);
+                } catch (IllegalArgumentException e) {
+                }
             }
         }
         return (CompilationUnit) parser.createAST(null);
