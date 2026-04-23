@@ -34,22 +34,62 @@ public class ContextBuilder {
         if (dir == null) return;
 
         if (Files.isRegularFile(dir)) {
-            dir = dir.getParent();
-        }
-        Set<Path> javaRoots = findJavaRoots(dir);
-        if (javaRoots.isEmpty()) {
-            javaRoots.add(dir);
-        }
-        for (Path javaRoot : javaRoots) {
-            ProjectModel model = new ProjectModel(javaRoot, classpath);
-            model.init();
-            Files.walk(javaRoot)
-                .filter(p -> p.toString().endsWith(".java"))
-                .filter(p -> !p.toString().contains("/target/"))
-                .forEach(p -> {
-                    try { model.addFile(p); } catch (IOException e) {}
-                });
-            models.add(model);
+            Path parentDir = dir.getParent();
+            Set<Path> javaRoots = findJavaRoots(parentDir);
+            if (javaRoots.isEmpty()) {
+                Path grandParent = parentDir.getParent();
+                if (grandParent != null) {
+                    ProjectModel model = new ProjectModel(grandParent, classpath);
+                    model.init();
+                    try {
+                        Files.walk(grandParent)
+                            .filter(p -> p.toString().endsWith(".java"))
+                            .filter(p -> !p.toString().contains("/target/"))
+                            .forEach(p -> {
+                                try { model.addFile(p); } catch (IOException e) {}
+                            });
+                    } catch (IOException e) {}
+                    models.add(model);
+                } else {
+                    ProjectModel model = new ProjectModel(parentDir, classpath);
+                    model.init();
+                    Files.walk(parentDir)
+                        .filter(p -> p.toString().endsWith(".java"))
+                        .filter(p -> !p.toString().contains("/target/"))
+                        .forEach(p -> {
+                            try { model.addFile(p); } catch (IOException e) {}
+                        });
+                    models.add(model);
+                }
+            } else {
+                for (Path javaRoot : javaRoots) {
+                    ProjectModel model = new ProjectModel(javaRoot, classpath);
+                    model.init();
+                    Files.walk(javaRoot)
+                        .filter(p -> p.toString().endsWith(".java"))
+                        .filter(p -> !p.toString().contains("/target/"))
+                        .forEach(p -> {
+                            try { model.addFile(p); } catch (IOException e) {}
+                        });
+                    models.add(model);
+                }
+            }
+        } else {
+            Set<Path> javaRoots = findJavaRoots(dir);
+            if (javaRoots.isEmpty()) {
+                javaRoots.add(dir);
+            }
+            for (Path javaRoot : javaRoots) {
+                ProjectModel model = new ProjectModel(javaRoot, classpath);
+                model.init();
+                Files.walk(javaRoot)
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .filter(p -> !p.toString().contains("/target/"))
+                    .forEach(p -> {
+                        try { model.addFile(p); } catch (IOException e) {}
+                    });
+                models.add(model);
+            }
         }
     }
 
@@ -61,6 +101,40 @@ public class ContextBuilder {
             .filter(p -> !p.toString().contains("/target/"))
             .forEach(javaRoots::add);
         return javaRoots;
+    }
+
+    private Path findScanRoot(Path start) {
+        Path current = start;
+        while (current != null) {
+            if (Files.exists(current.resolve("pom.xml")) ||
+                Files.exists(current.resolve("build.gradle")) ||
+                Files.exists(current.resolve("build.gradle.kts"))) {
+                return current;
+            }
+            Path parent = current.getParent();
+            if (parent != null && parent.equals(current)) {
+                break;
+            }
+            current = parent;
+        }
+        return start;
+    }
+
+    private Path findCommonAncestor(Path dir1, Path dir2) {
+        Set<Path> ancestors = new HashSet<>();
+        Path current = dir1;
+        while (current != null) {
+            ancestors.add(current);
+            current = current.getParent();
+        }
+        current = dir2;
+        while (current != null) {
+            if (ancestors.contains(current)) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        return dir1;
     }
 
     /**
@@ -341,13 +415,17 @@ public class ContextBuilder {
                     for (MethodInvocation call : findMethodCalls(stmt)) {
                         IMethodBinding binding = call.resolveMethodBinding();
                         String resolved = "";
+                        String callerKey;
                         if (binding != null && binding.getDeclaringClass() != null) {
-                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName() + "()";
+                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName();
+                            callerKey = resolved;
+                        } else {
+                            callerKey = call.getName().getIdentifier();
                         }
                         int line = cu.getLineNumber(call.getStartPosition());
                         callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
                                 .add(new CallSite(call.getName().getIdentifier(), line, resolved));
-                        callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
+                        callers.computeIfAbsent(callerKey, k -> new TreeSet<>())
                                 .add(new CallSite(typeName + "." + method.getName().getIdentifier(), line, resolved));
                     }
 
@@ -368,6 +446,20 @@ public class ContextBuilder {
 
         public Set<CallSite> getCallersByName(String methodName) {
             return callers.getOrDefault(methodName, Collections.emptySet());
+        }
+
+        public Set<CallSite> getCallersForMethod(String className, String methodName) {
+            Set<CallSite> result = new TreeSet<>();
+            String targetKey = className + "." + methodName;
+            result.addAll(callers.getOrDefault(targetKey, Collections.emptySet()));
+            if (result.isEmpty()) {
+                result.addAll(callers.getOrDefault(methodName, Collections.emptySet()));
+            }
+            return result;
+        }
+
+        public Map<String, Set<CallSite>> getAllCallers() {
+            return Collections.unmodifiableMap(callers);
         }
 
         private List<MethodInvocation> findMethodCalls(ASTNode node) {
@@ -414,6 +506,10 @@ public class ContextBuilder {
                 }
             }
             return result;
+        }
+
+        public Map<String, Set<CallSite>> getCallSites() {
+            return Collections.unmodifiableMap(callSites);
         }
 
         public Map<String, Set<CallSite>> getAllMethods(Path f) {

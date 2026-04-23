@@ -93,6 +93,16 @@ public class CallGraph {
         return callers.getOrDefault(methodName, Collections.emptySet());
     }
 
+    public Set<CallSite> getCallersForMethod(String className, String methodName) {
+        Set<CallSite> result = new TreeSet<>();
+        String targetKey = className + "." + methodName;
+        result.addAll(callers.getOrDefault(targetKey, Collections.emptySet()));
+        if (result.isEmpty()) {
+            result.addAll(callers.getOrDefault(methodName, Collections.emptySet()));
+        }
+        return result;
+    }
+
     private void analyze() {
         CompilationUnit cu = model.getAst(file);
         if (cu == null) return;
@@ -111,13 +121,17 @@ public class CallGraph {
                     for (MethodInvocation call : findMethodCalls(stmt)) {
                         IMethodBinding binding = call.resolveMethodBinding();
                         String resolved = "";
-                        if (binding != null) {
-                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName() + "()";
+                        String callerKey;
+                        if (binding != null && binding.getDeclaringClass() != null) {
+                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName();
+                            callerKey = resolved;
+                        } else {
+                            callerKey = call.getName().getIdentifier();
                         }
                         int line = cu.getLineNumber(call.getStartPosition());
                         callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
                                .add(new CallSite(call.getName().getIdentifier(), line, resolved));
-                        callers.computeIfAbsent(call.getName().getIdentifier(), k -> new TreeSet<>())
+                        callers.computeIfAbsent(callerKey, k -> new TreeSet<>())
                                .add(new CallSite(typeName + "." + method.getName().getIdentifier(), line, resolved));
                     }
 

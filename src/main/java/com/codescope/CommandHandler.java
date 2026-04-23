@@ -134,20 +134,19 @@ public class CommandHandler {
         ContextBuilder cb = new ContextBuilder(dir);
 
         if (methodQuery != null) {
-            sb.append("## Method: ").append(methodQuery).append("\n\n");
+            String className = sourceFile.getFileName().toString().replace(".java", "");
+            sb.append("## Method: ").append(className).append(".").append(methodQuery).append("\n\n");
 
-            Set<Path> files = cb.getFiles();
             int impactCount = 0;
 
-            for (Path f : files) {
+            for (Path f : cb.getFiles()) {
                 ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-                Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
+                Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersForMethod(className, methodQuery);
                 if (!callers.isEmpty()) {
                     sb.append("### ").append(f.getFileName()).append("\n");
                     for (var caller : callers) {
-                        String callerInfo = caller.resolved.isEmpty() ? caller.method : caller.resolved;
                         sb.append("- line ").append(caller.line).append(": ")
-                          .append(callerInfo).append("\n");
+                          .append(caller.method).append("\n");
                         impactCount++;
                     }
                 }
@@ -175,24 +174,104 @@ public class CommandHandler {
             dir = sourceFile.getParent();
         }
 
-        ContextBuilder cb = new ContextBuilder(dir);
-        Set<Path> files = cb.getFiles();
+        String className = sourceFile.getFileName().toString().replace(".java", "");
+        String targetMethod = className + "." + methodQuery;
 
-        for (Path f : files) {
+        ContextBuilder cb = new ContextBuilder(dir);
+
+        Set<String> knownMethods = new HashSet<>();
+        Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers = new HashMap<>();
+        for (Path f : cb.getFiles()) {
             ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-            Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodQuery);
-            if (!callers.isEmpty()) {
-                String callerClass = f.getFileName().toString().replace(".java", "");
-                for (var caller : callers) {
-                    String callerNode = caller.method;
-                    String targetNode = methodQuery;
-                    sb.append("  \"").append(escapeDot(callerNode)).append("\" -> \"").append(escapeDot(targetNode)).append("\" [label=\"line ").append(caller.line).append("\"];\n");
+            for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : cg.getCallSites().entrySet()) {
+                String callerMethod = entry.getKey();
+                for (var callee : entry.getValue()) {
+                    String calleeKey;
+                    if (!callee.resolved.isEmpty()) {
+                        calleeKey = callee.resolved;
+                    } else if (callee.method.contains(".")) {
+                        calleeKey = callee.method;
+                    } else {
+                        String callerClass = callerMethod.contains(".") ?
+                            callerMethod.substring(0, callerMethod.lastIndexOf('.')) : "";
+                        calleeKey = callerClass.isEmpty() ? callee.method : callerClass + "." + callee.method;
+                    }
+                    if (!calleeKey.isEmpty()) {
+                        calleeToCallers.computeIfAbsent(calleeKey, k -> new TreeSet<>())
+                            .add(new ContextBuilder.CallGraph.CallSite(callerMethod, callee.line, calleeKey));
+                    }
                 }
             }
         }
 
+        for (Path f : cb.getFiles()) {
+            CompilationUnit cu = cb.getModels().get(0).getAst(f);
+            if (cu != null) {
+                for (Object obj : cu.types()) {
+                    if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
+                        String typeName = type.getName().getIdentifier();
+                        for (Object member : type.bodyDeclarations()) {
+                            if (member instanceof org.eclipse.jdt.core.dom.MethodDeclaration method) {
+                                knownMethods.add(typeName + "." + method.getName().getIdentifier());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Set<String> visitedNodes = new HashSet<>();
+        Set<String> edges = new TreeSet<>();
+        collectCallChain(targetMethod, calleeToCallers, visitedNodes, edges, knownMethods, className);
+
+        for (String edge : edges) {
+            sb.append("  ").append(edge).append("\n");
+        }
+
         sb.append("}\n");
         return sb.toString();
+    }
+
+    private static void collectCallChain(String targetMethod,
+            Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers,
+            Set<String> visited, Set<String> edges, Set<String> knownMethods, String targetClass) {
+        if (visited.contains(targetMethod)) return;
+        visited.add(targetMethod);
+
+        Set<ContextBuilder.CallGraph.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
+        if (callers == null || callers.isEmpty()) return;
+
+        for (var caller : callers) {
+            edges.add("\"" + escapeDot(caller.method) + "\" -> \"" + escapeDot(targetMethod) + "\" [color=blue]");
+            collectCallChain(caller.method, calleeToCallers, visited, edges, knownMethods, targetClass);
+        }
+    }
+
+    private static Set<ContextBuilder.CallGraph.CallSite> findCallers(
+            Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers, String target,
+            Set<String> knownMethods, String targetClass) {
+        Set<ContextBuilder.CallGraph.CallSite> result = new TreeSet<>();
+        String targetSimpleName = target.substring(targetClass.length() + 1);
+
+        for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : calleeToCallers.entrySet()) {
+            String key = entry.getKey();
+            boolean matches = false;
+
+            if (key.equals(target) || key.endsWith("." + target)) {
+                matches = true;
+            } else if (key.equals(targetSimpleName) || key.endsWith("." + targetSimpleName)) {
+                matches = true;
+            }
+
+            if (matches) {
+                for (var caller : entry.getValue()) {
+                    if (!caller.method.equals(target)) {
+                        result.add(caller);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     private static String escapeDot(String s) {
