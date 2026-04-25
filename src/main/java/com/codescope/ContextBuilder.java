@@ -77,7 +77,27 @@ public class ContextBuilder {
         } else {
             Set<Path> javaRoots = findJavaRoots(dir);
             if (javaRoots.isEmpty()) {
-                javaRoots.add(dir);
+                Path current = dir;
+                while (current != null && !current.equals(current.getParent())) {
+                    Path parent = current.getParent();
+                    if (parent != null && Files.exists(parent.resolve("pom.xml"))) {
+                        Set<Path> roots = findJavaRoots(parent);
+                        if (!roots.isEmpty()) {
+                            javaRoots = roots;
+                            break;
+                        }
+                    }
+                    current = parent;
+                }
+                if (javaRoots.isEmpty()) {
+                    Path scanRoot = findScanRoot(dir);
+                    Set<Path> roots = findJavaRoots(scanRoot);
+                    if (!roots.isEmpty()) {
+                        javaRoots = roots;
+                    } else {
+                        javaRoots.add(dir);
+                    }
+                }
             }
             for (Path javaRoot : javaRoots) {
                 ProjectModel model = new ProjectModel(javaRoot, classpath);
@@ -410,20 +430,20 @@ public class ContextBuilder {
                     String methodKey = typeName + "." + method.getName().getIdentifier();
                     if (method.getBody() == null) continue;
 
-                for (Object stmtObj : method.getBody().statements()) {
-                    ASTNode stmt = (ASTNode) stmtObj;
-                    for (MethodInvocation call : findMethodCalls(stmt)) {
-                        IMethodBinding binding = call.resolveMethodBinding();
-                        String resolved = "";
-                        String callerKey;
-                        if (binding != null && binding.getDeclaringClass() != null) {
-                            resolved = binding.getDeclaringClass().getName() + "." + binding.getName();
-                            callerKey = resolved;
-                        } else {
-                            callerKey = call.getName().getIdentifier();
-                        }
-                        int line = cu.getLineNumber(call.getStartPosition());
-                        callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
+                    for (Object stmtObj : method.getBody().statements()) {
+                        ASTNode stmt = (ASTNode) stmtObj;
+                        for (MethodInvocation call : findMethodCalls(stmt)) {
+                            IMethodBinding binding = call.resolveMethodBinding();
+                            String resolved = "";
+                            String callerKey;
+                            if (binding != null && binding.getDeclaringClass() != null) {
+                                resolved = binding.getDeclaringClass().getName() + "." + binding.getName();
+                                callerKey = resolved;
+                            } else {
+                                callerKey = call.getName().getIdentifier();
+                            }
+                            int line = cu.getLineNumber(call.getStartPosition());
+                            callSites.computeIfAbsent(methodKey, k -> new TreeSet<>())
                                 .add(new CallSite(call.getName().getIdentifier(), line, resolved));
                         callers.computeIfAbsent(callerKey, k -> new TreeSet<>())
                                 .add(new CallSite(typeName + "." + method.getName().getIdentifier(), line, resolved));

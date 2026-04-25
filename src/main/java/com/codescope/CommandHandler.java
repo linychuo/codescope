@@ -135,6 +135,23 @@ public class CommandHandler {
 
         if (methodQuery != null) {
             String className = sourceFile.getFileName().toString().replace(".java", "");
+
+            CompilationUnit sourceCu = cb.getModels().get(0).getAst(sourceFile);
+            if (sourceCu != null) {
+                for (Object obj : sourceCu.types()) {
+                    if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
+                        for (Object member : type.bodyDeclarations()) {
+                            if (member instanceof org.eclipse.jdt.core.dom.MethodDeclaration method) {
+                                if (method.getName().getIdentifier().equals(methodQuery)) {
+                                    className = type.getName().getIdentifier();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             sb.append("## Method: ").append(className).append(".").append(methodQuery).append("\n\n");
 
             int impactCount = 0;
@@ -183,22 +200,12 @@ public class CommandHandler {
         Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers = new HashMap<>();
         for (Path f : cb.getFiles()) {
             ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-            for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : cg.getCallSites().entrySet()) {
-                String callerMethod = entry.getKey();
-                for (var callee : entry.getValue()) {
-                    String calleeKey;
-                    if (!callee.resolved.isEmpty()) {
-                        calleeKey = callee.resolved;
-                    } else if (callee.method.contains(".")) {
-                        calleeKey = callee.method;
-                    } else {
-                        String callerClass = callerMethod.contains(".") ?
-                            callerMethod.substring(0, callerMethod.lastIndexOf('.')) : "";
-                        calleeKey = callerClass.isEmpty() ? callee.method : callerClass + "." + callee.method;
-                    }
-                    if (!calleeKey.isEmpty()) {
-                        calleeToCallers.computeIfAbsent(calleeKey, k -> new TreeSet<>())
-                            .add(new ContextBuilder.CallGraph.CallSite(callerMethod, callee.line, calleeKey));
+            for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+                String calleeMethod = entry.getKey();
+                for (var caller : entry.getValue()) {
+                    if (calleeMethod.contains(".")) {
+                        calleeToCallers.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
+                            .add(new ContextBuilder.CallGraph.CallSite(caller.method, caller.line, calleeMethod));
                     }
                 }
             }
@@ -251,26 +258,7 @@ public class CommandHandler {
             Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers, String target,
             Set<String> knownMethods, String targetClass) {
         Set<ContextBuilder.CallGraph.CallSite> result = new TreeSet<>();
-        String targetSimpleName = target.substring(targetClass.length() + 1);
-
-        for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : calleeToCallers.entrySet()) {
-            String key = entry.getKey();
-            boolean matches = false;
-
-            if (key.equals(target) || key.endsWith("." + target)) {
-                matches = true;
-            } else if (key.equals(targetSimpleName) || key.endsWith("." + targetSimpleName)) {
-                matches = true;
-            }
-
-            if (matches) {
-                for (var caller : entry.getValue()) {
-                    if (!caller.method.equals(target)) {
-                        result.add(caller);
-                    }
-                }
-            }
-        }
+        result.addAll(calleeToCallers.getOrDefault(target, Collections.emptySet()));
         return result;
     }
 

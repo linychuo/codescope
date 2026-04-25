@@ -61,7 +61,7 @@ public class ProjectModel {
                 Path file = entry.getKey();
                 if (currentFiles.contains(file)) {
                     String source = Files.readString(file);
-                    CompilationUnit cu = parse(source);
+                    CompilationUnit cu = parse(source, file);
                     astCache.put(file, cu);
                     lastModified.put(file, entry.getValue());
                 }
@@ -89,7 +89,7 @@ public class ProjectModel {
         }
 
         String source = Files.readString(file);
-        CompilationUnit cu = parse(source);
+        CompilationUnit cu = parse(source, file);
         astCache.put(file, cu);
         lastModified.put(file, modified);
     }
@@ -196,7 +196,7 @@ public class ProjectModel {
         addFilesParallel(new ArrayList<>(currentFiles));
     }
 
-    private CompilationUnit parse(String source) {
+    private CompilationUnit parse(String source, Path file) {
         boolean hasRecordInSource = source.contains("record ");
         String workingSource = source;
 
@@ -210,8 +210,19 @@ public class ProjectModel {
 
         ASTParser parser = ASTParser.newParser(AST.JLS21);
         parser.setSource(workingSource.toCharArray());
-        parser.setResolveBindings(false);
-        parser.setBindingsRecovery(false);
+
+        if (classpath != null && classpath.length > 0) {
+            String[] classpathEntries = classpath;
+            String[] sourcePaths = new String[]{rootDir.toAbsolutePath().toString()};
+            parser.setEnvironment(classpathEntries, sourcePaths, null, true);
+            String unitName = file.toAbsolutePath().toString();
+            parser.setUnitName(unitName);
+            parser.setResolveBindings(true);
+            parser.setBindingsRecovery(true);
+        } else {
+            parser.setResolveBindings(false);
+            parser.setBindingsRecovery(false);
+        }
         parser.setStatementsRecovery(true);
 
         CompilationUnit cu = (CompilationUnit) parser.createAST(null);
@@ -219,8 +230,18 @@ public class ProjectModel {
         if (hasRecordInSource && workingSource != source && cu.types().isEmpty()) {
             ASTParser recordParser = ASTParser.newParser(AST.JLS21);
             recordParser.setSource(source.toCharArray());
-            recordParser.setResolveBindings(false);
-            recordParser.setBindingsRecovery(false);
+            if (classpath != null && classpath.length > 0) {
+                String[] classpathEntries = classpath;
+                String[] sourcePaths = new String[]{rootDir.toAbsolutePath().toString()};
+                recordParser.setEnvironment(classpathEntries, sourcePaths, null, true);
+                String unitName = file.toAbsolutePath().toString();
+                recordParser.setUnitName(unitName);
+                recordParser.setResolveBindings(true);
+                recordParser.setBindingsRecovery(true);
+            } else {
+                recordParser.setResolveBindings(false);
+                recordParser.setBindingsRecovery(false);
+            }
             recordParser.setStatementsRecovery(true);
             CompilationUnit recordCu = (CompilationUnit) recordParser.createAST(null);
 
