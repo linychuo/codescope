@@ -47,7 +47,7 @@ public class CommandHandler {
             return sb.toString();
         }
 
-        Set<CallGraph.CallSite> calls = cg.getCallees(sourceFile, methodName);
+        Set<CallGraphBuilder.CallSite> calls = cg.getCallees(sourceFile, methodName);
 
         sb.append("## Callees of ").append(methodName).append("\n");
         if (calls.isEmpty()) {
@@ -78,7 +78,7 @@ public class CommandHandler {
         sb.append("## Callers of ").append(methodName).append("\n");
 
         // Try simple name first, then qualified name
-        Set<CallGraph.CallSite> callers = cg.getCallersByName(methodName);
+        Set<CallGraphBuilder.CallSite> callers = cg.getCallersByName(methodName);
         if (callers.isEmpty()) {
             callers = cg.getCallersForMethod(sourceFile.getFileName().toString().replace(".java", ""), methodName);
         }
@@ -153,18 +153,18 @@ public class CommandHandler {
             sb.append("## Method: ").append(className).append(".").append(methodQuery).append("\n\n");
 
             // Build unified caller map in one pass
-            Map<String, Set<CallGraph.CallSite>> allCallers = new HashMap<>();
+            Map<String, Set<CallGraphBuilder.CallSite>> allCallers = new HashMap<>();
             for (Path f : engine.getFiles()) {
                 ProjectModel m = engine.findModel(f);
                 if (m == null) continue;
 
                 CallGraphBuilder cg = new DefaultCallGraphBuilder(f, m);
-                for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+                for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.getAllCallers().entrySet()) {
                     String calleeMethod = entry.getKey();
-                    for (CallGraph.CallSite caller : entry.getValue()) {
+                    for (CallGraphBuilder.CallSite caller : entry.getValue()) {
                         if (calleeMethod.contains(".") && calleeMethod.equals(caller.resolved)) {
                             allCallers.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
-                                .add(new CallGraph.CallSite(caller.method, caller.line, caller.resolved));
+                                .add(new CallGraphBuilder.CallSite(caller.method, caller.line, caller.resolved));
                         }
                     }
                 }
@@ -172,7 +172,7 @@ public class CommandHandler {
 
             // Query the unified map
             String targetMethod = className + "." + methodQuery;
-            Set<CallGraph.CallSite> callers = allCallers.getOrDefault(targetMethod, Collections.emptySet());
+            Set<CallGraphBuilder.CallSite> callers = allCallers.getOrDefault(targetMethod, Collections.emptySet());
             int impactCount = callers.size();
             if (!callers.isEmpty()) {
                 sb.append("### Callers\n");
@@ -209,18 +209,18 @@ public class CommandHandler {
         AnalysisEngine engine = new AnalysisEngine(dir);
 
         Set<String> knownMethods = new HashSet<>();
-        Map<String, Set<CallGraph.CallSite>> calleeToCallers = new HashMap<>();
+        Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers = new HashMap<>();
         for (Path f : engine.getFiles()) {
             ProjectModel model = engine.findModel(f);
             if (model == null) continue;
 
             CallGraphBuilder cg = new DefaultCallGraphBuilder(f, model);
-            for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+            for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.getAllCallers().entrySet()) {
                 String calleeMethod = entry.getKey();
                 for (var caller : entry.getValue()) {
                     if (calleeMethod.contains(".")) {
                         calleeToCallers.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
-                            .add(new CallGraph.CallSite(caller.method, caller.line, calleeMethod));
+                            .add(new CallGraphBuilder.CallSite(caller.method, caller.line, calleeMethod));
                     }
                 }
             }
@@ -253,12 +253,12 @@ public class CommandHandler {
     }
 
     private static void collectCallChain(String targetMethod,
-            Map<String, Set<CallGraph.CallSite>> calleeToCallers,
+            Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers,
             Set<String> visited, Set<String> edges, Set<String> knownMethods, String targetClass) {
         if (visited.contains(targetMethod)) return;
         visited.add(targetMethod);
 
-        Set<CallGraph.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
+        Set<CallGraphBuilder.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
         if (callers == null || callers.isEmpty()) return;
 
         for (var caller : callers) {
@@ -267,16 +267,16 @@ public class CommandHandler {
         }
     }
 
-    private static Set<CallGraph.CallSite> findCallers(
-            Map<String, Set<CallGraph.CallSite>> calleeToCallers, String target,
+    private static Set<CallGraphBuilder.CallSite> findCallers(
+            Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers, String target,
             Set<String> knownMethods, String targetClass) {
-        Set<CallGraph.CallSite> result = new TreeSet<>();
+        Set<CallGraphBuilder.CallSite> result = new TreeSet<>();
         result.addAll(calleeToCallers.getOrDefault(target, Collections.emptySet()));
         return result;
     }
 
     private static String escapeDot(String s) {
-        return CallGraph.escapeDot(s);
+        return DotGenerator.escapeDot(s);
     }
 
     static String buildAst(AnalysisEngine engine, Path sourceFile) {

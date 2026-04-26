@@ -151,19 +151,19 @@ public class AnalysisEngine {
     /**
      * Builds unified caller map across all files for impact analysis.
      */
-    public Map<String, Set<CallGraph.CallSite>> buildCallerMap() {
-        Map<String, Set<CallGraph.CallSite>> callerMap = new HashMap<>();
+    public Map<String, Set<CallGraphBuilder.CallSite>> buildCallerMap() {
+        Map<String, Set<CallGraphBuilder.CallSite>> callerMap = new HashMap<>();
         for (Path f : getFiles()) {
             ProjectModel model = findModel(f);
             if (model == null) continue;
 
-            CallGraph cg = new CallGraph(f, model);
-            for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+            DefaultCallGraphBuilder cg = new DefaultCallGraphBuilder(f, model);
+            for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.getAllCallers().entrySet()) {
                 String calleeMethod = entry.getKey();
-                for (CallGraph.CallSite caller : entry.getValue()) {
+                for (CallGraphBuilder.CallSite caller : entry.getValue()) {
                     if (calleeMethod.contains(".")) {
                         callerMap.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
-                            .add(new CallGraph.CallSite(f.getFileName().toString(), caller.line, caller.method));
+                            .add(new CallGraphBuilder.CallSite(f.getFileName().toString(), caller.line, caller.method));
                     }
                 }
             }

@@ -266,8 +266,8 @@ public class JavaCodeEngine {
         return engine.buildContext(file, "calls");
     }
 
-    private Set<CallGraph.CallSite> getCallees(Path f, String methodName) {
-        CallGraph cg = new CallGraph(f, model);
+    private Set<CallGraphBuilder.CallSite> getCallees(Path f, String methodName) {
+        DefaultCallGraphBuilder cg = new DefaultCallGraphBuilder(f, model);
         return cg.getCallees(f, methodName);
     }
 }

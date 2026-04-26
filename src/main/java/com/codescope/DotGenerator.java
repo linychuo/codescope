@@ -15,6 +15,10 @@ import java.util.*;
  */
 public class DotGenerator {
 
+    public static String escapeDot(String s) {
+        return s.replace("\"", "\\\"");
+    }
+
     public static String generate(List<ProjectModel> models, boolean noJdk, boolean cycles, boolean heatmap) {
         Map<String, Integer> edgeCounts = new HashMap<>();
         Set<String> jdkNodes = new HashSet<>();
@@ -24,10 +28,10 @@ public class DotGenerator {
                 CompilationUnit cu = model.getAst(file);
                 if (cu == null) continue;
 
-                CallGraph cg = new CallGraph(file, model);
-                for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.callSites.entrySet()) {
+                DefaultCallGraphBuilder cg = new DefaultCallGraphBuilder(file, model);
+                for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.callSites.entrySet()) {
                     String caller = entry.getKey();
-                    for (CallGraph.CallSite cs : entry.getValue()) {
+                    for (CallGraphBuilder.CallSite cs : entry.getValue()) {
                         String callee = cs.resolved.isEmpty() ? caller.substring(0, caller.lastIndexOf('.')) + "." + cs.method : cs.resolved;
 
                         if (noJdk && (callee.startsWith("java.") || callee.contains(".java."))) {
@@ -74,7 +78,7 @@ public class DotGenerator {
                 String[] parts = e.getKey().split("->");
                 double ratio = (double) e.getValue() / maxCount;
                 String color = getHeatColor(ratio);
-                sb.append("  \"").append(CallGraph.escapeDot(parts[0])).append("\" [fillcolor=").append(color).append(", color=black];\n");
+                sb.append("  \"").append(escapeDot(parts[0])).append("\" [fillcolor=").append(color).append(", color=black];\n");
             }
         } else {
             sb.append("  node [shape=box];\n");
@@ -82,7 +86,7 @@ public class DotGenerator {
         sb.append("\n");
 
         for (String node : allNodes) {
-            sb.append("  \"").append(CallGraph.escapeDot(node)).append("\";\n");
+            sb.append("  \"").append(escapeDot(node)).append("\";\n");
         }
         sb.append("\n");
 
@@ -90,8 +94,8 @@ public class DotGenerator {
         for (String edge : allEdges) {
             String[] parts = edge.split("->");
             String style = cycleEdges.contains(edge) ? " [style=bold, color=red]" : "";
-            sb.append("  \"").append(CallGraph.escapeDot(parts[0])).append("\" -> \"")
-              .append(CallGraph.escapeDot(parts[1])).append("\"").append(style).append(";\n");
+            sb.append("  \"").append(escapeDot(parts[0])).append("\" -> \"")
+              .append(escapeDot(parts[1])).append("\"").append(style).append(";\n");
         }
 
         if (cycles && !cycleEdges.isEmpty()) {
