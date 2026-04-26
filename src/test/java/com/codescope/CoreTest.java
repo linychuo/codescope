@@ -15,10 +15,10 @@ class CoreTest {
 
     @Test
     void testCallSiteCompare() {
-        ContextBuilder.CallGraph.CallSite cs1 = new ContextBuilder.CallGraph.CallSite("foo", 10, "");
-        ContextBuilder.CallGraph.CallSite cs2 = new ContextBuilder.CallGraph.CallSite("foo", 20, "");
-        ContextBuilder.CallGraph.CallSite cs3 = new ContextBuilder.CallGraph.CallSite("bar", 10, "");
-        ContextBuilder.CallGraph.CallSite cs4 = new ContextBuilder.CallGraph.CallSite("foo", 10, "");
+        CallGraph.CallSite cs1 = new CallGraph.CallSite("foo", 10, "");
+        CallGraph.CallSite cs2 = new CallGraph.CallSite("foo", 20, "");
+        CallGraph.CallSite cs3 = new CallGraph.CallSite("bar", 10, "");
+        CallGraph.CallSite cs4 = new CallGraph.CallSite("foo", 10, "");
 
         assertEquals(-1, cs1.compareTo(cs2));
         assertEquals(1, cs2.compareTo(cs1));
@@ -28,8 +28,8 @@ class CoreTest {
 
     @Test
     void testCallSiteToString() {
-        ContextBuilder.CallGraph.CallSite cs1 = new ContextBuilder.CallGraph.CallSite("foo", 10, "");
-        ContextBuilder.CallGraph.CallSite cs2 = new ContextBuilder.CallGraph.CallSite("foo", 10, "bar.Baz.foo()");
+        CallGraph.CallSite cs1 = new CallGraph.CallSite("foo", 10, "");
+        CallGraph.CallSite cs2 = new CallGraph.CallSite("foo", 10, "bar.Baz.foo()");
 
         assertEquals("foo (line 10)", cs1.toString());
         assertEquals("foo -> bar.Baz.foo() (line 10)", cs2.toString());

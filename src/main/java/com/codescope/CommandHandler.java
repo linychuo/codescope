@@ -11,41 +11,44 @@ import java.util.*;
  */
 public class CommandHandler {
 
-    public static String handle(String command, Path sourceFile, String query, 
+    public static String handle(String command, Path sourceFile, String query,
             boolean noJdk, boolean cycles, boolean heatmap) throws Exception {
         Path dir = sourceFile.getParent();
-        ContextBuilder cb = new ContextBuilder(dir);
-        
+        AnalysisEngine engine = new AnalysisEngine(dir);
+
         return switch (command) {
-            case "context" -> cb.build(sourceFile, query);
-            case "calls" -> buildCalls(cb, sourceFile, query);
-            case "callers" -> buildCallers(cb, sourceFile, query);
-            case "dot" -> cb.buildDot(noJdk, cycles, heatmap);
+            case "context" -> engine.buildContext(sourceFile, query);
+            case "calls" -> buildCalls(engine, sourceFile, query);
+            case "callers" -> buildCallers(engine, sourceFile, query);
+            case "dot" -> engine.buildDot(noJdk, cycles, heatmap);
             case "classpath" -> buildClasspath(sourceFile);
             case "impact" -> buildImpact(sourceFile, query);
             case "impact-dot" -> buildImpactDot(sourceFile, query);
-            case "ast" -> buildAst(cb, sourceFile);
+            case "ast" -> buildAst(engine, sourceFile);
             case "index" -> buildIndex(sourceFile, query);
             default -> "Unknown command: " + command;
         };
     }
 
-    static String buildCalls(ContextBuilder cb, Path sourceFile, String methodName) {
+    static String buildCalls(AnalysisEngine engine, Path sourceFile, String methodName) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Call Graph for: ").append(sourceFile.getFileName()).append("\n\n");
 
-        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
+        ProjectModel model = engine.findModel(sourceFile);
+        if (model == null) return "File not found: " + sourceFile;
+
+        CompilationUnit cu = model.getAst(sourceFile);
         if (cu == null) return "File not found: " + sourceFile;
 
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
-        
+        CallGraphBuilder cg = new DefaultCallGraphBuilder(sourceFile, model);
+
         if (methodName == null) {
             sb.append("(use: calls <file> <methodName>)\n");
             return sb.toString();
         }
-        
-        Set<ContextBuilder.CallGraph.CallSite> calls = cg.getCallees(sourceFile, methodName);
-        
+
+        Set<CallGraph.CallSite> calls = cg.getCallees(sourceFile, methodName);
+
         sb.append("## Callees of ").append(methodName).append("\n");
         if (calls.isEmpty()) {
             sb.append("(no calls found)\n");
@@ -54,11 +57,11 @@ public class CommandHandler {
                 sb.append("- ").append(call).append("\n");
             }
         }
-        
+
         return sb.toString();
     }
 
-    static String buildCallers(ContextBuilder cb, Path sourceFile, String methodName) {
+    static String buildCallers(AnalysisEngine engine, Path sourceFile, String methodName) {
         StringBuilder sb = new StringBuilder();
         sb.append("# Callers of: ").append(methodName != null ? methodName : sourceFile.getFileName()).append("\n\n");
 
@@ -67,9 +70,19 @@ public class CommandHandler {
             return sb.toString();
         }
 
+        ProjectModel model = engine.findModel(sourceFile);
+        if (model == null) return "File not found: " + sourceFile;
+
+        CallGraphBuilder cg = new DefaultCallGraphBuilder(sourceFile, model);
+
         sb.append("## Callers of ").append(methodName).append("\n");
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(sourceFile, cb.getModels().get(0));
-        Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersByName(methodName);
+
+        // Try simple name first, then qualified name
+        Set<CallGraph.CallSite> callers = cg.getCallersByName(methodName);
+        if (callers.isEmpty()) {
+            callers = cg.getCallersForMethod(sourceFile.getFileName().toString().replace(".java", ""), methodName);
+        }
+
         if (callers.isEmpty()) {
             sb.append("(no callers found)\n");
         } else {
@@ -91,7 +104,7 @@ public class CommandHandler {
 
         if (pom != null && Files.exists(pom)) {
             sb.append("Detected pom.xml\n\n");
-            List<String> deps = parseMavenDeps(pom);
+            List<String> deps = new DefaultMavenParser().parseDependencies(pom);
             for (String dep : deps) {
                 sb.append("- ").append(dep).append("\n");
             }
@@ -100,24 +113,6 @@ public class CommandHandler {
         }
 
         return sb.toString();
-    }
-
-    public static List<String> parseMavenDeps(Path pom) throws Exception {
-        List<String> deps = new ArrayList<>();
-        String content = Files.readString(pom);
-        
-        String pattern = "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?<version>(.*?)</version>.*?</dependency>";
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.DOTALL);
-        java.util.regex.Matcher m = p.matcher(content);
-        
-        while (m.find()) {
-            String groupId = m.group(1).trim();
-            String artifactId = m.group(2).trim();
-            String version = m.group(3) != null ? m.group(3).trim() : "unknown";
-            deps.add(groupId + ":" + artifactId + ":" + version);
-        }
-        
-        return deps;
     }
 
     static String buildImpact(Path sourceFile, String methodQuery) throws Exception {
@@ -131,20 +126,23 @@ public class CommandHandler {
 
         sb.append("Scanning: ").append(dir).append("\n\n");
 
-        ContextBuilder cb = new ContextBuilder(dir);
+        AnalysisEngine engine = new AnalysisEngine(dir);
 
         if (methodQuery != null) {
             String className = sourceFile.getFileName().toString().replace(".java", "");
 
-            CompilationUnit sourceCu = cb.getModels().get(0).getAst(sourceFile);
-            if (sourceCu != null) {
-                for (Object obj : sourceCu.types()) {
-                    if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
-                        for (Object member : type.bodyDeclarations()) {
-                            if (member instanceof org.eclipse.jdt.core.dom.MethodDeclaration method) {
-                                if (method.getName().getIdentifier().equals(methodQuery)) {
-                                    className = type.getName().getIdentifier();
-                                    break;
+            ProjectModel model = engine.findModel(sourceFile);
+            if (model != null) {
+                CompilationUnit sourceCu = model.getAst(sourceFile);
+                if (sourceCu != null) {
+                    for (Object obj : sourceCu.types()) {
+                        if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
+                            for (Object member : type.bodyDeclarations()) {
+                                if (member instanceof org.eclipse.jdt.core.dom.MethodDeclaration method) {
+                                    if (method.getName().getIdentifier().equals(methodQuery)) {
+                                        className = type.getName().getIdentifier();
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -154,18 +152,32 @@ public class CommandHandler {
 
             sb.append("## Method: ").append(className).append(".").append(methodQuery).append("\n\n");
 
-            int impactCount = 0;
+            // Build unified caller map in one pass
+            Map<String, Set<CallGraph.CallSite>> allCallers = new HashMap<>();
+            for (Path f : engine.getFiles()) {
+                ProjectModel m = engine.findModel(f);
+                if (m == null) continue;
 
-            for (Path f : cb.getFiles()) {
-                ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-                Set<ContextBuilder.CallGraph.CallSite> callers = cg.getCallersForMethod(className, methodQuery);
-                if (!callers.isEmpty()) {
-                    sb.append("### ").append(f.getFileName()).append("\n");
-                    for (var caller : callers) {
-                        sb.append("- line ").append(caller.line).append(": ")
-                          .append(caller.method).append("\n");
-                        impactCount++;
+                CallGraphBuilder cg = new DefaultCallGraphBuilder(f, m);
+                for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+                    String calleeMethod = entry.getKey();
+                    for (CallGraph.CallSite caller : entry.getValue()) {
+                        if (calleeMethod.contains(".") && calleeMethod.equals(caller.resolved)) {
+                            allCallers.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
+                                .add(new CallGraph.CallSite(caller.method, caller.line, caller.resolved));
+                        }
                     }
+                }
+            }
+
+            // Query the unified map
+            String targetMethod = className + "." + methodQuery;
+            Set<CallGraph.CallSite> callers = allCallers.getOrDefault(targetMethod, Collections.emptySet());
+            int impactCount = callers.size();
+            if (!callers.isEmpty()) {
+                sb.append("### Callers\n");
+                for (var caller : callers) {
+                    sb.append("- ").append(caller.method).append(" at line ").append(caller.line).append("\n");
                 }
             }
 
@@ -194,25 +206,26 @@ public class CommandHandler {
         String className = sourceFile.getFileName().toString().replace(".java", "");
         String targetMethod = className + "." + methodQuery;
 
-        ContextBuilder cb = new ContextBuilder(dir);
+        AnalysisEngine engine = new AnalysisEngine(dir);
 
         Set<String> knownMethods = new HashSet<>();
-        Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers = new HashMap<>();
-        for (Path f : cb.getFiles()) {
-            ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, cb.getModels().get(0));
-            for (Map.Entry<String, Set<ContextBuilder.CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
+        Map<String, Set<CallGraph.CallSite>> calleeToCallers = new HashMap<>();
+        for (Path f : engine.getFiles()) {
+            ProjectModel model = engine.findModel(f);
+            if (model == null) continue;
+
+            CallGraphBuilder cg = new DefaultCallGraphBuilder(f, model);
+            for (Map.Entry<String, Set<CallGraph.CallSite>> entry : cg.getAllCallers().entrySet()) {
                 String calleeMethod = entry.getKey();
                 for (var caller : entry.getValue()) {
                     if (calleeMethod.contains(".")) {
                         calleeToCallers.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
-                            .add(new ContextBuilder.CallGraph.CallSite(caller.method, caller.line, calleeMethod));
+                            .add(new CallGraph.CallSite(caller.method, caller.line, calleeMethod));
                     }
                 }
             }
-        }
-
-        for (Path f : cb.getFiles()) {
-            CompilationUnit cu = cb.getModels().get(0).getAst(f);
+            // Collect known methods from the same AST iteration
+            CompilationUnit cu = model.getAst(f);
             if (cu != null) {
                 for (Object obj : cu.types()) {
                     if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
@@ -240,12 +253,12 @@ public class CommandHandler {
     }
 
     private static void collectCallChain(String targetMethod,
-            Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers,
+            Map<String, Set<CallGraph.CallSite>> calleeToCallers,
             Set<String> visited, Set<String> edges, Set<String> knownMethods, String targetClass) {
         if (visited.contains(targetMethod)) return;
         visited.add(targetMethod);
 
-        Set<ContextBuilder.CallGraph.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
+        Set<CallGraph.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
         if (callers == null || callers.isEmpty()) return;
 
         for (var caller : callers) {
@@ -254,23 +267,26 @@ public class CommandHandler {
         }
     }
 
-    private static Set<ContextBuilder.CallGraph.CallSite> findCallers(
-            Map<String, Set<ContextBuilder.CallGraph.CallSite>> calleeToCallers, String target,
+    private static Set<CallGraph.CallSite> findCallers(
+            Map<String, Set<CallGraph.CallSite>> calleeToCallers, String target,
             Set<String> knownMethods, String targetClass) {
-        Set<ContextBuilder.CallGraph.CallSite> result = new TreeSet<>();
+        Set<CallGraph.CallSite> result = new TreeSet<>();
         result.addAll(calleeToCallers.getOrDefault(target, Collections.emptySet()));
         return result;
     }
 
     private static String escapeDot(String s) {
-        return s.replace("\"", "\\\"");
+        return CallGraph.escapeDot(s);
     }
 
-    static String buildAst(ContextBuilder cb, Path sourceFile) {
+    static String buildAst(AnalysisEngine engine, Path sourceFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("# AST for: ").append(sourceFile.getFileName()).append("\n\n");
 
-        CompilationUnit cu = cb.getModels().get(0).getAst(sourceFile);
+        ProjectModel model = engine.findModel(sourceFile);
+        if (model == null) return "File not found: " + sourceFile;
+
+        CompilationUnit cu = model.getAst(sourceFile);
         if (cu == null) return "File not found: " + sourceFile;
 
         sb.append("## Package\n");
@@ -286,17 +302,17 @@ public class CommandHandler {
                 sb.append("\n");
             }
         }
-        
+
         return sb.toString();
     }
 
     private static String buildIndex(Path dir, String method) throws Exception {
         List<Path> dirs = new ArrayList<>();
         dirs.add(dir);
-        
+
         Index index = new Index(dirs);
         index.build();
-        
+
         if (method != null) {
             return index.findMethod(method);
         } else {

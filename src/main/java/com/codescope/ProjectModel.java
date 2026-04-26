@@ -39,6 +39,10 @@ public class ProjectModel {
         return classpath;
     }
 
+    public Path getRoot() {
+        return rootDir;
+    }
+
     public void init() throws IOException {
         if (cacheManager != null && astCache.isEmpty()) {
             loadFromCache();

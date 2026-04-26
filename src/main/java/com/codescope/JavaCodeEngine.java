@@ -14,9 +14,10 @@ import java.util.stream.*;
  */
 public class JavaCodeEngine {
 
-    private final ContextBuilder contextBuilder;
+    private final AnalysisEngine engine;
     private final ProjectModel model;
     private final Index index;
+    private static final Logger logger = Logger.getLogger("JavaCodeEngine");
 
     /**
      * Creates a new engine for the given source directory.
@@ -25,13 +26,13 @@ public class JavaCodeEngine {
      * @throws IOException if directory access fails
      */
     public JavaCodeEngine(Path sourceDir) throws IOException {
-        this.model = new ProjectModel(sourceDir);
-        this.contextBuilder = new ContextBuilder(sourceDir);
+        this.engine = new AnalysisEngine(sourceDir);
+        this.model = engine.getModels().isEmpty() ? null : engine.getModels().get(0);
         this.index = new Index(List.of(sourceDir));
     }
 
-    public ContextBuilder getContextBuilder() {
-        return contextBuilder;
+    public AnalysisEngine getEngine() {
+        return engine;
     }
 
     public ProjectModel getProjectModel() {
@@ -49,6 +50,7 @@ public class JavaCodeEngine {
         try {
             model.saveToCache();
         } catch (IOException e) {
+            logger.warning("Failed to save cache", e);
         }
         model.shutdown();
     }
@@ -253,19 +255,19 @@ public class JavaCodeEngine {
     }
 
     public String getContextMarkdown(Path file) {
-        return contextBuilder.build(file, null);
+        return engine.buildContext(file, null);
     }
 
     public String getMethodMarkdown(Path file, String methodName) {
-        return contextBuilder.build(file, methodName);
+        return engine.buildContext(file, methodName);
     }
 
     public String getCallsMarkdown(Path file) {
-        return contextBuilder.build(file, "calls");
+        return engine.buildContext(file, "calls");
     }
 
-    private Set<ContextBuilder.CallGraph.CallSite> getCallees(Path f, String methodName) {
-        ContextBuilder.CallGraph cg = new ContextBuilder.CallGraph(f, model);
+    private Set<CallGraph.CallSite> getCallees(Path f, String methodName) {
+        CallGraph cg = new CallGraph(f, model);
         return cg.getCallees(f, methodName);
     }
 }

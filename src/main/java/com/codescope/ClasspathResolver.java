@@ -24,7 +24,7 @@ public class ClasspathResolver {
             if (pom == null) {
                 return new String[0];
             }
-            List<String> dependencies = CommandHandler.parseMavenDeps(pom);
+            List<String> dependencies = new DefaultMavenParser().parseDependencies(pom);
             if (dependencies.isEmpty()) {
                 return new String[0];
             }

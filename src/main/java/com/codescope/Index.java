@@ -318,22 +318,7 @@ public class Index {
         if (!Files.exists(pom)) {
             return null;
         }
-        try {
-            String content = Files.readString(pom);
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                "<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?(?:<version>(.*?)</version>)?.*?</dependency>",
-                java.util.regex.Pattern.DOTALL);
-            java.util.regex.Matcher matcher = pattern.matcher(content);
-            List<String> deps = new ArrayList<>();
-            while (matcher.find()) {
-                String g = matcher.group(1).trim();
-                String a = matcher.group(2).trim();
-                String v = matcher.group(3) != null ? matcher.group(3).trim() : "latest";
-                deps.add(g + ":" + a + ":" + v);
-            }
-            return deps.isEmpty() ? null : deps.toArray(new String[0]);
-        } catch (IOException e) {
-            return null;
-        }
+        List<String> deps = new DefaultMavenParser().parseDependencies(pom);
+        return deps.isEmpty() ? null : deps.toArray(new String[0]);
     }
 }

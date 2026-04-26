@@ -6,7 +6,7 @@ import java.util.regex.*;
 
 public class McpServer {
     private static final String VERSION = "1.0.0";
-    private ContextBuilder contextBuilder;
+    private AnalysisEngine engine;
     private final Map<String, Tool> tools = new HashMap<>();
 
     public static void main(String[] args) throws Exception {
@@ -17,7 +17,7 @@ public class McpServer {
 
     public void init() throws Exception {
         Path cwd = Path.of(System.getProperty("user.dir"));
-        this.contextBuilder = new ContextBuilder(cwd);
+        this.engine = new AnalysisEngine(cwd);
         initTools();
     }
 
@@ -128,19 +128,19 @@ public class McpServer {
                 String filePath = (String) args.get("filePath");
                 String methodName = (String) args.get("methodName");
                 Path sourceFile = resolveFile(filePath);
-                yield contextBuilder.build(sourceFile, methodName);
+                yield engine.buildContext(sourceFile, methodName);
             }
             case "calls" -> {
                 String filePath = (String) args.get("filePath");
                 String methodName = (String) args.get("methodName");
                 Path sourceFile = resolveFile(filePath);
-                yield CommandHandler.buildCalls(contextBuilder, sourceFile, methodName);
+                yield CommandHandler.buildCalls(engine, sourceFile, methodName);
             }
             case "callers" -> {
                 String filePath = (String) args.get("filePath");
                 String methodName = (String) args.get("methodName");
                 Path sourceFile = resolveFile(filePath);
-                yield CommandHandler.buildCallers(contextBuilder, sourceFile, methodName);
+                yield CommandHandler.buildCallers(engine, sourceFile, methodName);
             }
             case "impact" -> {
                 String filePath = (String) args.get("filePath");
@@ -160,13 +160,13 @@ public class McpServer {
                 boolean cycles = Boolean.TRUE.equals(args.get("cycles"));
                 boolean heatmap = Boolean.TRUE.equals(args.get("heatmap"));
                 Path path = Path.of(filePath);
-                ContextBuilder cb = new ContextBuilder(path);
-                yield cb.buildDot(noJdk, cycles, heatmap);
+                AnalysisEngine dotEngine = new AnalysisEngine(path);
+                yield dotEngine.buildDot(noJdk, cycles, heatmap);
             }
             case "ast" -> {
                 String filePath = (String) args.get("filePath");
                 Path sourceFile = resolveFile(filePath);
-                yield CommandHandler.buildAst(contextBuilder, sourceFile);
+                yield CommandHandler.buildAst(engine, sourceFile);
             }
             case "index" -> {
                 String filePath = (String) args.get("filePath");
