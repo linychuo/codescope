@@ -63,6 +63,7 @@ java -jar target/codescope-*.jar context Test.java main
 | `calls` | 方法调用关系 (callees) | `calls Test.java main` |
 | `callers` | 反向调用查找 | `callers Test.java main` |
 | `impact` | 影响范围分析 | `impact src/ methodName` |
+| `impact-dot` | 影响范围 DOT 图 | `impact-dot Test.java main` |
 | `dot` | Graphviz DOT 输出 | `dot Test.java` |
 | `classpath` | Maven 依赖 | `classpath .` |
 | `ast` | AST 结构 | `ast Test.java` |
@@ -116,6 +117,12 @@ java -jar target/codescope-*.jar calls UserRepository.java save
 ### 反向调用查找 (callers)
 ```bash
 java -jar target/codescope-*.jar callers UserRepository.java save
+```
+
+### 影响范围 DOT 图
+```bash
+java -jar target/codescope-*.jar impact-dot Test.java main > impact.dot
+dot -Tpng impact.dot -o impact.png
 ```
 
 ### 多模块项目
