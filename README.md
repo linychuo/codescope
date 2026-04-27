@@ -130,6 +130,28 @@ dot -Tpng impact.dot -o impact.png
 java -jar target/codescope-*.jar index project-dir hello
 ```
 
+### 大型项目分析
+
+索引构建（首次全量索引）：
+```bash
+java -jar target/codescope-*.jar index /path/to/large-project build
+```
+
+快速方法查找（复用缓存）：
+```bash
+java -jar target/codescope-*.jar index /path/to/large-project findMethod UserService
+```
+
+影响范围分析（跨模块）：
+```bash
+java -jar target/codescope-*.jar impact /path/to/large-project module-name/ClassName methodName
+```
+
+生成 DOT 图（整个项目）：
+```bash
+java -jar target/codescope-*.jar dot /path/to/large-project > callgraph.dot
+```
+
 ### Maven 依赖
 ```bash
 java -jar target/codescope-*.jar classpath .
@@ -259,6 +281,8 @@ java -cp target/codescope-*.jar com.codescope.McpServer
 
 - 首次运行: ~800ms
 - 后续运行: 使用缓存
+- 大型项目: 支持 100+ 并发任务，10000+ 缓存条目（LRU 驱逐防止 OOM）
+- 索引查询: O(1) 方法查找（预计算 callersCache）
 
 ## 限制
 
