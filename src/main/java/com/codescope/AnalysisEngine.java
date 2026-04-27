@@ -161,9 +161,9 @@ public class AnalysisEngine {
             for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.getAllCallers().entrySet()) {
                 String calleeMethod = entry.getKey();
                 for (CallGraphBuilder.CallSite caller : entry.getValue()) {
-                    if (calleeMethod.contains(".")) {
+                    if (calleeMethod.contains(".") && !caller.resolved.isEmpty()) {
                         callerMap.computeIfAbsent(calleeMethod, k -> new TreeSet<>())
-                            .add(new CallGraphBuilder.CallSite(f.getFileName().toString(), caller.line, caller.method));
+                            .add(new CallGraphBuilder.CallSite(caller.method, caller.line, caller.resolved));
                     }
                 }
             }

@@ -172,6 +172,15 @@ public class CommandHandler {
 
             // Query the unified map
             String targetMethod = className + "." + methodQuery;
+            // Resolve to fully qualified name if not found directly
+            if (!allCallers.containsKey(targetMethod)) {
+                for (String key : allCallers.keySet()) {
+                    if (key.endsWith("." + methodQuery)) {
+                        targetMethod = key;
+                        break;
+                    }
+                }
+            }
             Set<CallGraphBuilder.CallSite> callers = allCallers.getOrDefault(targetMethod, Collections.emptySet());
             int impactCount = callers.size();
             if (!callers.isEmpty()) {
@@ -208,7 +217,6 @@ public class CommandHandler {
 
         AnalysisEngine engine = new AnalysisEngine(dir);
 
-        Set<String> knownMethods = new HashSet<>();
         Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers = new HashMap<>();
         for (Path f : engine.getFiles()) {
             ProjectModel model = engine.findModel(f);
@@ -224,25 +232,22 @@ public class CommandHandler {
                     }
                 }
             }
-            // Collect known methods from the same AST iteration
-            CompilationUnit cu = model.getAst(f);
-            if (cu != null) {
-                for (Object obj : cu.types()) {
-                    if (obj instanceof org.eclipse.jdt.core.dom.TypeDeclaration type) {
-                        String typeName = type.getName().getIdentifier();
-                        for (Object member : type.bodyDeclarations()) {
-                            if (member instanceof org.eclipse.jdt.core.dom.MethodDeclaration method) {
-                                knownMethods.add(typeName + "." + method.getName().getIdentifier());
-                            }
-                        }
-                    }
+        }
+
+        // Resolve fully qualified method name if targetMethod doesn't match directly
+        String resolvedTarget = targetMethod;
+        if (!calleeToCallers.containsKey(targetMethod)) {
+            for (String key : calleeToCallers.keySet()) {
+                if (key.endsWith("." + methodQuery)) {
+                    resolvedTarget = key;
+                    break;
                 }
             }
         }
 
         Set<String> visitedNodes = new HashSet<>();
         Set<String> edges = new TreeSet<>();
-        collectCallChain(targetMethod, calleeToCallers, visitedNodes, edges, knownMethods, className);
+        collectCallChain(resolvedTarget, calleeToCallers, visitedNodes, edges);
 
         for (String edge : edges) {
             sb.append("  ").append(edge).append("\n");
@@ -254,25 +259,19 @@ public class CommandHandler {
 
     private static void collectCallChain(String targetMethod,
             Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers,
-            Set<String> visited, Set<String> edges, Set<String> knownMethods, String targetClass) {
+            Set<String> visited, Set<String> edges) {
         if (visited.contains(targetMethod)) return;
         visited.add(targetMethod);
 
-        Set<CallGraphBuilder.CallSite> callers = findCallers(calleeToCallers, targetMethod, knownMethods, targetClass);
+        Set<CallGraphBuilder.CallSite> callers = calleeToCallers.getOrDefault(targetMethod, Collections.emptySet());
         if (callers == null || callers.isEmpty()) return;
 
         for (var caller : callers) {
             edges.add("\"" + escapeDot(caller.method) + "\" -> \"" + escapeDot(targetMethod) + "\" [color=blue]");
-            collectCallChain(caller.method, calleeToCallers, visited, edges, knownMethods, targetClass);
+            if (!caller.resolved.isEmpty()) {
+                collectCallChain(caller.resolved, calleeToCallers, visited, edges);
+            }
         }
-    }
-
-    private static Set<CallGraphBuilder.CallSite> findCallers(
-            Map<String, Set<CallGraphBuilder.CallSite>> calleeToCallers, String target,
-            Set<String> knownMethods, String targetClass) {
-        Set<CallGraphBuilder.CallSite> result = new TreeSet<>();
-        result.addAll(calleeToCallers.getOrDefault(target, Collections.emptySet()));
-        return result;
     }
 
     private static String escapeDot(String s) {
