@@ -17,6 +17,8 @@ public class Index {
 
     private final List<ProjectModel> models = new ArrayList<>();
     private final Map<String, List<MethodInfo>> methods = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> callersCache = new ConcurrentHashMap<>();
+    private final Map<String, Set<Path>> methodToFiles = new ConcurrentHashMap<>();
     private final ExecutorService executor;
 
     public static void main(String[] args) throws IOException {
@@ -113,6 +115,18 @@ public class Index {
                         String methodName = method.getName().getIdentifier();
                         methods.computeIfAbsent(methodName, k -> Collections.synchronizedList(new ArrayList<>()))
                               .add(new MethodInfo(file, typeName, method));
+                        methodToFiles.computeIfAbsent(methodName, k -> ConcurrentHashMap.newKeySet()).add(file);
+
+                        if (method.getBody() != null) {
+                            for (Object stmtObj : method.getBody().statements()) {
+                                ASTNode stmt = (ASTNode) stmtObj;
+                                for (MethodInvocation call : findMethodCalls(stmt)) {
+                                    String calleeName = call.getName().getIdentifier();
+                                    callersCache.computeIfAbsent(calleeName, k -> ConcurrentHashMap.newKeySet())
+                                               .add(typeName + "." + method.getName().getIdentifier());
+                                }
+                            }
+                        }
                     }
                 }
                 for (Object obj : cu.types()) {
@@ -124,6 +138,18 @@ public class Index {
                         String methodName = method.getName().getIdentifier();
                         methods.computeIfAbsent(methodName, k -> Collections.synchronizedList(new ArrayList<>()))
                               .add(new MethodInfo(file, typeName, method));
+                        methodToFiles.computeIfAbsent(methodName, k -> ConcurrentHashMap.newKeySet()).add(file);
+
+                        if (method.getBody() != null) {
+                            for (Object stmtObj : method.getBody().statements()) {
+                                ASTNode stmt = (ASTNode) stmtObj;
+                                for (MethodInvocation call : findMethodCalls(stmt)) {
+                                    String calleeName = call.getName().getIdentifier();
+                                    callersCache.computeIfAbsent(calleeName, k -> ConcurrentHashMap.newKeySet())
+                                               .add(typeName + "." + method.getName().getIdentifier());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -174,29 +200,10 @@ public class Index {
         }
 
         sb.append("\n## Callers\n");
-        for (ProjectModel model : models) {
-            for (Path file : model.getFiles()) {
-                CompilationUnit cu = model.getAst(file);
-                if (cu == null) continue;
-
-                for (Object obj : cu.types()) {
-                    if (!(obj instanceof TypeDeclaration type)) continue;
-                    for (Object member : type.bodyDeclarations()) {
-                        if (!(member instanceof MethodDeclaration method)) continue;
-                        if (method.getBody() == null) continue;
-
-                        for (Object stmtObj : method.getBody().statements()) {
-                            ASTNode stmt = (ASTNode) stmtObj;
-                            for (MethodInvocation call : findMethodCalls(stmt)) {
-                                if (call.getName().getIdentifier().equals(name)) {
-                                    sb.append("- ").append(type.getName().getIdentifier()).append(".")
-                                     .append(method.getName().getIdentifier())
-                                     .append(" at ").append(file.getFileName()).append("\n");
-                                }
-                            }
-                        }
-                    }
-                }
+        Set<String> callers = callersCache.get(name);
+        if (callers != null) {
+            for (String caller : callers) {
+                sb.append("- ").append(caller).append("\n");
             }
         }
 

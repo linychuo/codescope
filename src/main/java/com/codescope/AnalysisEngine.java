@@ -16,6 +16,7 @@ public class AnalysisEngine {
     private final DefaultSourceIndexer indexer;
     private final List<ProjectModel> models;
     private Set<Path> filesCache;
+    private Map<Path, DefaultCallGraphBuilder> callGraphCache = new HashMap<>();
 
     private static final Logger logger = Logger.getLogger("AnalysisEngine");
 
@@ -121,7 +122,7 @@ public class AnalysisEngine {
         CompilationUnit cu = model.getAst(file);
         if (cu == null) return "File not found: " + file;
 
-        CallGraphBuilder cg = new DefaultCallGraphBuilder(file, model);
+        CallGraphBuilder cg = getOrCreateCallGraph(file);
         return buildContext(cu, query, file, cg);
     }
 
@@ -143,9 +144,13 @@ public class AnalysisEngine {
      * Builds call graph for a specific file.
      */
     public CallGraphBuilder buildCallGraph(Path file) {
+        return getOrCreateCallGraph(file);
+    }
+
+    private DefaultCallGraphBuilder getOrCreateCallGraph(Path file) {
         ProjectModel model = findModel(file);
         if (model == null) return null;
-        return new DefaultCallGraphBuilder(file, model);
+        return callGraphCache.computeIfAbsent(file, f -> new DefaultCallGraphBuilder(f, model));
     }
 
     /**
@@ -154,10 +159,9 @@ public class AnalysisEngine {
     public Map<String, Set<CallGraphBuilder.CallSite>> buildCallerMap() {
         Map<String, Set<CallGraphBuilder.CallSite>> callerMap = new HashMap<>();
         for (Path f : getFiles()) {
-            ProjectModel model = findModel(f);
-            if (model == null) continue;
+            DefaultCallGraphBuilder cg = getOrCreateCallGraph(f);
+            if (cg == null) continue;
 
-            DefaultCallGraphBuilder cg = new DefaultCallGraphBuilder(f, model);
             for (Map.Entry<String, Set<CallGraphBuilder.CallSite>> entry : cg.getAllCallers().entrySet()) {
                 String calleeMethod = entry.getKey();
                 for (CallGraphBuilder.CallSite caller : entry.getValue()) {

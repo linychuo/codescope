@@ -7,6 +7,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Manages AST cache and Java source file parsing for a single module.
@@ -14,12 +15,18 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ProjectModel {
 
-    private final Map<Path, CompilationUnit> astCache = new ConcurrentHashMap<>();
+    private static final int MAX_CACHE_SIZE = 10000;
+    private static final int MAX_CONCURRENT_TASKS = 100;
+    private final Map<Path, CompilationUnit> astCache;
     private final Map<Path, Long> lastModified = new ConcurrentHashMap<>();
     private final Path rootDir;
     private final ExecutorService executor;
+    private final Semaphore semaphore;
     private CacheManager cacheManager;
     private String[] classpath;
+    private Set<Path> knownFiles = ConcurrentHashMap.newKeySet();
+    private long lastScanTime = 0;
+    private static final long MIN_SCAN_INTERVAL_MS = 1000;
 
     public ProjectModel(Path rootDir) {
         this(rootDir, null);
@@ -28,8 +35,15 @@ public class ProjectModel {
     public ProjectModel(Path rootDir, String[] classpath) {
         this.rootDir = rootDir;
         this.classpath = classpath;
+        this.astCache = Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Path, CompilationUnit> eldest) {
+                return size() > MAX_CACHE_SIZE;
+            }
+        });
+        this.semaphore = new Semaphore(MAX_CONCURRENT_TASKS);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
-        
+
         if (rootDir != null) {
             this.cacheManager = new CacheManager(rootDir);
         }
@@ -112,7 +126,15 @@ public class ProjectModel {
     public void addFilesParallel(List<Path> files) throws InterruptedException {
         List<Callable<Void>> tasks = new ArrayList<>();
         for (Path file : files) {
-            tasks.add(() -> { addFile(file, true); return null; });
+            tasks.add(() -> {
+                semaphore.acquire();
+                try {
+                    addFile(file, true);
+                } finally {
+                    semaphore.release();
+                }
+                return null;
+            });
         }
         executor.invokeAll(tasks);
     }
@@ -157,24 +179,39 @@ public class ProjectModel {
     public void refresh() throws IOException {
         if (rootDir == null) return;
 
-        Set<Path> currentFiles = new HashSet<>();
+        long now = System.currentTimeMillis();
+        if (now - lastScanTime < MIN_SCAN_INTERVAL_MS && !knownFiles.isEmpty()) {
+            Set<Path> currentCached = astCache.keySet();
+            for (Path p : currentCached) {
+                if (hasChanged(p)) {
+                    addFile(p, true);
+                }
+            }
+            return;
+        }
+
+        Set<Path> currentFiles = ConcurrentHashMap.newKeySet();
         Files.walk(rootDir)
             .filter(p -> p.toString().endsWith(".java"))
             .filter(p -> !p.toString().contains("/target/"))
             .forEach(currentFiles::add);
 
-        Set<Path> cachedFiles = astCache.keySet();
+        lastScanTime = now;
+        knownFiles.clear();
+        knownFiles.addAll(currentFiles);
 
-        for (Path p : cachedFiles) {
+        for (Path p : astCache.keySet()) {
             if (!currentFiles.contains(p)) {
                 removeFile(p);
             }
         }
 
         for (Path p : currentFiles) {
-            addFile(p, true);
+            if (!astCache.containsKey(p) || hasChanged(p)) {
+                addFile(p, true);
+            }
         }
-        
+
         if (!lastModified.isEmpty()) {
             saveToCache();
         }
@@ -183,21 +220,44 @@ public class ProjectModel {
     public void refreshParallel() throws InterruptedException, IOException {
         if (rootDir == null) return;
 
-        Set<Path> currentFiles = new HashSet<>();
+        long now = System.currentTimeMillis();
+        if (now - lastScanTime < MIN_SCAN_INTERVAL_MS && !knownFiles.isEmpty()) {
+            Set<Path> currentCached = astCache.keySet();
+            List<Path> changed = new ArrayList<>();
+            for (Path p : currentCached) {
+                if (hasChanged(p)) {
+                    changed.add(p);
+                }
+            }
+            if (!changed.isEmpty()) {
+                addFilesParallel(changed);
+            }
+            return;
+        }
+
+        Set<Path> currentFiles = ConcurrentHashMap.newKeySet();
         Files.walk(rootDir)
             .filter(p -> p.toString().endsWith(".java"))
             .filter(p -> !p.toString().contains("/target/"))
             .forEach(currentFiles::add);
 
-        Set<Path> cachedFiles = astCache.keySet();
+        lastScanTime = now;
+        knownFiles.clear();
+        knownFiles.addAll(currentFiles);
 
-        for (Path p : cachedFiles) {
+        for (Path p : astCache.keySet()) {
             if (!currentFiles.contains(p)) {
                 removeFile(p);
             }
         }
 
-        addFilesParallel(new ArrayList<>(currentFiles));
+        List<Path> toProcess = new ArrayList<>();
+        for (Path p : currentFiles) {
+            if (!astCache.containsKey(p) || hasChanged(p)) {
+                toProcess.add(p);
+            }
+        }
+        addFilesParallel(toProcess);
     }
 
     private CompilationUnit parse(String source, Path file) {
