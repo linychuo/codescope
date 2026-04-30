@@ -116,6 +116,10 @@ public class CommandHandler {
     }
 
     static String buildImpact(Path sourceFile, String methodQuery) throws Exception {
+        if (methodQuery == null) {
+            return "Error: Please specify a method name, e.g., impact SomeClass.java methodName";
+        }
+        
         StringBuilder sb = new StringBuilder();
         sb.append("# Impact Analysis\n\n");
 
@@ -173,7 +177,7 @@ public class CommandHandler {
             // Query the unified map
             String targetMethod = className + "." + methodQuery;
             // Resolve to fully qualified name if not found directly
-            if (!allCallers.containsKey(targetMethod)) {
+            if (methodQuery != null && !allCallers.containsKey(targetMethod)) {
                 for (String key : allCallers.keySet()) {
                     if (key.endsWith("." + methodQuery)) {
                         targetMethod = key;
@@ -202,6 +206,10 @@ public class CommandHandler {
     }
 
     static String buildImpactDot(Path sourceFile, String methodQuery) throws Exception {
+        if (methodQuery == null) {
+            return "Error: Please specify a method name, e.g., impact-dot SomeClass.java methodName";
+        }
+        
         StringBuilder sb = new StringBuilder();
         sb.append("digraph impact_").append(methodQuery).append(" {\n");
         sb.append("  rankdir=LR;\n");
@@ -236,7 +244,7 @@ public class CommandHandler {
 
         // Resolve fully qualified method name if targetMethod doesn't match directly
         String resolvedTarget = targetMethod;
-        if (!calleeToCallers.containsKey(targetMethod)) {
+        if (methodQuery != null && !calleeToCallers.containsKey(targetMethod)) {
             for (String key : calleeToCallers.keySet()) {
                 if (key.endsWith("." + methodQuery)) {
                     resolvedTarget = key;
