@@ -116,7 +116,8 @@ public class McpServer {
         try {
             content = executeTool(toolName, args);
         } catch (Exception e) {
-            content = "Error: " + e.getMessage();
+            String msg = e.getMessage();
+            content = "Error: " + (msg != null ? msg : e.getClass().getSimpleName());
         }
 
         return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escapeJson(content) + "\"}]}}";
@@ -185,12 +186,17 @@ public class McpServer {
     }
 
     private Path resolveFile(String input) throws Exception {
+        if (input == null || input.isEmpty()) {
+            throw new Exception("File path is required. Please specify a Java file path or class name.");
+        }
+        
         Path path = Path.of(input).toAbsolutePath().normalize();
         if (Files.exists(path)) {
             return path;
         }
 
-        if (!input.contains("/")) {
+        // Try to find class by simple name (no package path)
+        if (!input.contains("/") && !input.contains(".")) {
             List<Path> dirs = List.of(Path.of(".").toAbsolutePath());
             Index index = new Index(dirs);
             index.build();
