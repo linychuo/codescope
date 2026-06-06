@@ -72,7 +72,13 @@ public final class JdtIndexer {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (ExecutionException e) {
-                    // Already recorded in index.skippedFiles; skip
+                    Throwable cause = e.getCause();
+                    // parseFile catches its own RuntimeExceptions and records
+                    // them via recordSkippedFile. If a real Error (OOM, etc.)
+                    // escapes, let it propagate — silently swallowing it would
+                    // mask a memory issue as a missing-file problem.
+                    if (cause instanceof Error err) throw err;
+                    // Otherwise assume the parseFile path already recorded it.
                 }
             }
         }

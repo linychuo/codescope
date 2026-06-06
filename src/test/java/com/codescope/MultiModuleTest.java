@@ -85,4 +85,14 @@ class MultiModuleTest {
         Files.writeString(settings, "<not-xml");
         assertNull(MavenSettings.readLocalRepository(settings));
     }
+
+    @Test
+    void jreClasspathReturnsAtLeastOneJar() {
+        // Sanity check: on the current JVM (Java 21), ProjectLoader.jreClasspath
+        // must yield at least one entry — the jrt-fs.jar path. A typo in
+        // the path string would silently return an empty list and starve
+        // JDT of binding sources.
+        List<String> cp = ProjectLoader.jreClasspath();
+        assertFalse(cp.isEmpty(), "jreClasspath should return at least one jar, got: " + cp);
+    }
 }

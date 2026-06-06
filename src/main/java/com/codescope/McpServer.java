@@ -44,7 +44,8 @@ public final class McpServer {
     private final Object stdoutLock = new Object();
 
     private final AtomicLong nextId = new AtomicLong(REQUEST_ID_BASE);
-    private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
+    // package-private so unit tests can drive server→client round-trips.
+    final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 
     /** Notified (off the I/O thread) with the first workspace root the host advertises. */
     private volatile Consumer<String> defaultProjectRootSink;
@@ -256,7 +257,7 @@ public final class McpServer {
     }
 
     /** Send a request and synchronously wait for the response. */
-    private JsonNode sendRequestAwait(String method, Object params, long amount, TimeUnit unit)
+    JsonNode sendRequestAwait(String method, Object params, long amount, TimeUnit unit)
             throws IOException, InterruptedException, ExecutionException, TimeoutException {
         long id = nextId.getAndIncrement();
         Map<String, Object> req = new LinkedHashMap<>();

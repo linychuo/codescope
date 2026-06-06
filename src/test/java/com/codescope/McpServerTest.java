@@ -63,7 +63,12 @@ class McpServerTest {
         JsonNode resp = readOne();
         JsonNode tools = resp.path("result").path("tools");
         assertTrue(tools.isArray() && tools.size() == 1);
-        assertEquals("ping", tools.get(0).path("name").asText());
+        JsonNode tool = tools.get(0);
+        assertEquals("ping", tool.path("name").asText());
+        // description and inputSchema must be present and round-tripped:
+        // a typo in Tool.definition() would silently drop these.
+        assertEquals("stub", tool.path("description").asText());
+        assertEquals("object", tool.path("inputSchema").path("type").asText());
     }
 
     @Test
@@ -110,6 +115,26 @@ class McpServerTest {
         JsonNode resp = readOne();
         String msg = resp.path("result").path("content").get(0).path("text").asText();
         assertTrue(msg.startsWith("Tool execution failed:"), "got: " + msg);
+    }
+
+    @Test
+    void toolsCallSurfacesIOExceptionAsToolExecutionFailed() throws Exception {
+        // IOException is declared on Tool.invoke; an adapter that misroutes
+        // it to "Invalid arguments" would be a contract violation. Verify
+        // the catch block treats it the same as RuntimeException.
+        McpServer s = new McpServer().register(new ThrowingStubTool("fserr", Map.of(),
+                args -> { throw new java.io.IOException("disk full"); }));
+        s.handle(req(7, "tools/call", Map.of("name", "fserr", "arguments", Map.of())));
+        JsonNode resp = readOne();
+        String msg = resp.path("result").path("content").get(0).path("text").asText();
+        assertTrue(msg.startsWith("Tool execution failed:"), "got: " + msg);
+        assertTrue(msg.contains("disk full"), "got: " + msg);
+    }
+
+    /** A function that may throw any {@link Exception}, including checked. */
+    @FunctionalInterface
+    private interface ThrowingFunction<T, R> {
+        R apply(T t) throws Exception;
     }
 
     @Test
@@ -173,11 +198,72 @@ class McpServerTest {
 
     @Test
     void notificationsCancelledCancelsPendingRequest() throws Exception {
-        // JSON-RPC 2.0 §6.1: a notifications/cancelled carries the request id
-        // to cancel. Our internal server→client pending future for that id
-        // should be cancelled. We can't easily inject a pending future from
-        // outside, so we assert the safe behavior: a cancel with an unknown
-        // id is a no-op (no write, no exception).
+        // JSON-RPC 2.0 §6.1: a notifications/cancelled carrying the request
+        // id must actually cancel the pending server→client future. We
+        // exercise the real path: trigger sendRequestAwait on a virtual
+        // thread, read the request id the server just wrote, send a cancel
+        // for it, and assert the future was cancelled.
+        McpServer s = new McpServer();
+
+        java.util.concurrent.CompletableFuture<Throwable> serverSide = new java.util.concurrent.CompletableFuture<>();
+        Thread.ofVirtual().name("test-cancel").start(() -> {
+            try {
+                s.sendRequestAwait("roots/list", null, 5, java.util.concurrent.TimeUnit.SECONDS);
+                serverSide.complete(null);
+            } catch (Exception e) {
+                // expected: CancellationException
+                serverSide.complete(e);
+            }
+        });
+
+        // Wait until the request line appears in stdout, then read its id.
+        for (int i = 0; i < 100; i++) {
+            String all = outBuf.toString(StandardCharsets.UTF_8);
+            int idx = all.indexOf("\"method\":\"roots/list\"");
+            if (idx >= 0) {
+                // The request object places "id" before "method"; search the
+                // line containing the method, not just after it.
+                int lineStart = all.lastIndexOf('\n', idx);
+                if (lineStart < 0) lineStart = 0;
+                int idIdx = all.indexOf("\"id\":", lineStart);
+                if (idIdx < 0) {
+                    Thread.sleep(10);
+                    continue;
+                }
+                int idStart = idIdx + "\"id\":".length();
+                int idEnd = idStart;
+                while (idEnd < all.length() && (Character.isDigit(all.charAt(idEnd)) || all.charAt(idEnd) == '-')) {
+                    idEnd++;
+                }
+                long reqId = Long.parseLong(all.substring(idStart, idEnd));
+                // sanity: the future for that id is now in the pending map
+                assertNotNull(s.pending.get(reqId), "server should have registered pending future for the request");
+                // Send the cancel
+                Map<String, Object> cancel = new LinkedHashMap<>();
+                cancel.put("jsonrpc", "2.0");
+                cancel.put("method", "notifications/cancelled");
+                cancel.put("params", Map.of("id", reqId));
+                s.handle(cancel);
+                // The future is removed and cancelled.
+                assertNull(s.pending.get(reqId), "cancelled future should be removed from pending");
+                // sendRequestAwait's call site observed a cancellation
+                Throwable t = serverSide.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(t, "expected sendRequestAwait to throw on cancel, got success");
+                assertTrue(t instanceof java.util.concurrent.CancellationException
+                                || (t.getCause() instanceof java.util.concurrent.CancellationException),
+                        "expected CancellationException, got: " + t);
+                return;
+            }
+            Thread.sleep(10);
+        }
+        fail("server never wrote roots/list request to stdout; got: "
+                + outBuf.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void notificationsCancelledForUnknownIdIsNoOp() throws Exception {
+        // Companion to the above: an unknown id must not crash, and must
+        // not write anything to stdout.
         McpServer s = new McpServer();
         Map<String, Object> cancel = new LinkedHashMap<>();
         cancel.put("jsonrpc", "2.0");
@@ -281,6 +367,37 @@ class McpServerTest {
         @Override public Map<String, Object> inputSchema() { return schema; }
         @Override public Tool.ToolResult invoke(Map<String, Object> arguments) {
             return fn.apply(arguments == null ? Map.of() : arguments);
+        }
+    }
+
+    /**
+     * Like {@link StubTool} but the body may throw any {@link Exception},
+     * including checked {@link java.io.IOException}. Needed to test the
+     * adapter's behavior for the throws clause on {@link Tool#invoke}.
+     */
+    private static final class ThrowingStubTool implements Tool {
+        private final String name;
+        private final Map<String, Object> schema;
+        private final ThrowingFunction<Map<String, Object>, Tool.ToolResult> fn;
+
+        ThrowingStubTool(String name, Map<String, Object> schema,
+                         ThrowingFunction<Map<String, Object>, Tool.ToolResult> fn) {
+            this.name = name;
+            this.schema = schema;
+            this.fn = fn;
+        }
+
+        @Override public String name() { return name; }
+        @Override public String description() { return "stub"; }
+        @Override public Map<String, Object> inputSchema() { return schema; }
+        @Override public Tool.ToolResult invoke(Map<String, Object> arguments) throws java.io.IOException {
+            try {
+                return fn.apply(arguments == null ? Map.of() : arguments);
+            } catch (java.io.IOException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 }
