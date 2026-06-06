@@ -1,6 +1,7 @@
 package com.codescope;
 
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -81,38 +82,85 @@ public final class McpServer {
                 byte b = chunk[i];
                 if (b == (byte) '\n' || b == (byte) '\r') continue;
                 buf.write(b);
-                if (tryParseAndDispatch(buf)) buf.reset();
+                // tryParseAndDispatch owns buf on success: it removes the
+                // consumed bytes (preserving any trailing data) or resets
+                // the whole buffer on parse error.
+                tryParseAndDispatch(buf);
             }
         }
     }
 
-    private boolean tryParseAndDispatch(ByteArrayOutputStream buf) {
+    /**
+     * Try to consume the first complete JSON object from {@code buf}.
+     * On success, dispatches it, removes only the consumed bytes (preserving
+     * any trailing data), and returns {@code true}. On incomplete input,
+     * returns {@code false} and leaves the buffer untouched. On a parse
+     * error, replies once with id=null and resets the whole buffer.
+     *
+     * <p>Robust against trailing noise: if the buffer holds
+     * {@code {valid}{junk}}, the first object is dispatched and the junk
+     * stays in the buffer for the next round.
+     */
+    /** @return true if a complete object was consumed from {@code buf}. */
+    boolean tryParseAndDispatch(ByteArrayOutputStream buf) {
         if (buf.size() == 0) return false;
         byte[] bytes = buf.toByteArray();
-        // Validate that the buffer holds exactly one complete JSON object
-        // (no incomplete prefix, no trailing junk after the first object).
-        try (JsonParser p = json.getFactory().createParser(bytes)) {
-            p.nextToken();
-            if (p.currentToken() == null) return false;
-            p.skipChildren();
-            p.nextToken();
-            if (p.currentToken() != null) return false;
-        } catch (IOException e) {
-            return false;
-        }
+        int consumed = findObjectEnd(bytes);
+        if (consumed < 0) return false;   // incomplete — keep reading
         try {
+            byte[] frame = new byte[consumed];
+            System.arraycopy(bytes, 0, frame, 0, consumed);
             @SuppressWarnings("unchecked")
-            Map<String, Object> msg = json.readValue(bytes, Map.class);
+            Map<String, Object> msg = json.readValue(frame, Map.class);
+            // Drop the consumed bytes; keep any trailing data for the next
+            // round by copying it back to the start of the buffer.
+            int tailLen = bytes.length - consumed;
+            if (tailLen == 0) {
+                buf.reset();
+            } else {
+                byte[] tail = new byte[tailLen];
+                System.arraycopy(bytes, consumed, tail, 0, tailLen);
+                buf.reset();
+                buf.write(tail, 0, tailLen);
+            }
             handle(msg);
             return true;
         } catch (Exception e) {
-            // Parse error: reply once with id=null and drop the malformed
-            // frame. Returning true lets the caller reset the buffer — we
-            // must not retain these bytes, or subsequent frames would all
-            // fail to parse (a single bad byte would wedge the whole
-            // stream).
+            // Malformed object: reply with id=null and drop the bad bytes.
+            // There's no reliable way to find the next valid object after
+            // a parse error, so clear the buffer rather than risk looping.
             sendError(null, -32700, "Parse error: " + e.getMessage());
+            buf.reset();
             return true;
+        }
+    }
+
+    /**
+     * Returns the number of bytes in {@code bytes} that form exactly one
+     * complete top-level JSON value (object, array, or scalar), or {@code -1}
+     * if the buffer doesn't yet contain a complete value.
+     */
+    private int findObjectEnd(byte[] bytes) {
+        try (JsonParser p = json.getFactory().createParser(bytes)) {
+            JsonToken first = p.nextToken();
+            if (first == null) return -1;
+            if (first.isScalarValue()) {
+                return bytes.length;
+            }
+            int depth = 1;
+            while (depth > 0) {
+                JsonToken t = p.nextToken();
+                if (t == null) return -1;
+                if (t == JsonToken.START_OBJECT || t == JsonToken.START_ARRAY) depth++;
+                else if (t == JsonToken.END_OBJECT || t == JsonToken.END_ARRAY) depth--;
+            }
+            // For byte-array parsers, Jackson's getByteOffset() can return
+            // -1; in that case the only safe assumption is to consume the
+            // whole buffer (next round will see what's left, if anything).
+            long off = p.currentLocation().getByteOffset();
+            return off < 0 ? bytes.length : (int) off;
+        } catch (IOException e) {
+            return -1;
         }
     }
 

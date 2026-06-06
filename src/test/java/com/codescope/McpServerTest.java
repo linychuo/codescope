@@ -144,6 +144,34 @@ class McpServerTest {
     }
 
     @Test
+    void dispatchesValidObjectAndKeepsTrailingBytes() throws Exception {
+        // After C2: a buffer holding "{valid}{junk}" should dispatch the
+        // valid object and keep the junk for the next round. Previously the
+        // "exactly one object" check would reject the buffer outright and
+        // the stream would wedge.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}junk".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "first complete object should be dispatched");
+        // ping -> empty result
+        JsonNode resp = readOne();
+        assertEquals(1, resp.path("id").asInt());
+
+        // The trailing "junk" must remain in the buffer.
+        assertEquals("junk", buf.toString(StandardCharsets.UTF_8),
+                "trailing data should be preserved for the next round");
+
+        // Incomplete input does not dispatch.
+        buf.reset();
+        buf.write("{\"jsonrpc\":\"2.0\",\"id\":".getBytes(StandardCharsets.UTF_8));
+        assertFalse(s.tryParseAndDispatch(buf),
+                "incomplete input should not be dispatched");
+        assertEquals("{\"jsonrpc\":\"2.0\",\"id\":", buf.toString(StandardCharsets.UTF_8),
+                "incomplete buffer should be preserved untouched");
+    }
+
+    @Test
     void notificationsCancelledCancelsPendingRequest() throws Exception {
         // JSON-RPC 2.0 §6.1: a notifications/cancelled carries the request id
         // to cancel. Our internal server→client pending future for that id

@@ -54,7 +54,8 @@ public final class TraceCallersTool implements Tool {
                         + "Use together with `arity` to pick a specific overload."));
         props.put("project", Map.of(
                 "type", "string",
-                "description", "Path to the Maven/Gradle project root. Defaults to current working directory."));
+                "description", "Path to the Maven/Gradle project root. Defaults to current working directory. "
+                        + "Only main source roots (src/<...>/main/java) are indexed; test sources are excluded."));
         schema.put("properties", props);
         return schema;
     }

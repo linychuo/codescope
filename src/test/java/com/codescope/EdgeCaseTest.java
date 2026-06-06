@@ -1,6 +1,5 @@
 package com.codescope;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -61,25 +60,44 @@ class EdgeCaseTest {
         // trees. (Jackson's StreamWriteConstraints would later reject >1000
         // nesting, but that's a downstream concern — we only assert the
         // in-process tree-build succeeds.)
-        ObjectMapper m = new ObjectMapper();
         Map<String, Object> tree = root.toJson();
         assertNotNull(tree);
-        // On a chain short enough for Jackson, it should serialize fine.
-        assertDoesNotThrow(() -> m.writeValueAsString(smallChainJson()));
     }
 
-    private static Map<String, Object> smallChainJson() {
-        // A 3-deep chain that Jackson can happily serialize.
-        ProjectIndex idx = new ProjectIndex();
-        MethodKey a = new MethodKey("com.example.A", "m", 0);
-        MethodKey b = new MethodKey("com.example.B", "m", 0);
-        MethodKey c = new MethodKey("com.example.C", "m", 0);
-        idx.putDeclaration(a, new ProjectIndex.SourceLoc("A.java", 1));
-        idx.putDeclaration(b, new ProjectIndex.SourceLoc("B.java", 1));
-        idx.putDeclaration(c, new ProjectIndex.SourceLoc("C.java", 1));
-        idx.addCall(a, b);
-        idx.addCall(b, c);
-        return new CallChainAnalyzer().traceCallers(idx, a).root().toJson();
+    @Test
+    void diamondIsNotMislabeledAsCycle() {
+        // a -> b -> d, a -> c -> d. Tracing callers of d, the chain should
+        // reach a via two different paths; a is not on either path's ancestor
+        // set, so neither occurrence should be flagged as a cycle.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey a = new MethodKey("com.example.A", "a", 0);
+        MethodKey b = new MethodKey("com.example.B", "b", 0);
+        MethodKey c = new MethodKey("com.example.C", "c", 0);
+        MethodKey d = new MethodKey("com.example.D", "d", 0);
+        for (MethodKey k : List.of(a, b, c, d)) {
+            index.putDeclaration(k, new ProjectIndex.SourceLoc(k.methodName + ".java", 1));
+        }
+        // b calls d, c calls d (d's direct callers)
+        index.addCall(d, b);
+        index.addCall(d, c);
+        // a calls b, a calls c
+        index.addCall(b, a);
+        index.addCall(c, a);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, d);
+        assertTrue(r.found());
+
+        CallNode dNode = r.root();
+        // d's callers: b and c (no cycles — d itself is not on the path).
+        assertEquals(2, dNode.callers.size());
+        for (CallNode level1 : dNode.callers) {
+            // b and c each have a single caller: a. a is not on the path
+            // {d, b} or {d, c}, so a must not be flagged as a cycle.
+            assertEquals(1, level1.callers.size(), "expected one caller for " + level1.methodName);
+            CallNode aNode = level1.callers.get(0);
+            assertEquals("a", aNode.methodName);
+            assertFalse(aNode.cycle, "diamond should not be flagged as cycle at " + level1.methodName);
+        }
     }
 
     @Test

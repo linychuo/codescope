@@ -12,9 +12,11 @@ public final class CallChainAnalyzer {
     public record Result(CallNode root, boolean found, String message) {}
 
     /**
-     * BFS over the reverse call index starting from {@code target}. Cycles are
-     * collapsed: a method encountered via two paths appears once, and a
-     * back-edge is recorded as a cycle marker so the tree is finite.
+     * BFS over the reverse call index starting from {@code target}. Each path
+     * carries its own ancestor set: a method already on the current path is a
+     * true back-edge (cycle marker); a method reached via two different paths
+     * (a diamond) is a real caller on the second path and is not marked as
+     * a cycle.
      */
     public Result traceCallers(ProjectIndex index, MethodKey target) {
         ProjectIndex.SourceLoc rootLoc = index.declarationOf(target);
@@ -43,42 +45,45 @@ public final class CallChainAnalyzer {
                 rootLoc != null ? rootLoc.file() : null,
                 rootLoc != null ? rootLoc.line() : 0);
 
-        Set<MethodKey> visited = new HashSet<>();
-        visited.add(target);
-
-        Deque<Frame> queue = new ArrayDeque<>();
-        queue.add(new Frame(target, root));
+        Deque<PathFrame> queue = new ArrayDeque<>();
+        queue.addLast(new PathFrame(target, root, Set.of(target)));
 
         int nodes = 1;
         while (!queue.isEmpty()) {
-            Frame f = queue.removeFirst();
+            PathFrame f = queue.removeFirst();
             List<MethodKey> callers = index.callersOf(f.key);
             for (MethodKey caller : callers) {
-                if (visited.add(caller)) {
-                    ProjectIndex.SourceLoc loc = index.declarationOf(caller);
-                    CallNode child = new CallNode(
-                            caller.declaringClass, caller.methodName, caller.arity,
-                            loc != null ? loc.file() : null,
-                            loc != null ? loc.line() : 0);
-                    f.node.addChild(child);
-                    queue.addLast(new Frame(caller, child));
-                    nodes++;
-                    if (nodes > MAX_NODES) {
-                        return new Result(root, true,
-                                "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
-                                        + "There may be a deeply-recursive or hot method in the chain.");
-                    }
-                } else {
-                    // back-edge: mark it on the parent so the tree stays finite
+                if (f.ancestors.contains(caller)) {
+                    // True back-edge on the current path -> cycle marker.
                     f.node.addChild(CallNode.cycleMarker(
                             caller.declaringClass, caller.methodName, caller.arity));
+                    continue;
+                }
+                ProjectIndex.SourceLoc loc = index.declarationOf(caller);
+                CallNode child = new CallNode(
+                        caller.declaringClass, caller.methodName, caller.arity,
+                        loc != null ? loc.file() : null,
+                        loc != null ? loc.line() : 0);
+                f.node.addChild(child);
+                // Diamond: same method reached via another path is a real
+                // caller on this branch. We add `caller` to the ancestors of
+                // *its* descendants, not to its own ancestors.
+                Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
+                childAncestors.add(caller);
+                childAncestors.addAll(f.ancestors);
+                queue.addLast(new PathFrame(caller, child, childAncestors));
+                nodes++;
+                if (nodes > MAX_NODES) {
+                    return new Result(root, true,
+                            "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
+                                    + "There may be a deeply-recursive or hot method in the chain.");
                 }
             }
         }
         return new Result(root, true, "OK; " + nodes + " method(s) in chain.");
     }
 
-    private record Frame(MethodKey key, CallNode node) {}
+    private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors) {}
 
     /** Safety cap on tree size; configurable per-tool-call later. */
     private static final int MAX_NODES = 50_000;
