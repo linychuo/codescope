@@ -106,6 +106,11 @@ public final class McpServer {
             handle(msg);
             return true;
         } catch (Exception e) {
+            // Parse error: reply once with id=null and drop the malformed
+            // frame. Returning true lets the caller reset the buffer — we
+            // must not retain these bytes, or subsequent frames would all
+            // fail to parse (a single bad byte would wedge the whole
+            // stream).
             sendError(null, -32700, "Parse error: " + e.getMessage());
             return true;
         }
@@ -268,7 +273,10 @@ public final class McpServer {
             return wrap(t.invoke(args == null ? Map.of() : args));
         } catch (IllegalArgumentException e) {
             return toolErrorResult("Invalid arguments: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException e) {
+            // Tool contract: implementations translate user-facing failures
+            // into ToolResult.error. Anything reaching here is a real bug —
+            // surface it as "Tool execution failed".
             return toolErrorResult("Tool execution failed: " + e.getMessage());
         }
     }

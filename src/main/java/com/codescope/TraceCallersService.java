@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -58,8 +59,8 @@ public final class TraceCallersService {
         ProjectIndex index;
         try {
             index = indexCache.computeIfAbsent(projectRoot, this::buildIndex);
-        } catch (IndexLoadFailed e) {
-            throw new TraceCallersException(e.getMessage());
+        } catch (UncheckedIOException e) {
+            throw new TraceCallersException(e.getCause().getMessage());
         }
 
         MethodKey target;
@@ -105,18 +106,11 @@ public final class TraceCallersService {
             ProjectLoader.LoadResult load = new ProjectLoader().load(projectRoot);
             return indexer.build(load.sources(), load.classpath(), load.sourcepath(), projectRoot);
         } catch (IOException e) {
-            // Unchecked so the lambda inside computeIfAbsent can throw it
-            // without checked-exception gymnastics; traceCallersJson catches
-            // and rewraps into TraceCallersException. Failure is not cached,
-            // so a future call (e.g. after fixing the project) will retry.
-            throw new IndexLoadFailed("Failed to load project at " + projectRoot
-                    + ": " + e.getMessage(), e);
+            // Wrapped so the computeIfAbsent lambda can throw it. Failure is
+            // not cached, so a future call (e.g. after fixing the project)
+            // will retry.
+            throw new UncheckedIOException("Failed to load project at " + projectRoot, e);
         }
-    }
-
-    /** Unchecked carrier for index-load failures; mapped to a user-facing error in traceCallersJson. */
-    private static final class IndexLoadFailed extends RuntimeException {
-        IndexLoadFailed(String message, Throwable cause) { super(message, cause); }
     }
 
     /** Thrown by {@link #traceCallersJson} for user-facing error conditions. */

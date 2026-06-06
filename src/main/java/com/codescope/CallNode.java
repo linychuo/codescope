@@ -58,11 +58,9 @@ public final class CallNode {
     public Map<String, Object> toJson() {
         Map<String, Object> rootMap = new LinkedHashMap<>();
         Deque<Frame> stack = new ArrayDeque<>();
-        stack.push(new Frame(this, rootMap, false));
+        stack.push(new Frame(this, rootMap));
         while (!stack.isEmpty()) {
             Frame f = stack.pop();
-            if (f.built) continue;
-            // First pass: emit this node's own fields.
             if (f.node.file != null) f.map.put("file", f.node.file);
             if (f.node.line > 0) f.map.put("line", f.node.line);
             f.map.put("class", f.node.className);
@@ -71,18 +69,15 @@ public final class CallNode {
             f.map.put("signature", f.node.signature);
             if (f.node.cycle) f.map.put("cycle", true);
             if (f.node.callers.isEmpty()) continue;
-            // Create child maps, then push post-visit for self first so it
-            // runs after all children are in the stack.
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
             for (CallNode c : f.node.callers) {
                 Map<String, Object> childMap = new LinkedHashMap<>();
                 kids.add(childMap);
-                childFrames.add(new Frame(c, childMap, false));
+                childFrames.add(new Frame(c, childMap));
             }
             f.map.put("callers", kids);
-            stack.push(new Frame(f.node, f.map, true));  // post-visit: skip re-emit
-            // Children pushed in reverse so they're processed in source order.
+            // Push children in reverse so they're processed in source order.
             for (int i = childFrames.size() - 1; i >= 0; i--) {
                 stack.push(childFrames.get(i));
             }
@@ -90,5 +85,5 @@ public final class CallNode {
         return rootMap;
     }
 
-    private record Frame(CallNode node, Map<String, Object> map, boolean built) {}
+    private record Frame(CallNode node, Map<String, Object> map) {}
 }

@@ -1,5 +1,6 @@
 package com.codescope;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -59,7 +60,7 @@ public final class TraceCallersTool implements Tool {
     }
 
     @Override
-    public ToolResult invoke(Map<String, Object> args) throws Exception {
+    public ToolResult invoke(Map<String, Object> args) throws IOException {
         String className = requiredString(args, "class");
         String methodName = requiredString(args, "method");
         Integer arity = optionalInt(args, "arity");

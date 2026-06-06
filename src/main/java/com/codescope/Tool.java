@@ -1,5 +1,6 @@
 package com.codescope;
 
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,14 @@ public interface Tool {
         return d;
     }
 
-    ToolResult invoke(Map<String, Object> arguments) throws Exception;
+    /**
+     * Implementations translate any failure into a {@link ToolResult#error} and
+     * only let {@link IOException} escape for genuine I/O problems the
+     * adapter layer can't recover from. The adapter relies on the
+     * IllegalArgumentException-vs-Exception split to label errors as
+     * "Invalid arguments" vs "Tool execution failed".
+     */
+    ToolResult invoke(Map<String, Object> arguments) throws IOException;
 
     /**
      * Result of a tool invocation, in MCP {@code tools/call} content-block
