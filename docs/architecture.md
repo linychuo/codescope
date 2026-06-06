@@ -72,7 +72,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | 文件 | 决策 | 原因 |
 |------|------|------|
 | `McpServer.tryParseAndDispatch` | 一次只消费一个 JSON 对象,尾随字节保留 | MCP host 不保证一请求一行,可能是粘包;不能因为中途有脏数据就把整段丢 |
-| `McpServer.sendRequestAwait` | server→client 的反向 RPC 用 `CompletableFuture<Long>` 关联,`notifications/cancelled` 直接 cancel | JSON-RPC 2.0 §6.1;响应可能超时,必须能取消 |
+| `McpServer.sendRequestAwait` | server→client 的反向 RPC 用 `CompletableFuture<JsonNode>` 关联,`pending: id → Future` 先注册再写请求避免被极快响应甩掉,`notifications/cancelled` 直接 cancel | JSON-RPC 2.0 §6.1;响应可能超时、可能带 `error` 字段、可能极快到达,三种都得能正确结束 |
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
 | `CallChainAnalyzer.MAX_NODES = 50_000` | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
@@ -96,6 +96,6 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 
 - **`CallChainAnalyzerTest`** — fixture Maven 项目(`src/test/resources/fixture-project`)上的端到端:传递调用、重载、ambiguity、cycle、test 排除、enum/record/annotation 兼容
 - **`EdgeCaseTest`** — 边界:深链(>2000 层不爆栈)、钻石 vs 环、library target、50 000 节点截断、并发写、坏源文件
-- **`McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity
-- **`McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路)
+- **`McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常、尾随字节保留、不完整输入保留
+- **`McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉
 - **`MavenClasspathResolverTest` / `MavenSettingsTest` / `MultiModuleTest`** — pom 解析各自的边界
