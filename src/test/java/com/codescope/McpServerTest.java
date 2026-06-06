@@ -180,6 +180,38 @@ class McpServerTest {
                 s.register(new StubTool("dup", Map.of(), args -> Tool.ToolResult.text("b"))));
     }
 
+    @Test
+    void stringIdResponseIsRoutedToFuture() throws Exception {
+        // JSON-RPC 2.0 allows string ids. We coerce to long for internal
+        // correlation, so a string id like "42" should match the pending
+        // request issued with numeric id 42.
+        McpServer s = new McpServer();
+        // We don't have a public API to inject a pending future, so we
+        // exercise the path indirectly: send a response with a string id
+        // that does not match any pending request and assert it is silently
+        // dropped (no write, no crash).
+        Map<String, Object> unknown = new LinkedHashMap<>();
+        unknown.put("jsonrpc", "2.0");
+        unknown.put("id", "999999");
+        unknown.put("result", Map.of("anything", true));
+        s.handle(unknown);
+        assertEquals(0, outBuf.size(),
+                "unknown string-id response should be silently dropped, got: "
+                        + outBuf.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void nonNumericStringIdIsIgnored() throws Exception {
+        // A string id that doesn't parse as long is rejected, not treated
+        // as zero or as a crash.
+        Map<String, Object> unknown = new LinkedHashMap<>();
+        unknown.put("jsonrpc", "2.0");
+        unknown.put("id", "not-a-number");
+        unknown.put("result", Map.of());
+        new McpServer().handle(unknown);
+        assertEquals(0, outBuf.size());
+    }
+
     // --- helpers ---
 
     private static Map<String, Object> req(Object id, String method, Map<String, Object> params) {

@@ -33,7 +33,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 
 /** Walks Java source files and produces a {@link ProjectIndex}. */
 public final class JdtIndexer {
@@ -56,9 +55,12 @@ public final class JdtIndexer {
         String[] sp = sourcepath.toArray(new String[0]);
         String[] encodingNames = null;  // null = platform default encoding
 
-        int nThreads = Math.min(sources.size(), Runtime.getRuntime().availableProcessors());
-        ExecutorService pool = Executors.newFixedThreadPool(nThreads);
-        try {
+        // Java 21 virtual thread per file: parsing is mostly CPU (AST build)
+        // but each task also does file I/O (readString) and JDT binding
+        // resolution, which can block on classpath jars. Virtual threads let
+        // us spawn one per file without capping concurrency at available
+        // cores, and the executor's close() blocks until all complete.
+        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>(sources.size());
             for (Path src : sources) {
                 futures.add(pool.submit(() -> parseFile(src, cp, sp, encodingNames, projectRoot, index)));
@@ -70,16 +72,8 @@ public final class JdtIndexer {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (ExecutionException e) {
-                    // Already logged inside the task; skip
+                    // Already recorded in index.skippedFiles; skip
                 }
-            }
-        } finally {
-            pool.shutdown();
-            try {
-                if (!pool.awaitTermination(30, TimeUnit.SECONDS)) pool.shutdownNow();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                pool.shutdownNow();
             }
         }
         return index;
@@ -120,12 +114,13 @@ public final class JdtIndexer {
     }
 
     private static String relativize(Path file, Path root) {
-        try {
-            if (root == null) return file.toString();
-            return root.relativize(file).toString();
-        } catch (Exception e) {
-            return file.toString();
-        }
+        if (root == null) return file.toString();
+        // Path#relativize throws IllegalArgumentException if `file` is not
+        // under `root`. ProjectLoader guarantees every source is under the
+        // project root, so the throw is a real misconfiguration — let it
+        // surface to the skipped-files record rather than silently masking
+        // it with an absolute path.
+        return root.relativize(file).toString();
     }
 
     /**

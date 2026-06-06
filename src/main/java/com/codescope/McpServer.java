@@ -121,9 +121,9 @@ public final class McpServer {
     void handle(Map<String, Object> msg) throws IOException {
         // Response to a server-initiated request?
         if (msg.containsKey("result") || msg.containsKey("error")) {
-            Object idObj = msg.get("id");
-            if (idObj instanceof Number n) {
-                CompletableFuture<JsonNode> fut = pending.remove(n.longValue());
+            Long responseId = coerceId(msg.get("id"));
+            if (responseId != null) {
+                CompletableFuture<JsonNode> fut = pending.remove(responseId);
                 if (fut != null) {
                     fut.complete(json.valueToTree(msg.get("result")));
                     return;
@@ -155,7 +155,11 @@ public final class McpServer {
                 case "initialize" -> {
                     respond(id, initializeResult());
                     if (clientHasRootsCapability(params)) {
-                        new Thread(this::tryFetchRoots, "fetch-roots").start();
+                        // Virtual thread: this is a one-shot blocking call that
+                        // spends most of its time waiting on a stdio response
+                        // (or the timeout), so a platform thread would be
+                        // overkill. Java 21+ virtual threads are the right fit.
+                        Thread.ofVirtual().name("fetch-roots").start(this::tryFetchRoots);
                     }
                 }
                 case "ping"       -> respond(id, Map.of());
@@ -210,6 +214,21 @@ public final class McpServer {
         } finally {
             pending.remove(id);
         }
+    }
+
+    /**
+     * JSON-RPC 2.0 allows {@code id} to be a Number, String, or null. Our
+     * request/response correlation only uses numeric ids internally, so we
+     * coerce strings via {@link Long#parseLong} and reject anything else.
+     * Returns null if the value cannot be interpreted as a long.
+     */
+    private static Long coerceId(Object idObj) {
+        if (idObj instanceof Number n) return n.longValue();
+        if (idObj instanceof String s) {
+            try { return Long.parseLong(s); }
+            catch (NumberFormatException ignored) { return null; }
+        }
+        return null;
     }
 
     private Map<String, Object> initializeResult() {

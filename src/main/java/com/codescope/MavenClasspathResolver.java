@@ -10,10 +10,13 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 /**
@@ -57,18 +60,32 @@ public final class MavenClasspathResolver {
                     + " (only Maven pom.xml resolution is supported)");
         }
 
-        // Per-pom walk is I/O bound (reads ~/.m2/repository for each dep);
-        // process top-level poms in parallel. The seenPoms / jars sets are
-        // concurrent so the recursive dep walk remains correct under contention.
+        // Per-pom walk is I/O bound (reads ~/.m2/repository for each dep).
+        // Java 21 virtual threads: spawn one per top-level pom. The recursive
+        // dep walk uses ConcurrentHashMap-backed sets so concurrent writers
+        // remain correct. The pool is closed by try-with-resources once all
+        // walks complete.
         Set<String> jars = ConcurrentHashMap.newKeySet();
         Set<String> seenPoms = ConcurrentHashMap.newKeySet();
-        poms.parallelStream().forEach(pom -> {
-            try {
-                walk(pom, jars, seenPoms, 0);
-            } catch (IOException e) {
-                // skip individual pom failures rather than aborting the whole resolution
+        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>(poms.size());
+            for (Path pom : poms) {
+                futures.add(pool.submit(() -> {
+                    try {
+                        walk(pom, jars, seenPoms, 0);
+                    } catch (IOException e) {
+                        // skip individual pom failures rather than aborting the whole resolution
+                    }
+                }));
             }
-        });
+            for (Future<?> f : futures) {
+                try {
+                    f.get();
+                } catch (ExecutionException | InterruptedException e) {
+                    // best-effort: a single bad walk shouldn't break the rest
+                }
+            }
+        }
 
         return new ArrayList<>(jars);
     }
