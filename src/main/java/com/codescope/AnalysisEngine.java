@@ -17,6 +17,7 @@ public class AnalysisEngine {
     private final List<ProjectModel> models;
     private Set<Path> filesCache;
     private Map<Path, DefaultCallGraphBuilder> callGraphCache = new HashMap<>();
+    private DefaultUsageFinder usageFinder;
 
     private static final Logger logger = Logger.getLogger("AnalysisEngine");
 
@@ -145,6 +146,17 @@ public class AnalysisEngine {
      */
     public CallGraphBuilder buildCallGraph(Path file) {
         return getOrCreateCallGraph(file);
+    }
+
+    /**
+     * Returns the project-wide usage index, building it lazily on first call.
+     * The index maps symbol keys to all reference sites across the project.
+     */
+    public UsageFinder getUsageFinder() {
+        if (usageFinder == null) {
+            usageFinder = new DefaultUsageFinder(this);
+        }
+        return usageFinder;
     }
 
     private DefaultCallGraphBuilder getOrCreateCallGraph(Path file) {
@@ -332,6 +344,80 @@ public class AnalysisEngine {
                 if (m.getName().getIdentifier().equals(name)) {
                     return m;
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves a `<symbol>` string to a {@link UsageFinder.Symbol} by inspecting the
+     * declaration site in the given file. Supports `ClassName`, `memberName` (resolves
+     * to the file's primary class), and `ClassName.member` forms.
+     * Returns null if the symbol cannot be located in the file.
+     */
+    public UsageFinder.Symbol resolveSymbol(Path file, String symbolStr) {
+        if (symbolStr == null || symbolStr.isEmpty()) return null;
+        ProjectModel model = findModel(file);
+        if (model == null) return null;
+        CompilationUnit cu = model.getAst(file);
+        if (cu == null) return null;
+
+        int dot = symbolStr.indexOf('.');
+        String className;
+        String memberName;
+        if (dot < 0) {
+            // No dot: assume the symbol is a member of the file's primary class.
+            // First try as a class; if not found, fall back to the file's class.
+            TypeDeclaration directClass = findTypeByName(cu, symbolStr);
+            if (directClass != null) {
+                className = symbolStr;
+                memberName = null;
+            } else {
+                className = file.getFileName().toString().replace(".java", "");
+                memberName = symbolStr;
+            }
+        } else {
+            className = symbolStr.substring(0, dot);
+            memberName = symbolStr.substring(dot + 1);
+        }
+
+        TypeDeclaration type = findTypeByName(cu, className);
+        if (type == null) return null;
+
+        ITypeBinding typeBinding = type.resolveBinding();
+        String fqClassName = typeBinding != null && typeBinding.getQualifiedName() != null
+            ? typeBinding.getQualifiedName()
+            : className;
+
+        if (memberName == null) {
+            return UsageFinder.Symbol.ofClass(fqClassName);
+        }
+
+        // Look for member
+        for (Object bodyDecl : type.bodyDeclarations()) {
+            if (bodyDecl instanceof MethodDeclaration md
+                && md.getName().getIdentifier().equals(memberName)) {
+                return UsageFinder.Symbol.ofMethod(fqClassName, memberName);
+            }
+        }
+        for (Object bodyDecl : type.bodyDeclarations()) {
+            if (bodyDecl instanceof org.eclipse.jdt.core.dom.FieldDeclaration fd) {
+                for (Object frag : fd.fragments()) {
+                    if (frag instanceof org.eclipse.jdt.core.dom.VariableDeclarationFragment v
+                        && v.getName().getIdentifier().equals(memberName)) {
+                        return UsageFinder.Symbol.ofField(fqClassName, memberName);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private TypeDeclaration findTypeByName(CompilationUnit cu, String name) {
+        for (Object obj : cu.types()) {
+            if (obj instanceof TypeDeclaration td
+                && td.getName().getIdentifier().equals(name)) {
+                return td;
             }
         }
         return null;

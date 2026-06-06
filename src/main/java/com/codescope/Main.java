@@ -165,7 +165,7 @@ private static boolean noJdk = false;
         String output;
 
         try {
-            output = CommandHandler.handle(command, sourceFile, query, noJdk, cycles, heatmap);
+            output = CommandHandler.handle(command, sourceFile, query, noJdk, cycles, heatmap, json);
         } catch (Exception e) {
             output = "Error: " + e.getMessage();
             if (Boolean.parseBoolean(System.getProperty("debug", "false"))) {
@@ -174,10 +174,27 @@ private static boolean noJdk = false;
         }
 
         if (json) {
-            output = toJson(output);
+            // Commands that return raw JSON inside a ```json fence bypass toJson
+            // (which splits code-fence content into per-line strings).
+            String jsonPayload = extractJsonFromFence(output);
+            output = jsonPayload != null ? jsonPayload : toJson(output);
         }
         System.out.println(output);
         System.out.println("Done in " + (System.currentTimeMillis() - start) + "ms");
+    }
+
+    private static String extractJsonFromFence(String markdown) {
+        // For commands that return raw JSON inside a ```json fence (e.g. find-usages),
+        // extract the JSON payload verbatim. Falls back to the markdown wrapper otherwise.
+        int open = markdown.indexOf("```json");
+        if (open < 0) return null;
+        int bodyStart = open + "```json".length();
+        while (bodyStart < markdown.length() && (markdown.charAt(bodyStart) == '\n' || markdown.charAt(bodyStart) == ' ')) {
+            bodyStart++;
+        }
+        int close = markdown.indexOf("```", bodyStart);
+        if (close < 0) return null;
+        return markdown.substring(bodyStart, close).trim();
     }
 
     private static String toJson(String markdown) {
@@ -215,14 +232,15 @@ CodeScope - Java Semantic Context Engine
 Usage: Main <command> <source> [query]
 
 Commands:
-  context   Build semantic context for LLM
-  calls     Show method call relationships
-  callers   Show methods that call a given method
-  impact    Analyze method impact (who calls this method)
-  dot       Generate Graphviz DOT format
-  classpath Show classpath (Maven JARs)
-  ast       Show AST structure
-  index     Build project index (for large projects)
+  context      Build semantic context for LLM
+  calls        Show method call relationships
+  callers      Show methods that call a given method
+  find-usages  Find all references to a method/field/class (IDEA-style)
+  impact       Analyze method impact (who calls this method)
+  dot          Generate Graphviz DOT format
+  classpath    Show classpath (Maven JARs)
+  ast          Show AST structure
+  index        Build project index (for large projects)
 
 Options:
   -h, --help     Show this help
@@ -239,6 +257,8 @@ Examples:
   Main context Test.java main    # Method-specific context
   Main calls Test.java main      # Show callees of main
   Main callers Test.java main    # Show callers of main
+  Main find-usages Test.java foo # Find all usages of method foo
+  Main find-usages Test.java Foo # Find all usages of class Foo
   Main dot Test.java            # Graphviz DOT output
   Main dot src/ --no-jdk       # Exclude JDK calls
   Main dot src/ --cycles       # Detect cycles

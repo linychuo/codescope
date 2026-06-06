@@ -34,6 +34,10 @@ public class McpServer {
             List.of(new ToolArg("filePath", "string", true, "Java文件路径或类名"),
                     new ToolArg("methodName", "string", true, "方法名"))));
 
+        tools.put("find_usages", new Tool("find_usages", "查找方法/字段/类的所有引用位置 (IDEA-style Find Usages)",
+            List.of(new ToolArg("filePath", "string", true, "Java文件路径或类名"),
+                    new ToolArg("symbol", "string", true, "符号 (ClassName 或 ClassName.memberName)"))));
+
         tools.put("impact", new Tool("impact", "分析方法影响范围 (文本格式)",
             List.of(new ToolArg("filePath", "string", true, "Java文件路径或类名"),
                     new ToolArg("methodName", "string", true, "方法名"))));
@@ -141,6 +145,12 @@ public class McpServer {
                 String methodName = (String) args.get("methodName");
                 Path sourceFile = resolveFile(filePath);
                 yield CommandHandler.buildCallers(engine, sourceFile, methodName);
+            }
+            case "find_usages" -> {
+                String filePath = (String) args.get("filePath");
+                String symbol = (String) args.get("symbol");
+                Path sourceFile = resolveFile(filePath);
+                yield CommandHandler.buildFindUsages(engine, sourceFile, symbol, false);
             }
             case "impact" -> {
                 String filePath = (String) args.get("filePath");

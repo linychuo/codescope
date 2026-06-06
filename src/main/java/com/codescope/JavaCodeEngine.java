@@ -254,6 +254,19 @@ public class JavaCodeEngine {
             .collect(Collectors.toSet());
     }
 
+    /**
+     * Finds all reference sites for the given symbol (method, field, or class).
+     * Symbol form: "ClassName" or "ClassName.memberName". The file is used to
+     * locate the declaration; the search is project-wide.
+     *
+     * @return sorted list of usage locations, empty if symbol not found
+     */
+    public List<UsageFinder.UsageLocation> findUsages(Path file, String symbol) {
+        UsageFinder.Symbol resolved = engine.resolveSymbol(file, symbol);
+        if (resolved == null) return Collections.emptyList();
+        return engine.getUsageFinder().findUsages(resolved);
+    }
+
     public String getContextMarkdown(Path file) {
         return engine.buildContext(file, null);
     }

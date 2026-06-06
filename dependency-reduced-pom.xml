@@ -21,6 +21,17 @@
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
+        <configuration>
+          <classpathDependencyExcludes>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.core.filesystem</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.text</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.core.commands</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.jdt:ecj</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.osgi</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.equinox.common</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.platform:org.eclipse.equinox.registry</classpathDependencyExclude>
+          </classpathDependencyExcludes>
+        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>

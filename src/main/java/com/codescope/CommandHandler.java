@@ -12,7 +12,7 @@ import java.util.*;
 public class CommandHandler {
 
     public static String handle(String command, Path sourceFile, String query,
-            boolean noJdk, boolean cycles, boolean heatmap) throws Exception {
+            boolean noJdk, boolean cycles, boolean heatmap, boolean json) throws Exception {
         Path dir = sourceFile.getParent();
         AnalysisEngine engine = new AnalysisEngine(dir);
 
@@ -20,6 +20,7 @@ public class CommandHandler {
             case "context" -> engine.buildContext(sourceFile, query);
             case "calls" -> buildCalls(engine, sourceFile, query);
             case "callers" -> buildCallers(engine, sourceFile, query);
+            case "find-usages" -> buildFindUsages(engine, sourceFile, query, json);
             case "dot" -> engine.buildDot(noJdk, cycles, heatmap);
             case "classpath" -> buildClasspath(sourceFile);
             case "impact" -> buildImpact(sourceFile, query);
@@ -91,6 +92,54 @@ public class CommandHandler {
             }
         }
         return sb.toString();
+    }
+
+    static String buildFindUsages(AnalysisEngine engine, Path sourceFile, String symbol, boolean json) {
+        if (symbol == null || symbol.isEmpty()) {
+            return "Usage: find-usages <file> <symbol>  (e.g. Foo or Foo.bar)\n";
+        }
+        UsageFinder.Symbol resolved = engine.resolveSymbol(sourceFile, symbol);
+        if (resolved == null) {
+            return "Symbol not found in " + sourceFile.getFileName() + ": " + symbol;
+        }
+        List<UsageFinder.UsageLocation> usages = engine.getUsageFinder().findUsages(resolved);
+        if (json) {
+            return "```json\n" + toJson(usages) + "```\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Find Usages: ").append(resolved).append("\n");
+        sb.append("# Kind: ").append(resolved.kind).append("\n\n");
+        if (usages.isEmpty()) {
+            sb.append("(no usages found)\n");
+        } else {
+            sb.append(String.format("%-8d locations:\n", usages.size()));
+            for (var u : usages) {
+                sb.append(u.toLine()).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String toJson(List<UsageFinder.UsageLocation> usages) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+        for (int i = 0; i < usages.size(); i++) {
+            UsageFinder.UsageLocation u = usages.get(i);
+            if (i > 0) sb.append(",");
+            sb.append("{\"file\":\"").append(escapeJsonString(u.file.toString())).append("\"");
+            sb.append(",\"line\":").append(u.line);
+            sb.append(",\"column\":").append(u.column);
+            sb.append(",\"kind\":\"").append(u.kind).append("\"");
+            sb.append(",\"container\":\"").append(escapeJsonString(u.containerName)).append("\"");
+            sb.append(",\"snippet\":\"").append(escapeJsonString(u.snippet)).append("\"}");
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private static String escapeJsonString(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
     }
 
     static String buildClasspath(Path dir) throws Exception {
