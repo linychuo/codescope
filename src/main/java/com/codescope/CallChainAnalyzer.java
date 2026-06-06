@@ -20,7 +20,14 @@ public final class CallChainAnalyzer {
         ProjectIndex.SourceLoc rootLoc = index.declarationOf(target);
         if (rootLoc == null) {
             // try to find any matching (class, method) to give a useful error
-            MethodKey alt = index.resolveTarget(target.declaringClass, target.methodName);
+            MethodKey alt;
+            try {
+                alt = index.resolveTarget(target.declaringClass, target.methodName);
+            } catch (ProjectIndex.AmbiguousMethodException e) {
+                return new Result(
+                        new CallNode(target.declaringClass, target.methodName, target.arity, null, 0),
+                        false, e.getMessage());
+            }
             if (alt == null) {
                 return new Result(
                         new CallNode(target.declaringClass, target.methodName, target.arity, null, 0),

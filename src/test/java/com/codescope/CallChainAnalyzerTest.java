@@ -15,6 +15,15 @@ class CallChainAnalyzerTest {
 
     private ProjectIndex index;
 
+    /** Convenience: find a target method or fail the test (hides the checked exception). */
+    private static MethodKey mustResolve(ProjectIndex idx, String cls, String name) {
+        try {
+            return idx.resolveTarget(cls, name);
+        } catch (ProjectIndex.AmbiguousMethodException e) {
+            throw new AssertionError("unexpected ambiguity for " + cls + "#" + name + ": " + e.getMessage(), e);
+        }
+    }
+
     @BeforeEach
     void setUp() throws IOException {
         Path fixture = Path.of("src/test/resources/fixture-project");
@@ -26,7 +35,7 @@ class CallChainAnalyzerTest {
 
     @Test
     void findsTransitiveCallersOfLeaf() {
-        MethodKey target = index.resolveTarget("com.example.Target", "leaf");
+        MethodKey target = mustResolve(index, "com.example.Target", "leaf");
         assertNotNull(target, "Target.leaf should resolve");
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, target);
@@ -59,8 +68,8 @@ class CallChainAnalyzerTest {
 
     @Test
     void distinguishesOverloadsByArity() {
-        MethodKey zero = index.resolveTarget("com.example.Target", "leaf");
-        MethodKey one = index.resolveTarget("com.example.Target", "leafWithArg");
+        MethodKey zero = mustResolve(index, "com.example.Target", "leaf");
+        MethodKey one = mustResolve(index, "com.example.Target", "leafWithArg");
         assertNotNull(zero);
         assertNotNull(one);
         assertEquals(0, zero.arity);
@@ -83,8 +92,41 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void reportsAmbiguousOverloadsWhenNoArityGiven() {
+        // Target has two `process` methods with arity 1 but different param types.
+        // Without arity, we can't pick one — must throw AmbiguousMethodException.
+        ProjectIndex.AmbiguousMethodException ex = assertThrows(
+                ProjectIndex.AmbiguousMethodException.class,
+                () -> index.resolveTarget("com.example.Target", "process"));
+        assertTrue(ex.getMessage().contains("process"),
+                "error should name the method: " + ex.getMessage());
+
+        // findOverloads lists both, so callers can disambiguate
+        assertEquals(2, index.findOverloads("com.example.Target", "process").size());
+
+        // Arity alone is still ambiguous here (both are arity 1); need paramTypes to pick one.
+        assertThrows(ProjectIndex.AmbiguousMethodException.class,
+                () -> index.resolveTarget("com.example.Target", "process", 1));
+
+        // With paramTypes, we can pick exactly one.
+        MethodKey mInt;
+        MethodKey mStr;
+        try {
+            mInt = index.resolveTarget("com.example.Target", "process", 1, List.of("int"));
+            mStr = index.resolveTarget("com.example.Target", "process", 1, List.of("java.lang.String"));
+        } catch (ProjectIndex.AmbiguousMethodException e) {
+            throw new AssertionError(e);
+        }
+        assertNotNull(mInt);
+        assertNotNull(mStr);
+        assertNotEquals(mInt, mStr, "the two overloads should be different MethodKeys");
+        assertEquals(List.of("int"), mInt.parameterTypes);
+        assertEquals(List.of("java.lang.String"), mStr.parameterTypes);
+    }
+
+    @Test
     void stopsAtUncalledMethod() {
-        MethodKey uncalled = index.resolveTarget("com.example.Mid", "unrelated");
+        MethodKey uncalled = mustResolve(index, "com.example.Mid", "unrelated");
         assertNotNull(uncalled);
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, uncalled);
@@ -102,7 +144,7 @@ class CallChainAnalyzerTest {
 
     @Test
     void detectsCycle() {
-        MethodKey a = index.resolveTarget("com.example.Cycle", "a");
+        MethodKey a = mustResolve(index, "com.example.Cycle", "a");
         assertNotNull(a);
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, a);
         assertTrue(r.found());
@@ -119,5 +161,29 @@ class CallChainAnalyzerTest {
         assertEquals(1, bCallers.size());
         // a is now a cycle marker (already visited)
         assertEquals(Boolean.TRUE, bCallers.get(0).get("cycle"));
+    }
+
+    @Test
+    void excludesTestSources() {
+        // TargetTest (under src/test/java) calls Target.leaf, but we should NOT see it
+        // as a caller because test sources are excluded from the index.
+        MethodKey leaf = mustResolve(index, "com.example.Target", "leaf");
+        assertNotNull(leaf);
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, leaf);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers = (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers);
+        for (Map<String, Object> c : callers) {
+            assertFalse(c.get("signature").toString().contains("TargetTest"),
+                    "unexpected test-source caller: " + c.get("signature"));
+        }
+
+        // Sanity: the test class itself is not in the declarations index.
+        for (MethodKey k : index.knownMethods()) {
+            assertFalse(k.declaringClass.contains("TargetTest"),
+                    "test class leaked into declarations: " + k);
+        }
     }
 }

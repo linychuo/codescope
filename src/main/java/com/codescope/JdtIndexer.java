@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
@@ -119,8 +120,16 @@ public final class JdtIndexer {
         @Override
         public boolean visit(MethodDeclaration node) {
             String callerClass = currentClass();
-            MethodKey callerKey = new MethodKey(callerClass, node.getName().getIdentifier(),
-                    node.parameters().size());
+            List<String> paramTypes = new ArrayList<>();
+            for (Object p : node.parameters()) {
+                org.eclipse.jdt.core.dom.SingleVariableDeclaration svd =
+                        (org.eclipse.jdt.core.dom.SingleVariableDeclaration) p;
+                org.eclipse.jdt.core.dom.ITypeBinding tb = svd.getType().resolveBinding();
+                paramTypes.add(tb != null ? tb.getQualifiedName() : svd.getType().toString());
+            }
+            MethodKey callerKey = new MethodKey(
+                    callerClass, node.getName().getIdentifier(),
+                    paramTypes.size(), paramTypes);
             int line = cuLine(node);
             index.putDeclaration(callerKey, new ProjectIndex.SourceLoc(file, line));
             methodStack.push(new MethodContext(callerKey));
@@ -173,7 +182,10 @@ public final class JdtIndexer {
         private MethodKey methodKeyOf(IMethodBinding b) {
             ITypeBinding dc = b.getDeclaringClass();
             if (dc == null) return null;
-            return new MethodKey(dc.getQualifiedName(), b.getName(), b.getParameterTypes().length);
+            ITypeBinding[] pts = b.getParameterTypes();
+            List<String> paramTypes = new ArrayList<>(pts.length);
+            for (ITypeBinding pt : pts) paramTypes.add(pt.getQualifiedName());
+            return new MethodKey(dc.getQualifiedName(), b.getName(), pts.length, paramTypes);
         }
 
         private String currentClass() {

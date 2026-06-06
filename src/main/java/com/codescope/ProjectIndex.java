@@ -44,14 +44,66 @@ public final class ProjectIndex {
         return Collections.unmodifiableMap(calls);
     }
 
-    /** Pick the best-matching declared method for (class, name), preferring exact arity. */
-    public MethodKey resolveTarget(String className, String methodName) {
-        MethodKey fallback = null;
+    /**
+     * Resolve (class, name) to a declared method, with optional arity and parameter types
+     * for overload disambiguation.
+     *
+     * @return the unique matching method, or null if none
+     * @throws AmbiguousMethodException if more than one method matches the selector
+     */
+    public MethodKey resolveTarget(String className, String methodName) throws AmbiguousMethodException {
+        return resolveTarget(className, methodName, null, null);
+    }
+
+    public MethodKey resolveTarget(String className, String methodName, Integer arity)
+            throws AmbiguousMethodException {
+        return resolveTarget(className, methodName, arity, null);
+    }
+
+    public MethodKey resolveTarget(String className, String methodName,
+                                   Integer arity, List<String> paramTypes)
+            throws AmbiguousMethodException {
+        MethodKey match = null;
+        for (MethodKey m : declarations.keySet()) {
+            if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
+            if (arity != null && m.arity != arity.intValue()) continue;
+            if (paramTypes != null && !paramTypes.equals(m.parameterTypes)) continue;
+            if (match != null) {
+                throw new AmbiguousMethodException(className, methodName, arity, paramTypes);
+            }
+            match = m;
+        }
+        return match;
+    }
+
+    /** Lists every declared method with the given name, regardless of arity. */
+    public List<MethodKey> findOverloads(String className, String methodName) {
+        List<MethodKey> out = new ArrayList<>();
         for (MethodKey m : declarations.keySet()) {
             if (m.declaringClass.equals(className) && m.methodName.equals(methodName)) {
-                return m;          // first match wins
+                out.add(m);
             }
         }
-        return null;
+        return out;
+    }
+
+    public static final class AmbiguousMethodException extends Exception {
+        public AmbiguousMethodException(String className, String methodName,
+                                        Integer arity, List<String> paramTypes) {
+            super(buildMessage(className, methodName, arity, paramTypes));
+        }
+        private static String buildMessage(String className, String methodName,
+                                           Integer arity, List<String> paramTypes) {
+            if (paramTypes != null) {
+                return "Multiple methods named '" + methodName + "' with parameter types "
+                        + paramTypes + " in " + className;
+            }
+            if (arity != null) {
+                return "Multiple methods named '" + methodName + "' with arity " + arity
+                        + " in " + className + "; pass `paramTypes` to disambiguate.";
+            }
+            return "Multiple methods named '" + methodName + "' in " + className
+                    + "; pass `arity` (and optionally `paramTypes`) to disambiguate.";
+        }
     }
 }

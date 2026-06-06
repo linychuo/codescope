@@ -10,7 +10,7 @@ public final class CallNode {
     public final String className;
     public final String methodName;
     public final int arity;
-    public final String signature;   // "pkg.Cls#method/arity"
+    public final String signature;   // "pkg.Cls#method/arity(int,String)" or short if no params
     public final String file;        // declaration file, relative if possible
     public final int line;           // declaration line, 0 if unknown
     public final boolean cycle;      // true if this is a back-edge marker
