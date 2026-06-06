@@ -295,13 +295,20 @@ public final class McpServer {
         req.put("id", id);
         req.put("method", method);
         if (params != null) req.put("params", params);
-        writeLine(json.writeValueAsBytes(req));
 
+        // Register the future BEFORE writing the request. A host that
+        // responds very fast (e.g. local loopback) could otherwise have its
+        // response arrive on the I/O thread between writeLine() and
+        // pending.put(), in which case the I/O thread's pending.remove(id)
+        // would return null and the response would be silently dropped.
         CompletableFuture<JsonNode> fut = new CompletableFuture<>();
         pending.put(id, fut);
         try {
+            writeLine(json.writeValueAsBytes(req));
             return fut.get(amount, unit);
         } finally {
+            // Clean up unconditionally: a throw from writeLine (broken pipe)
+            // would otherwise leak the future in `pending` until process exit.
             pending.remove(id);
         }
     }
