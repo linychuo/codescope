@@ -77,8 +77,8 @@ public final class CallChainAnalyzer {
             return new Result(root, true,
                     "No callers found for '" + target.declaringClass + "#"
                             + target.methodName + "/" + target.arity
-                            + "' in this project's sources. The method may be a library "
-                            + "method that this project doesn't call, or the FQN/name may be misspelled.");
+                            + "' in this project's sources. Verify the FQN and method name; "
+                            + "if the method is a library method, it may simply not be called here.");
         }
         return new Result(root, true, "OK; " + callerCount + " caller(s) in chain.");
     }
