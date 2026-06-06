@@ -130,7 +130,7 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-74 个测试,7 组:
+78 个测试,7 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
   验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
@@ -140,10 +140,11 @@ mvn test
 - `MultiModuleTest` —— 多模块项目源码收集、`settings.xml` 解析、产物目录过滤、
   JRE classpath。
 - `McpServerTest` —— 协议层:JSON-RPC 错误码、cancellation、string id、
-  负 arity、错误响应完成 future 异常、尾随字节保留、不完整输入保留、
-  重复工具名拒绝。
+  负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params`
+  类型校验、尾随字节保留、不完整输入保留、重复工具名拒绝。
 - `McpServerStdioTest` —— `ProcessBuilder` 启 fat jar,发 `initialize` /
   `tools/list` / `tools/call`,验证整条 stdio 链,包括 MCP `roots` capability
-  (host 声明后服务端主动 `roots/list` 拿默认 project;host 不声明则不去拉)。
+  (host 声明后服务端主动 `roots/list` 拿默认 project;host 不声明则不去拉;
+  `result: null` 这类畸形响应不影响后续调用)。
 - `MavenClasspathResolverTest` / `MavenSettingsTest` —— pom 解析、
   classifier 排除、XXE 防御的边界。

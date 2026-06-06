@@ -3,6 +3,7 @@ package com.codescope;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -15,6 +16,12 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** End-to-end: launches the fat jar, speaks JSON-RPC 2.0 over stdio, verifies responses. */
+// Each test spawns a subprocess and polls stdout via blocking reads.
+// A regression that causes the server to hang (e.g. a broken
+// roots/list path) could otherwise block CI forever. Cold-start cost
+// for the subprocess + JDT classloader is normally ~3s, so 60s is
+// generous.
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class McpServerStdioTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -175,6 +182,55 @@ class McpServerStdioTest {
             JsonNode listResp = readJson(out);
             assertEquals(2, listResp.path("id").asInt());
             assertTrue(listResp.path("result").path("tools").isArray());
+        } finally {
+            proc.destroy();
+            proc.waitFor(5, TimeUnit.SECONDS);
+            if (proc.isAlive()) proc.destroyForcibly();
+        }
+    }
+
+    @Test
+    void survivesNullResultFromRootsList() throws Exception {
+        // A buggy or quirky host might answer roots/list with `result: null`
+        // (or with result missing the `roots` key, or with a non-array
+        // roots). None of these should crash the server or leave it
+        // unresponsive — tryFetchRoots is best-effort, and a tools/call
+        // afterwards must still work (provided an explicit project).
+        Process proc = startServer();
+
+        try (BufferedReader out = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8));
+             OutputStream in = proc.getOutputStream()) {
+
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                    + "\"params\":{\"capabilities\":{\"roots\":{}}}}\n");
+            JsonNode initResp = readJson(out);
+            assertEquals("codescope", initResp.path("result").path("serverInfo").path("name").asText());
+
+            // Server should follow up with roots/list
+            JsonNode rootsReq = readJson(out);
+            assertEquals("roots/list", rootsReq.path("method").asText());
+            long rootsReqId = rootsReq.path("id").asLong();
+            // Respond with `result: null` — the degenerate case
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":" + rootsReqId + ",\"result\":null}\n");
+
+            // The server must still answer tools/list normally
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
+            JsonNode listResp = readJson(out);
+            assertEquals(2, listResp.path("id").asInt());
+            assertTrue(listResp.path("result").path("tools").isArray());
+
+            // And tools/call with an explicit project must work
+            String args = JSON.writeValueAsString(java.util.Map.of(
+                    "class", "com.example.Target",
+                    "method", "leaf",
+                    "project", FIXTURE.toAbsolutePath().toString()));
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\","
+                    + "\"params\":{\"name\":\"trace_callers\",\"arguments\":" + args + "}}\n");
+            JsonNode callResp = readJson(out);
+            assertEquals(3, callResp.path("id").asInt());
+            assertFalse(callResp.path("result").path("isError").asBoolean(),
+                    "tools/call after null roots/list should still succeed, got: " + callResp);
         } finally {
             proc.destroy();
             proc.waitFor(5, TimeUnit.SECONDS);

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -12,10 +13,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Direct in-process tests for {@link McpServer#handle}. No subprocess, no real stdin. */
+// Defense in depth: several tests poll on a virtual-thread future or a
+// stdout pattern. A regression in McpServer that breaks the
+// signalling path would otherwise hang the whole suite instead of
+// failing with a useful "test timed out" message.
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
 class McpServerTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -422,6 +429,99 @@ class McpServerTest {
         unknown.put("result", Map.of());
         new McpServer().handle(unknown);
         assertEquals(0, outBuf.size());
+    }
+
+    @Test
+    void nonStringMethodReturnsInvalidRequest() throws Exception {
+        // JSON-RPC 2.0 §4: 'method' must be a string. A non-string method
+        // is an Invalid Request (-32600). The handler must not crash on a
+        // ClassCastException and let the frame layer label it as a Parse
+        // error — that would mislead the host about what's wrong.
+        McpServer s = new McpServer();
+        Map<String, Object> req = new LinkedHashMap<>();
+        req.put("jsonrpc", "2.0");
+        req.put("id", 1);
+        req.put("method", 123); // not a string
+        s.handle(req);
+        JsonNode resp = readOne();
+        assertEquals(-32600, resp.path("error").path("code").asInt(),
+                "expected Invalid Request for non-string method, got: " + resp);
+        assertTrue(resp.path("error").path("message").asText().toLowerCase().contains("method"),
+                "error message should mention 'method', got: " + resp);
+    }
+
+    @Test
+    void nonMapParamsReturnsInvalidParams() throws Exception {
+        // 'params' must be a structured value (object). A scalar is an
+        // Invalid params (-32602), not a crash.
+        McpServer s = new McpServer();
+        Map<String, Object> req = new LinkedHashMap<>();
+        req.put("jsonrpc", "2.0");
+        req.put("id", 1);
+        req.put("method", "ping");
+        req.put("params", "not-a-map");
+        s.handle(req);
+        JsonNode resp = readOne();
+        assertEquals(-32602, resp.path("error").path("code").asInt(),
+                "expected Invalid params for scalar params, got: " + resp);
+    }
+
+    @Test
+    void errorResponseMessageIsFormatted() throws Exception {
+        // The exception surfaced from sendRequestAwait on an error response
+        // should be human-readable: extract code and message, not
+        // Map.toString() which gives noisy "{code=-32601, message=...}".
+        McpServer s = new McpServer();
+
+        java.util.concurrent.CompletableFuture<Throwable> serverSide =
+                new java.util.concurrent.CompletableFuture<>();
+        Thread.ofVirtual().name("test-err-fmt").start(() -> {
+            try {
+                s.sendRequestAwait("roots/list", null, 5, java.util.concurrent.TimeUnit.SECONDS);
+                serverSide.complete(null);
+            } catch (Exception e) {
+                serverSide.complete(e);
+            }
+        });
+
+        for (int i = 0; i < 100; i++) {
+            String all = outBuf.toString(StandardCharsets.UTF_8);
+            int idx = all.indexOf("\"method\":\"roots/list\"");
+            if (idx >= 0) {
+                int lineStart = all.lastIndexOf('\n', idx);
+                if (lineStart < 0) lineStart = 0;
+                int idIdx = all.indexOf("\"id\":", lineStart);
+                if (idIdx < 0) { Thread.sleep(10); continue; }
+                int idStart = idIdx + "\"id\":".length();
+                int idEnd = idStart;
+                while (idEnd < all.length() && (Character.isDigit(all.charAt(idEnd)) || all.charAt(idEnd) == '-')) {
+                    idEnd++;
+                }
+                long reqId = Long.parseLong(all.substring(idStart, idEnd));
+                Map<String, Object> errResp = new LinkedHashMap<>();
+                errResp.put("jsonrpc", "2.0");
+                errResp.put("id", reqId);
+                errResp.put("error", Map.of("code", -32601, "message", "Method not found"));
+                s.handle(errResp);
+                Throwable t = serverSide.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(t, "expected sendRequestAwait to throw");
+                String flat = flatten(t);
+                assertTrue(flat.contains("-32601") && flat.contains("Method not found"),
+                        "expected both code and message in exception, got: " + flat);
+                // The message should be parsed into "server returned error
+                // <code>: <message>", not echo the raw Map.toString() (which
+                // has nondeterministic key order via Map.of and looks like
+                // "{code=-32601, message=...}" or "{message=..., code=...}").
+                assertTrue(flat.contains("server returned error -32601"),
+                        "expected formatted code prefix, got: " + flat);
+                assertFalse(flat.contains("{") && flat.contains("=") && flat.contains("}"),
+                        "expected formatted error message, not raw Map.toString(), got: " + flat);
+                return;
+            }
+            Thread.sleep(10);
+        }
+        fail("server never wrote roots/list request to stdout; got: "
+                + outBuf.toString(StandardCharsets.UTF_8));
     }
 
     // --- helpers ---

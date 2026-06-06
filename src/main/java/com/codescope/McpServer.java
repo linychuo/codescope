@@ -201,7 +201,7 @@ public final class McpServer {
                         // request succeeded and then crash on
                         // .get("expectedField") deep in its own code.
                         fut.completeExceptionally(new RuntimeException(
-                                "server returned error: " + msg.get("error")));
+                                formatErrorResponse(msg.get("error"))));
                     } else {
                         fut.complete(json.valueToTree(msg.get("result")));
                     }
@@ -212,8 +212,27 @@ public final class McpServer {
         }
 
         Object id = msg.get("id");
-        String method = (String) msg.get("method");
-        Map<String, Object> params = (Map<String, Object>) msg.get("params");
+        // Use safe type narrowing rather than blind casts: JSON-RPC §4
+        // requires "method" to be a string and §4.2 requires "params" to be
+        // a structured value. A blind (String)/(Map) cast on a malformed
+        // host message would throw ClassCastException out of handle(),
+        // which the frame layer would then mislabel as Parse error
+        // (-32700). The correct mapping is Invalid Request / Invalid params.
+        Object methodObj = msg.get("method");
+        String method = (methodObj instanceof String s) ? s : null;
+        Object paramsObj = msg.get("params");
+        Map<String, Object> params;
+        if (paramsObj == null) {
+            params = null;
+        } else if (paramsObj instanceof Map<?, ?> m) {
+            params = (Map<String, Object>) m;
+        } else {
+            // Type-broken params: -32602 for requests, silent drop for
+            // notifications (the host has no way to receive an error
+            // response for a notification anyway — id is missing).
+            if (id != null) sendError(id, -32602, "Invalid params: must be an object");
+            return;
+        }
 
         if (id == null) {
             if ("notifications/cancelled".equals(method)) {
@@ -230,6 +249,12 @@ public final class McpServer {
             return;
         }
 
+        if (methodObj != null && method == null) {
+            // Non-string method: §4 violation. Distinct from missing
+            // method, which is also -32600 but with a different message.
+            sendError(id, -32600, "Invalid request: 'method' must be a string");
+            return;
+        }
         if (method == null) {
             sendError(id, -32600, "Invalid request: missing 'method'");
             return;
@@ -255,6 +280,28 @@ public final class McpServer {
         } catch (Exception e) {
             sendError(id, -32603, "Internal error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Formats a JSON-RPC 2.0 error object for inclusion in an exception
+     * message. Extracts {@code code} and {@code message} fields when
+     * present; falls back to the raw value otherwise. The goal is human
+     * readability — {@code Map.toString()} produces
+     * {@code {code=X, message=Y}} with nondeterministic key order, which
+     * makes stack traces harder to read and grep.
+     */
+    private static String formatErrorResponse(Object errorObj) {
+        if (errorObj instanceof Map<?, ?> em) {
+            Object code = em.get("code");
+            Object message = em.get("message");
+            if (code != null && message != null) {
+                return "server returned error " + code + ": " + message;
+            }
+            if (message != null) {
+                return "server returned error: " + message;
+            }
+        }
+        return "server returned error: " + errorObj;
     }
 
     @SuppressWarnings("unchecked")
