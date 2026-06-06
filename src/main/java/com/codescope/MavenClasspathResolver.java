@@ -15,37 +15,83 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
-/** Builds a classpath from a Maven project's pom.xml. */
+/**
+ * Builds a classpath from a Maven project's pom.xml files.
+ *
+ * <p>Supports:
+ * <ul>
+ *   <li>Multi-module projects: every pom.xml under the project tree is read.</li>
+ *   <li>Custom local repository: read from {@code ~/.m2/settings.xml} first.</li>
+ *   <li>Transitive dependencies: walks child POMs from the local repository.</li>
+ *   <li>Skips {@code test}/{@code provided} scopes and {@code optional} deps.</li>
+ * </ul>
+ */
 public final class MavenClasspathResolver {
+
+    private static final int MAX_POM_DEPTH = 10;
+    private static final int MAX_DIRECTORIES_VISITED = 5_000;
 
     private final Path localRepo;
 
     public MavenClasspathResolver() {
-        this(defaultLocalRepo());
+        this(MavenSettings.readLocalRepository() != null
+                ? MavenSettings.readLocalRepository()
+                : defaultLocalRepo());
     }
 
     public MavenClasspathResolver(Path localRepo) {
         this.localRepo = localRepo;
     }
 
-    /** Returns a classpath (jar + class dir paths) for the given Maven project root. */
+    /**
+     * @param projectRoot root of the Maven project (may contain a multi-module tree)
+     * @return classpath of jar + class dir paths aggregated from every pom in the tree
+     */
     public List<String> resolve(Path projectRoot) throws IOException {
-        Path pom = projectRoot.resolve("pom.xml");
-        if (!Files.isRegularFile(pom)) {
-            throw new IOException("No pom.xml at " + projectRoot
+        List<Path> poms = findPoms(projectRoot);
+        if (poms.isEmpty()) {
+            throw new IOException("No pom.xml found under " + projectRoot
                     + " (only Maven pom.xml resolution is supported)");
         }
 
         Set<String> jars = new HashSet<>();
-        walk(pom, jars, new HashSet<>(), 0);
+        Set<String> seenPoms = new HashSet<>();
+        for (Path pom : poms) {
+            walk(pom, jars, seenPoms, 0);
+        }
 
-        List<String> cp = new ArrayList<>();
-        for (String j : jars) cp.add(j);
+        List<String> cp = new ArrayList<>(jars.size());
+        cp.addAll(jars);
         return cp;
     }
 
+    /** Every pom.xml under {@code projectRoot}, excluding target/ build outputs. */
+    static List<Path> findPoms(Path projectRoot) throws IOException {
+        List<Path> out = new ArrayList<>();
+        if (!Files.isDirectory(projectRoot)) return out;
+        try (Stream<Path> s = Files.walk(projectRoot)) {
+            s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equals("pom.xml"))
+                    .filter(p -> !isUnderBuildDir(p, projectRoot))
+                    .limit(MAX_DIRECTORIES_VISITED)
+                    .forEach(out::add);
+        }
+        return out;
+    }
+
+    private static boolean isUnderBuildDir(Path p, Path root) {
+        Path rel = root.relativize(p);
+        for (Path part : rel) {
+            String name = part.toString();
+            if (name.equals("target") || name.equals("build") || name.equals("node_modules")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void walk(Path pom, Set<String> out, Set<String> seenPoms, int depth) throws IOException {
-        if (depth > 10) return;                 // safety: cap transitive depth
+        if (depth > MAX_POM_DEPTH) return;
         String key = pom.toAbsolutePath().toString();
         if (!seenPoms.add(key)) return;
 
@@ -53,11 +99,13 @@ public final class MavenClasspathResolver {
         try (InputStream in = new FileInputStream(pom.toFile())) {
             model = new MavenXpp3Reader().read(in);
         } catch (Exception e) {
-            throw new IOException("Failed to parse " + pom + ": " + e.getMessage(), e);
+            // skip malformed poms rather than aborting the whole resolution
+            return;
         }
 
         if (model.getDependencies() != null) {
             for (Dependency dep : model.getDependencies()) {
+                if (dep.isOptional()) continue;
                 if (!"jar".equalsIgnoreCase(dep.getType() != null ? dep.getType() : "jar")) continue;
                 if (dep.getScope() != null && ("test".equalsIgnoreCase(dep.getScope())
                         || "provided".equalsIgnoreCase(dep.getScope()))) {
@@ -65,7 +113,6 @@ public final class MavenClasspathResolver {
                 }
                 Path jar = findJar(dep);
                 if (jar != null && out.add(jar.toString())) {
-                    // recurse into transitive deps
                     Path depPom = pomFor(dep);
                     if (depPom != null) walk(depPom, out, seenPoms, depth + 1);
                 }
@@ -82,7 +129,6 @@ public final class MavenClasspathResolver {
         Path base = localRepo.resolve(groupPath).resolve(artifactId).resolve(version);
         if (!Files.isDirectory(base)) return null;
 
-        // prefer the exact artifact jar (e.g. foo-1.2.3.jar); fall back to any .jar
         String exact = artifactId + "-" + version + ".jar";
         Path exactPath = base.resolve(exact);
         if (Files.isRegularFile(exactPath)) return exactPath;
