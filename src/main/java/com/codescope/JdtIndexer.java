@@ -109,7 +109,13 @@ public final class JdtIndexer {
             return;
         }
 
-        String relPath = relativize(src, projectRoot);
+        String relPath;
+        try {
+            relPath = relativize(src, projectRoot);
+        } catch (IllegalArgumentException e) {
+            index.recordSkippedFile(src.toString(), "not under project root: " + e.getMessage());
+            return;
+        }
         cu.accept(new CallSiteVisitor(index, relPath));
     }
 

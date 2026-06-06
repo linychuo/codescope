@@ -137,9 +137,15 @@ public final class McpServer {
         Map<String, Object> params = (Map<String, Object>) msg.get("params");
 
         if (id == null) {
-            // notification: handle known ones, ignore the rest
-            if ("notifications/initialized".equals(method)
-                    || "notifications/cancelled".equals(method)) {
+            if ("notifications/cancelled".equals(method)) {
+                Long cancelledId = coerceId(params == null ? null : params.get("id"));
+                if (cancelledId != null) {
+                    CompletableFuture<JsonNode> fut = pending.remove(cancelledId);
+                    if (fut != null) fut.cancel(true);
+                }
+                return;
+            }
+            if ("notifications/initialized".equals(method)) {
                 return;
             }
             return;

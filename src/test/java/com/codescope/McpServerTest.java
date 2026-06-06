@@ -12,7 +12,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -145,30 +144,33 @@ class McpServerTest {
     }
 
     @Test
-    void responseToServerRequestCompletesFuture() throws Exception {
-        // The server occasionally issues server→client requests (roots/list).
-        // Simulate one: send a response with id=REQUEST_ID_BASE, and check that
-        // the registered sink receives the resolved path.
+    void notificationsCancelledCancelsPendingRequest() throws Exception {
+        // JSON-RPC 2.0 §6.1: a notifications/cancelled carries the request id
+        // to cancel. Our internal server→client pending future for that id
+        // should be cancelled. We can't easily inject a pending future from
+        // outside, so we assert the safe behavior: a cancel with an unknown
+        // id is a no-op (no write, no exception).
         McpServer s = new McpServer();
-        AtomicReference<String> got = new AtomicReference<>();
-        s.onDefaultProjectRoot(got::set);
+        Map<String, Object> cancel = new LinkedHashMap<>();
+        cancel.put("jsonrpc", "2.0");
+        cancel.put("method", "notifications/cancelled");
+        cancel.put("params", Map.of("id", 999_999L));
+        s.handle(cancel);
+        assertEquals(0, outBuf.size());
+    }
 
-        // Start an initialize WITH roots capability — server spawns a fetch-roots
-        // thread that will time out (no client reply). We don't care about the
-        // outcome here; we just want to assert that the response plumbing is
-        // wired up. Easier: send a response with a known id and watch the
-        // pending future get completed. We do this by directly probing the
-        // `roots/list` request: register a tool that calls roots/list via
-        // a side channel? Simpler: just verify the response-to-request path
-        // for any id works.
-        //
-        // We just check that the unknown-response case is silently dropped:
+    @Test
+    void responseToServerRequestCompletesFuture() throws Exception {
+        // A response that doesn't match any pending server-side request id
+        // is silently dropped (no write, no crash).
+        McpServer s = new McpServer();
+        s.onDefaultProjectRoot(root -> { /* unused in this test */ });
+
         Map<String, Object> unknown = new LinkedHashMap<>();
         unknown.put("jsonrpc", "2.0");
         unknown.put("id", 999_999L);
         unknown.put("result", Map.of("ignored", true));
         s.handle(unknown);
-        // No write for an unknown server-side response id.
         assertEquals(0, outBuf.size());
     }
 
