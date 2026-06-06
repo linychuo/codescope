@@ -65,7 +65,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 
 - **library target 也能查**:`calls` 表里只关心"谁调用了 X",X 是不是声明在项目里无关紧要 —— `JdtIndexer` 解析 binding 时把 `callee` 的全限定名+签名记下来,library 方法没声明但有调用方就照样能查。
 - **重载必须 disambiguate 到 MethodKey 粒度**:`(class, methodName)` 不足以定位一条边 —— 两个重载的调用方可能不一样,`MethodKey` 用 `(class, name, arity, paramTypes)` 四元组锁唯一性。
-- **`addCall`/`recordInvocation` 写的是 caller 的 key,被多个 callee 共享** —— 这就是为什么 `LinkedHashSet` 比 `ArrayList.contains` 在热门函数上快得多(50 000 个 caller 也只是 O(1) 插入/查询)。
+- **`recordInvocation(caller, callee)` 写的是 caller 的 key,被多个 callee 共享** —— 这就是为什么 `LinkedHashSet` 比 `ArrayList.contains` 在热门函数上快得多(50 000 个 caller 也只是 O(1) 插入/查询)。
 
 ## 关键路径上的几个非显然设计
 

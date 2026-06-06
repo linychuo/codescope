@@ -22,6 +22,7 @@
 | `arity` | 否 | 参数个数;用于同名重载消歧。`paramTypes` 更精确时优先用 `paramTypes` |
 | `paramTypes` | 否 | 参数类型的完全限定名数组,例如 `["int", "java.lang.String"]`;和 `arity` 一起用来挑出唯一重载 |
 | `project` | 否 | Maven 项目根目录的绝对路径。优先级:本参数 > MCP host 声明的 `roots` > 当前工作目录 |
+| `refresh` | 否 | `boolean`,默认 `false`。为 `true` 时清掉该 project 的索引缓存并重建 —— 缓存是进程级的,改完源码后调一次 `refresh: true` 才能看到新调用方 |
 
 不传 `arity`/`paramTypes` 而同名方法有多个重载,会报
 `AmbiguousMethodException` 并列出所有候选重载,让你在下次调用里补上。
@@ -129,11 +130,20 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-包含三组:
+74 个测试,7 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
-  验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码。
-- `MultiModuleTest` —— 验证多模块项目源码收集、`settings.xml` 解析、产物目录过滤。
-- `McpServerStdioTest` —— `ProcessBuilder` 启 fat jar,发 `initialize` / `tools/list` /
-  `tools/call`,验证整条 stdio 链,包括 MCP `roots` capability(host 声明后
-  服务端主动 `roots/list` 拿默认 project)。
+  验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
+  enum/record/annotation 兼容。
+- `EdgeCaseTest` —— 边界:深链不爆栈、钻石 vs 环、library target、
+  50 000 节点截断、并发读写、坏源文件、匿名内部类归属。
+- `MultiModuleTest` —— 多模块项目源码收集、`settings.xml` 解析、产物目录过滤、
+  JRE classpath。
+- `McpServerTest` —— 协议层:JSON-RPC 错误码、cancellation、string id、
+  负 arity、错误响应完成 future 异常、尾随字节保留、不完整输入保留、
+  重复工具名拒绝。
+- `McpServerStdioTest` —— `ProcessBuilder` 启 fat jar,发 `initialize` /
+  `tools/list` / `tools/call`,验证整条 stdio 链,包括 MCP `roots` capability
+  (host 声明后服务端主动 `roots/list` 拿默认 project;host 不声明则不去拉)。
+- `MavenClasspathResolverTest` / `MavenSettingsTest` —— pom 解析、
+  classifier 排除、XXE 防御的边界。
