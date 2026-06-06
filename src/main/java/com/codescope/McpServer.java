@@ -261,7 +261,12 @@ public final class McpServer {
             String path = java.net.URI.create(uri).getPath();
             Consumer<String> sink = defaultProjectRootSink;
             if (sink != null) sink.accept(path);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // Most common cases: client doesn't support roots, response timed
+            // out, or the first root isn't a file:// URI. All are normal for
+            // a non-roots host; log to stderr so a future "why didn't the
+            // default project work?" question has an answer.
+            System.err.println("[codescope] roots/list failed: " + e);
             // client doesn't support / timed out / malformed -> no default
         }
     }
