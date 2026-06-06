@@ -169,6 +169,31 @@ class McpServerTest {
     }
 
     @Test
+    void toolsCallRejectsNegativeArity() throws Exception {
+        // A negative arity would silently match nothing, leaving the user
+        // to wonder why their query came back empty. Reject it up front.
+        McpServer s = new McpServer();
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("name", "echo");
+        args.put("arguments", Map.of("x", "y"));
+        // tools/call dispatches to TraceCallersTool which validates arity.
+        // We use a stub tool that records the call so we can verify the
+        // negative-arity case fails before reaching the tool.
+        s.register(new StubTool("echo", Map.of("type", "object"),
+                a -> Tool.ToolResult.text("should-not-run")));
+        // Bypass TraceCallersTool by going through a raw call to the
+        // adapter path that doesn't enforce arity: drive handle() directly
+        // with an unknown tool so we get the "Invalid arguments" path...
+        // actually the easiest exercise: call a tool with arity in its
+        // schema. The current StubTool doesn't validate; that path is
+        // owned by TraceCallersTool. So we drive TraceCallersTool.invoke
+        // directly via a fresh instance and verify it throws IAE.
+        TraceCallersTool t = new TraceCallersTool();
+        assertThrows(IllegalArgumentException.class, () -> t.invoke(Map.of(
+                "class", "com.example.X", "method", "m", "arity", -1)));
+    }
+
+    @Test
     void dispatchesValidObjectAndKeepsTrailingBytes() throws Exception {
         // After C2: a buffer holding "{valid}{junk}" should dispatch the
         // valid object and keep the junk for the next round. Previously the

@@ -17,29 +17,21 @@ public final class CallChainAnalyzer {
      * true back-edge (cycle marker); a method reached via two different paths
      * (a diamond) is a real caller on the second path and is not marked as
      * a cycle.
+     *
+     * <p>The BFS works for both project and library targets: callers are
+     * discovered from the call edges recorded by {@link JdtIndexer}, not from
+     * the target's own declaration. A target with no project callers (e.g. a
+     * library method that this project never invokes) returns
+     * {@code found=true} with an empty chain — that IS the answer, not an
+     * error. We only fail when the target is so ambiguous we can't even
+     * give an empty answer meaningfully (see {@link #diagnoseNotFound}).
      */
     public Result traceCallers(ProjectIndex index, MethodKey target) {
+        return bfs(index, target);
+    }
+
+    private Result bfs(ProjectIndex index, MethodKey target) {
         ProjectIndex.SourceLoc rootLoc = index.declarationOf(target);
-        if (rootLoc == null) {
-            // try to find any matching (class, method) to give a useful error
-            MethodKey alt;
-            try {
-                alt = index.resolveTarget(target.declaringClass, target.methodName);
-            } catch (ProjectIndex.AmbiguousMethodException e) {
-                return new Result(
-                        new CallNode(target.declaringClass, target.methodName, target.arity, null, 0),
-                        false, e.getMessage());
-            }
-            if (alt == null) {
-                return new Result(
-                        new CallNode(target.declaringClass, target.methodName, target.arity, null, 0),
-                        false,
-                        "Method not found in any source file. Check the class FQN, method name, "
-                                + "and that the project sources are on the analyzed source roots.");
-            }
-            target = alt;
-            rootLoc = index.declarationOf(target);
-        }
         CallNode root = new CallNode(
                 target.declaringClass, target.methodName, target.arity,
                 rootLoc != null ? rootLoc.file() : null,
@@ -49,10 +41,10 @@ public final class CallChainAnalyzer {
         queue.addLast(new PathFrame(target, root, Set.of(target)));
 
         int nodes = 1;
+        int callerCount = 0;
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
-            List<MethodKey> callers = index.callersOf(f.key);
-            for (MethodKey caller : callers) {
+            for (MethodKey caller : index.callersOf(f.key)) {
                 if (f.ancestors.contains(caller)) {
                     // True back-edge on the current path -> cycle marker.
                     f.node.addChild(CallNode.cycleMarker(
@@ -73,6 +65,7 @@ public final class CallChainAnalyzer {
                 childAncestors.addAll(f.ancestors);
                 queue.addLast(new PathFrame(caller, child, childAncestors));
                 nodes++;
+                callerCount++;
                 if (nodes > MAX_NODES) {
                     return new Result(root, true,
                             "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
@@ -80,7 +73,14 @@ public final class CallChainAnalyzer {
                 }
             }
         }
-        return new Result(root, true, "OK; " + nodes + " method(s) in chain.");
+        if (callerCount == 0) {
+            return new Result(root, true,
+                    "No callers found for '" + target.declaringClass + "#"
+                            + target.methodName + "/" + target.arity
+                            + "' in this project's sources. The method may be a library "
+                            + "method that this project doesn't call, or the FQN/name may be misspelled.");
+        }
+        return new Result(root, true, "OK; " + callerCount + " caller(s) in chain.");
     }
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors) {}

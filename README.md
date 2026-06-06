@@ -82,8 +82,12 @@
   模块的源根都收进来,只要每个子模块有自己的 `pom.xml`
 - 本地 Maven 仓库优先用 `~/.m2/settings.xml` 里的 `<localRepository>`,否则才是 `~/.m2/repository`
 - 只看项目 `src/main/java` 下的源码 —— `src/test/java` 排除掉(测试代码不参与调用链)
-- 只看**项目里**的 `.java` 源码 —— `~/.m2/repository/*.jar` 里的方法调用看不到
-  (虽然 binding resolution 会用到 jar 让跨文件类型解析能成功)
+- `trace_callers` 的 target 可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
+  只要项目里有谁调用了它 —— 这种情况工具能找到项目的调用方并返回;
+  如果项目里压根没人调用这个库方法,返回结果是一棵空树(message 会说"No callers found")
+- `project` 必须是**绝对路径** —— 工具不做相对路径猜测。
+  不传 `project` 且 MCP host 没通过 `roots` 告知 workspace 根,工具会显式报错,
+  不会去用服务进程的 CWD(那通常不是用户的当前目录)
 - 重载必须用 `arity` 或 `paramTypes` 显式消歧,否则报错并列出所有候选
 - 构造方法(`<init>`)也按方法处理
 - 一次会话里同一个 project 路径的索引只构建一次,缓存复用

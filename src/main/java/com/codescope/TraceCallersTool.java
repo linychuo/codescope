@@ -54,7 +54,8 @@ public final class TraceCallersTool implements Tool {
                         + "Use together with `arity` to pick a specific overload."));
         props.put("project", Map.of(
                 "type", "string",
-                "description", "Path to the Maven/Gradle project root. Defaults to current working directory. "
+                "description", "Absolute path to the Maven/Gradle project root. "
+                        + "Required unless the MCP host advertises a workspace root via `roots`. "
                         + "Only main source roots (src/<...>/main/java) are indexed; test sources are excluded."));
         schema.put("properties", props);
         return schema;
@@ -87,12 +88,25 @@ public final class TraceCallersTool implements Tool {
     private static Integer optionalInt(Map<String, Object> args, String key) {
         Object v = args.get(key);
         if (v == null) return null;
-        if (v instanceof Number n) return n.intValue();
-        if (v instanceof String s) {
-            try { return Integer.parseInt(s.trim()); }
-            catch (NumberFormatException e) { /* fall through */ }
+        int n;
+        if (v instanceof Number num) {
+            n = num.intValue();
+        } else if (v instanceof String s) {
+            try {
+                n = Integer.parseInt(s.trim());
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Optional argument '" + key
+                        + "' must be an integer; got: " + v);
+            }
+        } else {
+            throw new IllegalArgumentException("Optional argument '" + key
+                    + "' must be an integer; got: " + v);
         }
-        throw new IllegalArgumentException("Optional argument '" + key + "' must be an integer; got: " + v);
+        if (n < 0) {
+            throw new IllegalArgumentException("Optional argument '" + key
+                    + "' must be >= 0; got: " + n);
+        }
+        return n;
     }
 
     @SuppressWarnings("unchecked")
@@ -120,6 +134,13 @@ public final class TraceCallersTool implements Tool {
         if (hostDefaultProject != null && !hostDefaultProject.isBlank()) {
             return Paths.get(hostDefaultProject).toAbsolutePath();
         }
-        return Paths.get(System.getProperty("user.dir")).toAbsolutePath();
+        // No `project` arg and no host-advertised root. We deliberately do
+        // NOT fall back to the server process's CWD — that CWD is set by
+        // the MCP host at launch time and is not necessarily the user's
+        // working directory. Guessing wrong is worse than asking.
+        throw new IllegalArgumentException(
+                "No `project` argument and no default project root advertised by the host. "
+                        + "Pass `project` with an absolute path to a Maven project root, or have "
+                        + "the host advertise the workspace root via MCP `roots`.");
     }
 }

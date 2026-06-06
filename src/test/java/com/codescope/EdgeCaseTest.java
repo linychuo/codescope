@@ -101,6 +101,27 @@ class EdgeCaseTest {
     }
 
     @Test
+    void traceCallersWorksForTargetsNotDeclaredInProject() {
+        // Library methods aren't declared in project sources, but the
+        // call-edge map still records project -> library edges. Tracing
+        // callers of a library target must return the project callers
+        // without requiring a project-side declaration of the target.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey library = new MethodKey("com.lib.External", "doStuff", 1,
+                List.of("java.lang.String"));
+        // No putDeclaration for `library` — it lives in a jar.
+        MethodKey caller = new MethodKey("com.example.App", "useExternal", 1,
+                List.of("java.lang.String"));
+        index.putDeclaration(caller, new ProjectIndex.SourceLoc("App.java", 1));
+        index.addCall(library, caller);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, library);
+        assertTrue(r.found(), "library target with project callers should be found");
+        assertEquals(1, r.root().callers.size());
+        assertEquals("com.example.App#useExternal/1", r.root().callers.get(0).signature);
+    }
+
+    @Test
     void cyclicGraphIsCollapsedToBackEdgeMarker() {
         // a -> b -> a (cycle). Both a and b are declared. We ask for callers of a.
         ProjectIndex index = new ProjectIndex();
@@ -163,12 +184,18 @@ class EdgeCaseTest {
     }
 
     @Test
-    void targetNotFoundReturnsFailureResult() {
+    void unknownTargetReturnsEmptyChainWithDiagnostic() {
+        // A target that nothing calls — whether because the class doesn't
+        // exist or because no project code calls it — returns an empty
+        // chain with a diagnostic message, not a failure flag. The previous
+        // "found=false on miss" contract conflated "no callers" with "could
+        // not run" — they're different things and the empty-chain form is
+        // more useful for the caller.
         ProjectIndex index = new ProjectIndex();
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index,
                 new MethodKey("com.example.Nope", "missing", 0));
-        assertFalse(r.found());
-        assertTrue(r.message().contains("not found"), r.message());
+        assertTrue(r.found(), "no-callers is a valid result, not an error");
+        assertTrue(r.message().contains("No callers"), r.message());
     }
 
     @Test

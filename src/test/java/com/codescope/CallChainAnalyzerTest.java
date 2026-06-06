@@ -136,10 +136,15 @@ class CallChainAnalyzerTest {
     }
 
     @Test
-    void returnsNotFoundForUnknownMethod() {
+    void unknownMethodReturnsEmptyChain() {
+        // A target with no callers — whether because the class doesn't exist
+        // or because no project code calls it — is a valid answer with an
+        // empty chain, not an error. The diagnostic message names the
+        // possible reasons.
         MethodKey ghost = new MethodKey("com.example.NoSuch", "missing", 0);
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, ghost);
-        assertFalse(r.found());
+        assertTrue(r.found(), "no-callers is a valid result, not an error");
+        assertTrue(r.message().contains("No callers"), r.message());
     }
 
     @Test

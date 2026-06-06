@@ -63,20 +63,36 @@ public final class TraceCallersService {
             throw new TraceCallersException(e.getCause().getMessage());
         }
 
+        // Resolve against project declarations. This is the right path for
+        // project methods: it gives a precise MethodKey (with parameter
+        // types from the declaration, if the user didn't supply any) and
+        // surfaces ambiguity for project-only overloads.
         MethodKey target;
         try {
             target = index.resolveTarget(className, methodName, arity, paramTypes);
         } catch (ProjectIndex.AmbiguousMethodException e) {
-            throw new TraceCallersException(e.getMessage() + " Available overloads: "
-                    + index.findOverloads(className, methodName).stream()
+            // findOverloads only sees project declarations. For library
+            // methods this list is always empty, so we say so explicitly
+            // and point the user at the paramTypes path.
+            List<MethodKey> projectOverloads = index.findOverloads(className, methodName);
+            String overloadsHint = projectOverloads.isEmpty()
+                    ? "no overloads are visible in this project's sources (the class is likely from a library); "
+                            + "pass `paramTypes` with the FQN types to pick one"
+                    : "available overloads: " + projectOverloads.stream()
                             .map(MethodKey::toString)
-                            .toList());
+                            .toList();
+            throw new TraceCallersException(e.getMessage() + " " + overloadsHint + ".");
         }
         if (target == null) {
-            throw new TraceCallersException("Could not find a method '" + methodName
-                    + "' declared in '" + className
-                    + (arity != null ? "' with arity " + arity : "")
-                    + "'. Check that the project sources are on the analyzed source roots.");
+            // The class+method is not declared in this project's sources.
+            // It might be a library method that the user wants to find
+            // callers for. We still try the BFS — the call-edge map
+            // records every project→target invocation regardless of where
+            // the target is declared. If there are no callers we'll
+            // surface that as a result; if there are, we win.
+            target = new MethodKey(className, methodName,
+                    arity == null ? 0 : arity,
+                    paramTypes == null ? List.of() : paramTypes);
         }
 
         CallChainAnalyzer.Result r = analyzer.traceCallers(index, target);
