@@ -338,6 +338,44 @@ class EdgeCaseTest {
         assertEquals(Collections.emptySet(), index.knownMethods());
     }
 
+    @Test
+    void anonymousInnerClassMethodsAreAttributedToAnonType(@TempDir Path tmp) throws IOException {
+        // After F32: a method declared inside `new Runnable() { void run() {...} }`
+        // must be indexed under a synthesized FQN, not the enclosing Outer
+        // class. JDT reports the binding as "x.$Outer" (the $ prefix is JDT's
+        // convention for anonymous types).
+        Files.writeString(tmp.resolve("Outer.java"), """
+                package x;
+                public class Outer {
+                    void use() {
+                        Runnable r = new Runnable() {
+                            public void run() { target(); }
+                            void target() {}
+                        };
+                        r.run();
+                    }
+                    static void target() {}
+                }
+                """);
+
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(tmp.resolve("Outer.java")), List.of(), List.of(), tmp);
+
+        // The anonymous-class 'run' must be in the index, not on Outer itself.
+        boolean foundAnonRun = index.knownMethods().stream()
+                .anyMatch(k -> !k.declaringClass.equals("x.Outer") && k.methodName.equals("run"));
+        assertTrue(foundAnonRun, "expected anonymous 'run' to live outside x.Outer, got: "
+                + index.knownMethods());
+
+        // The anon-class 'target' too.
+        boolean foundAnonTarget = index.knownMethods().stream()
+                .filter(k -> k.methodName.equals("target"))
+                .anyMatch(k -> !k.declaringClass.equals("x.Outer"));
+        assertTrue(foundAnonTarget,
+                "expected anonymous 'target' to live outside x.Outer, got: "
+                + index.knownMethods().stream().filter(k -> k.methodName.equals("target")).toList());
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
