@@ -194,7 +194,17 @@ public final class McpServer {
             if (responseId != null) {
                 CompletableFuture<JsonNode> fut = pending.remove(responseId);
                 if (fut != null) {
-                    fut.complete(json.valueToTree(msg.get("result")));
+                    if (msg.containsKey("error")) {
+                        // An error response must surface to the caller as
+                        // an exceptional completion. Completing normally
+                        // with a NullNode would let the caller think the
+                        // request succeeded and then crash on
+                        // .get("expectedField") deep in its own code.
+                        fut.completeExceptionally(new RuntimeException(
+                                "server returned error: " + msg.get("error")));
+                    } else {
+                        fut.complete(json.valueToTree(msg.get("result")));
+                    }
                     return;
                 }
             }

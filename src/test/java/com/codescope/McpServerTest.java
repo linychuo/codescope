@@ -286,6 +286,77 @@ class McpServerTest {
     }
 
     @Test
+    void errorResponseCompletesFutureExceptionally() throws Exception {
+        // When a host returns a JSON-RPC error response for one of our
+        // server→client requests (e.g. roots/list), the caller must see an
+        // exception that carries the error info — not a silently-successful
+        // NullNode that would later crash on .get("roots") deep in the
+        // caller. This test drives the real round-trip: issue a request,
+        // respond with an error, and assert the future fails with a message
+        // that mentions the error code/message.
+        McpServer s = new McpServer();
+
+        java.util.concurrent.CompletableFuture<Throwable> serverSide = new java.util.concurrent.CompletableFuture<>();
+        Thread.ofVirtual().name("test-err").start(() -> {
+            try {
+                s.sendRequestAwait("roots/list", null, 5, java.util.concurrent.TimeUnit.SECONDS);
+                serverSide.complete(null);
+            } catch (Exception e) {
+                serverSide.complete(e);
+            }
+        });
+
+        for (int i = 0; i < 100; i++) {
+            String all = outBuf.toString(StandardCharsets.UTF_8);
+            int idx = all.indexOf("\"method\":\"roots/list\"");
+            if (idx >= 0) {
+                int lineStart = all.lastIndexOf('\n', idx);
+                if (lineStart < 0) lineStart = 0;
+                int idIdx = all.indexOf("\"id\":", lineStart);
+                if (idIdx < 0) {
+                    Thread.sleep(10);
+                    continue;
+                }
+                int idStart = idIdx + "\"id\":".length();
+                int idEnd = idStart;
+                while (idEnd < all.length() && (Character.isDigit(all.charAt(idEnd)) || all.charAt(idEnd) == '-')) {
+                    idEnd++;
+                }
+                long reqId = Long.parseLong(all.substring(idStart, idEnd));
+                // Send an error response for that id
+                Map<String, Object> errResp = new LinkedHashMap<>();
+                errResp.put("jsonrpc", "2.0");
+                errResp.put("id", reqId);
+                errResp.put("error", Map.of("code", -32601, "message", "Method not found"));
+                s.handle(errResp);
+                // Future is removed
+                assertNull(s.pending.get(reqId), "error-resolved future should be removed from pending");
+                // The call site observed an exception
+                Throwable t = serverSide.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(t, "expected sendRequestAwait to throw on error response, got success");
+                // The chain ultimately surfaces the error message
+                String flat = flatten(t);
+                assertTrue(flat.contains("Method not found")
+                                || flat.contains("-32601"),
+                        "expected error info in exception, got: " + flat);
+                return;
+            }
+            Thread.sleep(10);
+        }
+        fail("server never wrote roots/list request to stdout; got: "
+                + outBuf.toString(StandardCharsets.UTF_8));
+    }
+
+    private static String flatten(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        while (t != null) {
+            if (t.getMessage() != null) sb.append(t.getMessage()).append(" | ");
+            t = t.getCause();
+        }
+        return sb.toString();
+    }
+
+    @Test
     void notificationsCancelledForUnknownIdIsNoOp() throws Exception {
         // Companion to the above: an unknown id must not crash, and must
         // not write anything to stdout.
