@@ -161,6 +161,9 @@ public final class McpServer {
             long off = p.currentLocation().getByteOffset();
             return off < 0 ? bytes.length : (int) off;
         } catch (IOException e) {
+            // An IOException here means Jackson hit the end of the buffer
+            // mid-structure (JsonEOFException). That's the "incomplete"
+            // case — we'll see more bytes next round.
             return -1;
         }
     }
@@ -168,6 +171,13 @@ public final class McpServer {
     public void stop() {
         running.set(false);
         stdin.close();
+        // Cancel any in-flight server→client requests so the virtual threads
+        // waiting on them exit promptly instead of running out the timeout.
+        // Each sendRequestAwait's finally block will still remove its entry
+        // from `pending`; the cancel() here just unblocks the .get().
+        for (CompletableFuture<JsonNode> f : pending.values()) {
+            f.cancel(true);
+        }
     }
 
     // package-private for direct unit tests; not part of the public API.
