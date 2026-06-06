@@ -42,12 +42,16 @@ public final class TraceCallersService {
     public TraceCallersService() {}
 
     /**
+     * @param refresh if true, evict the cached index for {@code projectRoot}
+     *                and rebuild it. Use this after the user has edited
+     *                files — the cache is process-lifetime and never
+     *                invalidates on its own.
      * @return JSON envelope containing the trace tree, status, and message
      * @throws TraceCallersException with a user-facing error message
      */
     public String traceCallersJson(String className, String methodName,
                                    Integer arity, List<String> paramTypes,
-                                   Path projectRoot) throws TraceCallersException {
+                                   Path projectRoot, boolean refresh) throws TraceCallersException {
         if (!Files.isDirectory(projectRoot)) {
             throw new TraceCallersException("Project root is not a directory: " + projectRoot);
         }
@@ -58,6 +62,11 @@ public final class TraceCallersService {
 
         ProjectIndex index;
         try {
+            if (refresh) {
+                // Evict first so concurrent computeIfAbsent from another
+                // thread can't return the stale value while we're rebuilding.
+                indexCache.remove(projectRoot);
+            }
             index = indexCache.computeIfAbsent(projectRoot, this::buildIndex);
         } catch (UncheckedIOException e) {
             throw new TraceCallersException(e.getCause().getMessage());

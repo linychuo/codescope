@@ -51,12 +51,22 @@ public final class TraceCallersTool implements Tool {
                 "type", "array",
                 "items", Map.of("type", "string"),
                 "description", "Fully qualified parameter type names, e.g. [\"int\", \"java.lang.String\"]. "
-                        + "Use together with `arity` to pick a specific overload."));
+                        + "Use together with `arity` to pick a specific overload. "
+                        + "Primitives must be lowercase (\"int\", \"boolean\", \"long\", ...); "
+                        + "boxed types use the FQN form (\"java.lang.Integer\"). "
+                        + "Mismatch with the on-disk declaration will be reported as a missing target."));
         props.put("project", Map.of(
                 "type", "string",
                 "description", "Absolute path to the Maven/Gradle project root. "
                         + "Required unless the MCP host advertises a workspace root via `roots`. "
                         + "Only main source roots (src/<...>/main/java) are indexed; test sources are excluded."));
+        props.put("refresh", Map.of(
+                "type", "boolean",
+                "default", false,
+                "description", "If true, evict the cached index for this project and rebuild it. "
+                        + "The index cache is process-lifetime and does not detect file changes, "
+                        + "so set this after editing source files. Has no effect on the first call "
+                        + "for a given project (the cache is empty)."));
         schema.put("properties", props);
         return schema;
     }
@@ -68,9 +78,10 @@ public final class TraceCallersTool implements Tool {
         Integer arity = optionalInt(args, "arity");
         List<String> paramTypes = optionalStringList(args, "paramTypes");
         Path projectRoot = resolveProjectRoot(args);
+        boolean refresh = optionalBool(args, "refresh");
 
         try {
-            String json = service.traceCallersJson(className, methodName, arity, paramTypes, projectRoot);
+            String json = service.traceCallersJson(className, methodName, arity, paramTypes, projectRoot, refresh);
             return ToolResult.text(json);
         } catch (TraceCallersService.TraceCallersException e) {
             return ToolResult.error(e.getMessage());
@@ -126,6 +137,14 @@ public final class TraceCallersTool implements Tool {
         }
         throw new IllegalArgumentException("Optional argument '" + key
                 + "' must be a list; got: " + v);
+    }
+
+    private static boolean optionalBool(Map<String, Object> args, String key) {
+        Object v = args.get(key);
+        if (v == null) return false;
+        if (v instanceof Boolean b) return b;
+        throw new IllegalArgumentException("Optional argument '" + key
+                + "' must be a boolean; got: " + v);
     }
 
     private Path resolveProjectRoot(Map<String, Object> args) {
