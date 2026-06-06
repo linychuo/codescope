@@ -21,8 +21,17 @@ public interface Tool {
 
     ToolResult invoke(Map<String, Object> arguments) throws Exception;
 
-    record ToolResult(String text, List<String> errors) {
-        public static ToolResult ok(String text) { return new ToolResult(text, List.of()); }
-        public static ToolResult err(String message) { return new ToolResult(message, List.of(message)); }
+    /**
+     * Result of a tool invocation, in MCP {@code tools/call} content-block
+     * shape. The list may contain any number of blocks (text, image, etc.);
+     * most tools just produce a single text block holding a JSON document.
+     */
+    record ToolResult(List<Map<String, Object>> content, boolean isError) {
+        public static ToolResult text(String text) {
+            return new ToolResult(List.of(Map.of("type", "text", "text", text)), false);
+        }
+        public static ToolResult error(String message) {
+            return new ToolResult(List.of(Map.of("type", "text", "text", message)), true);
+        }
     }
 }

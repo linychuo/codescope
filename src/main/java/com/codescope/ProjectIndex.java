@@ -2,26 +2,52 @@ package com.codescope;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Reverse call index for a project. Built once by {@link JdtIndexer}, then
  * queried for chains via {@link CallChainAnalyzer}.
  *
- *   calls[target] = list of methods that invoke target
+ *   calls[target] = set of methods that invoke target (insertion-ordered, deduped)
  *   declarations[method] = source location of the method definition
+ *
+ * <p>Thread-safe: writes from the indexer's parallel parse pass must be safe
+ * to issue concurrently. The outer maps are {@link ConcurrentHashMap}; the
+ * per-target caller set is a {@link LinkedHashSet} guarded by synchronizing
+ * on the set itself (since {@code LinkedHashSet} is not thread-safe, but is
+ * much cheaper than {@code ArrayList.contains} for dedup on hot methods).
  */
 public final class ProjectIndex {
     public record SourceLoc(String file, int line) {}
 
-    private final Map<MethodKey, List<MethodKey>> calls = new HashMap<>();
-    private final Map<MethodKey, SourceLoc> declarations = new HashMap<>();
+    private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
+    private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
+    private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
+
+    /** Records a source file that the indexer could not parse, for diagnostic reporting. */
+    public void recordSkippedFile(String path, String reason) {
+        skippedFiles.add(path + ": " + reason);
+    }
+
+    /** Source files the indexer could not parse (e.g. read errors, syntax errors). */
+    public List<String> skippedFiles() {
+        synchronized (skippedFiles) {
+            return List.copyOf(skippedFiles);
+        }
+    }
 
     public void addCall(MethodKey target, MethodKey caller) {
-        calls.computeIfAbsent(target, k -> new ArrayList<>()).add(caller);
+        // Dedupe: the same (caller, target) pair can come from a hot method
+        // being called from many sites in the same caller body. LinkedHashSet
+        // gives O(1) add/contains while preserving insertion order.
+        Set<MethodKey> set = calls.computeIfAbsent(target, k -> new LinkedHashSet<>());
+        synchronized (set) {
+            set.add(caller);
+        }
     }
 
     public void putDeclaration(MethodKey method, SourceLoc loc) {
@@ -29,7 +55,11 @@ public final class ProjectIndex {
     }
 
     public List<MethodKey> callersOf(MethodKey target) {
-        return calls.getOrDefault(target, Collections.emptyList());
+        Set<MethodKey> set = calls.get(target);
+        if (set == null) return Collections.emptyList();
+        synchronized (set) {
+            return List.copyOf(set);
+        }
     }
 
     public SourceLoc declarationOf(MethodKey method) {
@@ -40,7 +70,7 @@ public final class ProjectIndex {
         return Collections.unmodifiableSet(declarations.keySet());
     }
 
-    public Map<MethodKey, List<MethodKey>> allCalls() {
+    public Map<MethodKey, Set<MethodKey>> allCalls() {
         return Collections.unmodifiableMap(calls);
     }
 

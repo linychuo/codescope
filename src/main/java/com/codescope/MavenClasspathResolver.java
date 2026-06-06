@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /**
@@ -29,6 +30,8 @@ import java.util.stream.Stream;
 public final class MavenClasspathResolver {
 
     private static final int MAX_POM_DEPTH = 10;
+    /** Cap on the directory walk for pom discovery. */
+    private static final int POM_WALK_DEPTH = 12;
     private static final int MAX_DIRECTORIES_VISITED = 5_000;
 
     private final Path localRepo;
@@ -54,22 +57,27 @@ public final class MavenClasspathResolver {
                     + " (only Maven pom.xml resolution is supported)");
         }
 
-        Set<String> jars = new HashSet<>();
-        Set<String> seenPoms = new HashSet<>();
-        for (Path pom : poms) {
-            walk(pom, jars, seenPoms, 0);
-        }
+        // Per-pom walk is I/O bound (reads ~/.m2/repository for each dep);
+        // process top-level poms in parallel. The seenPoms / jars sets are
+        // concurrent so the recursive dep walk remains correct under contention.
+        Set<String> jars = ConcurrentHashMap.newKeySet();
+        Set<String> seenPoms = ConcurrentHashMap.newKeySet();
+        poms.parallelStream().forEach(pom -> {
+            try {
+                walk(pom, jars, seenPoms, 0);
+            } catch (IOException e) {
+                // skip individual pom failures rather than aborting the whole resolution
+            }
+        });
 
-        List<String> cp = new ArrayList<>(jars.size());
-        cp.addAll(jars);
-        return cp;
+        return new ArrayList<>(jars);
     }
 
     /** Every pom.xml under {@code projectRoot}, excluding target/ build outputs. */
     static List<Path> findPoms(Path projectRoot) throws IOException {
         List<Path> out = new ArrayList<>();
         if (!Files.isDirectory(projectRoot)) return out;
-        try (Stream<Path> s = Files.walk(projectRoot)) {
+        try (Stream<Path> s = Files.walk(projectRoot, POM_WALK_DEPTH)) {
             s.filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().equals("pom.xml"))
                     .filter(p -> !isUnderBuildDir(p, projectRoot))
@@ -133,8 +141,20 @@ public final class MavenClasspathResolver {
         Path exactPath = base.resolve(exact);
         if (Files.isRegularFile(exactPath)) return exactPath;
 
+        // Fallback: pick the first jar that isn't sources/javadoc. The directory
+        // layout is not guaranteed (e.g. classifier-bearing versions), so be
+        // defensive about what counts as the "main" jar.
         try (Stream<Path> s = Files.list(base)) {
-            return s.filter(p -> p.getFileName().toString().endsWith(".jar")).findFirst().orElse(null);
+            return s
+                    .filter(p -> p.getFileName().toString().endsWith(".jar"))
+                    .filter(p -> {
+                        String fn = p.getFileName().toString();
+                        return !fn.endsWith("-sources.jar")
+                                && !fn.endsWith("-javadoc.jar")
+                                && !fn.endsWith("-tests.jar");
+                    })
+                    .findFirst()
+                    .orElse(null);
         } catch (IOException e) {
             return null;
         }

@@ -10,6 +10,12 @@ import java.util.stream.Stream;
 /** Locates Java source files, JRE jars, and a Maven classpath for a project root. */
 public final class ProjectLoader {
 
+    /**
+     * Cap on directory-tree walks to prevent runaway scans in projects with
+     * pathological depth (deeply-nested vendored deps, etc.).
+     */
+    private static final int MAX_DIRECTORY_DEPTH = 12;
+
     public record LoadResult(
             List<Path> sources,
             List<String> classpath,
@@ -44,7 +50,7 @@ public final class ProjectLoader {
         return out;
     }
 
-    /** Every src/<...>/java directory under the project root, skipping test source roots. */
+    /** Every src/&lt;...&gt;/main/java directory under the project root. */
     public static List<String> collectSourceRoots(Path projectRoot) {
         return collectSourceRoots0(projectRoot).stream().map(Path::toString).toList();
     }
@@ -52,7 +58,7 @@ public final class ProjectLoader {
     private static List<Path> collectSourceRoots0(Path projectRoot) {
         List<Path> out = new ArrayList<>();
         if (!Files.isDirectory(projectRoot)) return out;
-        try (Stream<Path> s = Files.walk(projectRoot)) {
+        try (Stream<Path> s = Files.walk(projectRoot, MAX_DIRECTORY_DEPTH)) {
             s.filter(Files::isDirectory)
                     // we want a directory whose name is "java"
                     .filter(p -> p.getFileName().toString().equals("java"))
@@ -60,6 +66,11 @@ public final class ProjectLoader {
                     .filter(p -> {
                         Path parent = p.getParent();
                         return parent != null && parent.getFileName().toString().equals("main");
+                    })
+                    // and grandparent is "src" (avoids matching any deep .../main/java)
+                    .filter(p -> {
+                        Path grand = p.getParent() == null ? null : p.getParent().getParent();
+                        return grand != null && grand.getFileName().toString().equals("src");
                     })
                     // and we don't want to descend into build outputs
                     .filter(p -> !relativeSegmentEquals(p, projectRoot, "target")

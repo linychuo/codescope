@@ -183,20 +183,14 @@ class McpServerStdioTest {
     }
 
     private Process startServer() throws Exception {
-        // Prefer the packaged fat jar (covers `mvn package && mvn test`).
-        // Fall back to launching via the surefire-supplied classpath so the test
-        // also works under `mvn clean test` (where the jar doesn't exist yet).
-        Path jar = Paths.get("target", "codescope.jar");
-        ProcessBuilder pb;
-        if (java.nio.file.Files.isRegularFile(jar)) {
-            pb = new ProcessBuilder("java", "-jar", jar.toString());
-        } else {
-            String cp = System.getProperty("java.class.path");
-            if (cp == null || cp.isEmpty()) {
-                throw new IllegalStateException("no classpath available; run `mvn package` first");
-            }
-            pb = new ProcessBuilder("java", "-cp", cp, "com.codescope.Main");
+        // Always launch via the surefire-supplied classpath. It is reliably
+        // available (mvn test always populates java.class.path) and exercises
+        // the same Main entry point that a packaged jar would.
+        String cp = System.getProperty("java.class.path");
+        if (cp == null || cp.isEmpty()) {
+            throw new IllegalStateException("no classpath available");
         }
+        ProcessBuilder pb = new ProcessBuilder("java", "-cp", cp, "com.codescope.Main");
         return pb
                 .redirectError(ProcessBuilder.Redirect.PIPE)
                 .redirectOutput(ProcessBuilder.Redirect.PIPE)

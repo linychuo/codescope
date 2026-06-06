@@ -1,9 +1,5 @@
 package com.codescope;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -12,19 +8,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * MCP tool: given a (class, method) pair, returns a nested tree of every
- * method that calls it, recursively, until no more callers are found.
- *
- * Caches the reverse call index per project root, so repeated queries on
- * the same project re-use the parsed ASTs.
+ * MCP adapter for {@code trace_callers}. Argument parsing + JSON envelope
+ * live here; the actual indexing and analysis live in
+ * {@link TraceCallersService}.
  */
 public final class TraceCallersTool implements Tool {
 
-    private final ObjectMapper json = new ObjectMapper();
-    private final JdtIndexer indexer = new JdtIndexer();
-    private final CallChainAnalyzer analyzer = new CallChainAnalyzer();
-
-    private final Map<Path, ProjectIndex> indexCache = new LinkedHashMap<>();
+    private final TraceCallersService service = new TraceCallersService();
 
     /** Supplied by the host via MCP `roots`; used when the tool call omits `project`. */
     private volatile String hostDefaultProject;
@@ -76,46 +66,11 @@ public final class TraceCallersTool implements Tool {
         List<String> paramTypes = optionalStringList(args, "paramTypes");
         Path projectRoot = resolveProjectRoot(args);
 
-        if (!Files.isDirectory(projectRoot)) {
-            return ToolResult.err("Project root is not a directory: " + projectRoot);
-        }
-        if (!Files.isRegularFile(projectRoot.resolve("pom.xml"))) {
-            return ToolResult.err("No pom.xml at " + projectRoot
-                    + " — only Maven projects are supported in this version.");
-        }
-
-        ProjectIndex index = indexCache.computeIfAbsent(projectRoot, this::buildIndex);
-
-        MethodKey target;
         try {
-            target = index.resolveTarget(className, methodName, arity, paramTypes);
-        } catch (ProjectIndex.AmbiguousMethodException e) {
-            return ToolResult.err(e.getMessage() + " Available overloads: "
-                    + index.findOverloads(className, methodName).stream()
-                            .map(MethodKey::toString)
-                            .toList());
-        }
-        if (target == null) {
-            return ToolResult.err("Could not find a method '" + methodName + "' declared in '"
-                    + className + (arity != null ? "' with arity " + arity : "")
-                    + "'. Check that the project sources are on the analyzed source roots.");
-        }
-
-        CallChainAnalyzer.Result r = analyzer.traceCallers(index, target);
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("target", r.root().toJson());
-        out.put("status", r.found() ? "ok" : "not_found");
-        out.put("message", r.message());
-        return ToolResult.ok(json.writeValueAsString(out));
-    }
-
-    private ProjectIndex buildIndex(Path projectRoot) {
-        try {
-            ProjectLoader.LoadResult load = new ProjectLoader().load(projectRoot);
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), projectRoot);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to load project at " + projectRoot + ": " + e.getMessage(), e);
+            String json = service.traceCallersJson(className, methodName, arity, paramTypes, projectRoot);
+            return ToolResult.text(json);
+        } catch (TraceCallersService.TraceCallersException e) {
+            return ToolResult.error(e.getMessage());
         }
     }
 

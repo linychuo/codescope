@@ -33,16 +33,28 @@ import java.util.function.Consumer;
  */
 public final class McpServer {
 
+    private static final int STDIN_CHUNK_SIZE = 4096;
+    private static final long REQUEST_ID_BASE = 1_000_000L;  // avoids collision with client-side small ids
+    private static final int ROOTS_FETCH_TIMEOUT_SECONDS = 2;
+
     private final ObjectMapper json = new ObjectMapper();
     private final ToolRegistry tools = new ToolRegistry();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Object stdoutLock = new Object();
 
-    private final AtomicLong nextId = new AtomicLong(1_000_000);     // avoids collision with client-side small ids
+    private final AtomicLong nextId = new AtomicLong(REQUEST_ID_BASE);
     private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 
     /** Notified (off the I/O thread) with the first workspace root the host advertises. */
     private volatile Consumer<String> defaultProjectRootSink;
+
+    /**
+     * Wrapper over System.in whose {@link #close()} only sets a flag — we
+     * never close the underlying System.in because that would permanently
+     * break stdio for the rest of the JVM. The flag is checked by
+     * {@link #run()} to exit the read loop on {@link #stop()}.
+     */
+    private final CloseableInputStream stdin = new CloseableInputStream(System.in);
 
     public McpServer register(Tool tool) {
         tools.register(tool);
@@ -60,9 +72,9 @@ public final class McpServer {
     }
 
     public void run() throws IOException {
-        InputStream in = System.in;
+        InputStream in = stdin;
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        byte[] chunk = new byte[4096];
+        byte[] chunk = new byte[STDIN_CHUNK_SIZE];
         int n;
         while (running.get() && (n = in.read(chunk)) != -1) {
             for (int i = 0; i < n; i++) {
@@ -77,6 +89,8 @@ public final class McpServer {
     private boolean tryParseAndDispatch(ByteArrayOutputStream buf) {
         if (buf.size() == 0) return false;
         byte[] bytes = buf.toByteArray();
+        // Validate that the buffer holds exactly one complete JSON object
+        // (no incomplete prefix, no trailing junk after the first object).
         try (JsonParser p = json.getFactory().createParser(bytes)) {
             p.nextToken();
             if (p.currentToken() == null) return false;
@@ -97,10 +111,14 @@ public final class McpServer {
         }
     }
 
-    public void stop() { running.set(false); }
+    public void stop() {
+        running.set(false);
+        stdin.close();
+    }
 
+    // package-private for direct unit tests; not part of the public API.
     @SuppressWarnings("unchecked")
-    private void handle(Map<String, Object> msg) throws IOException {
+    void handle(Map<String, Object> msg) throws IOException {
         // Response to a server-initiated request?
         if (msg.containsKey("result") || msg.containsKey("error")) {
             Object idObj = msg.get("id");
@@ -124,6 +142,11 @@ public final class McpServer {
                     || "notifications/cancelled".equals(method)) {
                 return;
             }
+            return;
+        }
+
+        if (method == null) {
+            sendError(id, -32600, "Invalid request: missing 'method'");
             return;
         }
 
@@ -155,7 +178,8 @@ public final class McpServer {
 
     private void tryFetchRoots() {
         try {
-            JsonNode result = sendRequestAwait("roots/list", null, 2, TimeUnit.SECONDS);
+            JsonNode result = sendRequestAwait("roots/list", null,
+                    ROOTS_FETCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             JsonNode roots = result.get("roots");
             if (roots == null || !roots.isArray() || roots.isEmpty()) return;
             String uri = roots.get(0).path("uri").asText(null);
@@ -203,30 +227,37 @@ public final class McpServer {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> invokeTool(Map<String, Object> params) {
-        String name = (String) params.get("name");
+        if (params == null) {
+            return toolErrorResult("Missing params");
+        }
+        Object nameObj = params.get("name");
+        if (!(nameObj instanceof String name)) {
+            return toolErrorResult("Missing or non-string 'name'");
+        }
         Map<String, Object> args = (Map<String, Object>) params.get("arguments");
         Tool t = tools.get(name);
         if (t == null) {
-            return toolError("Unknown tool: " + name);
+            return toolErrorResult("Unknown tool: " + name);
         }
         try {
-            Tool.ToolResult r = t.invoke(args == null ? Map.of() : args);
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("content", List.of(Map.of("type", "text", "text", r.text())));
-            if (!r.errors().isEmpty()) {
-                out.put("isError", true);
-            }
-            return out;
+            return wrap(t.invoke(args == null ? Map.of() : args));
+        } catch (IllegalArgumentException e) {
+            return toolErrorResult("Invalid arguments: " + e.getMessage());
         } catch (Exception e) {
-            return toolError("Tool execution failed: " + e.getMessage());
+            return toolErrorResult("Tool execution failed: " + e.getMessage());
         }
     }
 
-    private static Map<String, Object> toolError(String message) {
+    /** Wraps a tool result in the {@code tools/call} response shape. */
+    private static Map<String, Object> wrap(Tool.ToolResult r) {
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("isError", true);
-        out.put("content", List.of(Map.of("type", "text", "text", message)));
+        out.put("content", r.content());
+        if (r.isError()) out.put("isError", true);
         return out;
+    }
+
+    private static Map<String, Object> toolErrorResult(String message) {
+        return wrap(Tool.ToolResult.error(message));
     }
 
     private void respond(Object id, Object result) throws IOException {
@@ -259,13 +290,47 @@ public final class McpServer {
     }
 
     static final class ToolRegistry {
-        private final List<Tool> tools = new ArrayList<>();
-        void register(Tool t) { tools.add(t); }
-        Tool get(String name) { return tools.stream().filter(t -> t.name().equals(name)).findFirst().orElse(null); }
+        private final Map<String, Tool> byName = new LinkedHashMap<>();
+
+        void register(Tool t) {
+            Tool prev = byName.putIfAbsent(t.name(), t);
+            if (prev != null) {
+                throw new IllegalStateException("Duplicate tool name: " + t.name());
+            }
+        }
+
+        Tool get(String name) { return byName.get(name); }
+
         List<Map<String, Object>> list() {
-            List<Map<String, Object>> out = new ArrayList<>();
-            for (Tool t : tools) out.add(t.definition());
+            List<Map<String, Object>> out = new ArrayList<>(byName.size());
+            for (Tool t : byName.values()) out.add(t.definition());
             return out;
+        }
+    }
+
+    /**
+     * InputStream wrapper that lets {@link McpServer#stop()} unblock the
+     * read loop without permanently closing the JVM's stdin.
+     */
+    private static final class CloseableInputStream extends InputStream {
+        private final InputStream delegate;
+        private volatile boolean closed = false;
+
+        CloseableInputStream(InputStream delegate) { this.delegate = delegate; }
+
+        @Override public int read() throws IOException { ensureOpen(); return delegate.read(); }
+        @Override public int read(byte[] b, int off, int len) throws IOException {
+            ensureOpen();
+            return delegate.read(b, off, len);
+        }
+        @Override public int available() throws IOException {
+            ensureOpen();
+            return delegate.available();
+        }
+        @Override public void close() { closed = true; }
+
+        private void ensureOpen() throws IOException {
+            if (closed) throw new IOException("stdin closed");
         }
     }
 }

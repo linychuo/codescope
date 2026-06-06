@@ -1,6 +1,8 @@
 package com.codescope;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,26 +33,62 @@ public final class CallNode {
         this.cycle = cycle;
     }
 
+    /**
+     * Builds a back-edge marker for a method that has already been visited
+     * on the current chain. Markers carry class + method + arity but no
+     * source location, so the tree stays compact when cycles are present.
+     */
+    public static CallNode cycleMarker(String className, String methodName, int arity) {
+        return new CallNode(className, methodName, arity, null, 0, true);
+    }
+
     public CallNode addChild(CallNode child) {
         callers.add(child);
         return child;
     }
 
-    /** Serialize to a JSON-shaped map (so Jackson emits clean output). */
+    /**
+     * Serialize to a JSON-shaped map. Iterative (not recursive) so deep call
+     * chains — up to {@code MAX_NODES} — don't blow the JVM stack.
+     *
+     * <p>Each occurrence of a {@code CallNode} in the tree becomes its own
+     * map: the same method reached via two paths produces two distinct maps,
+     * matching the prior recursive semantics.
+     */
     public Map<String, Object> toJson() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("class", className);
-        m.put("method", methodName);
-        m.put("arity", arity);
-        m.put("signature", signature);
-        if (cycle) m.put("cycle", true);
-        if (file != null) m.put("file", file);
-        if (line > 0) m.put("line", line);
-        if (!callers.isEmpty()) {
-            List<Map<String, Object>> kids = new ArrayList<>(callers.size());
-            for (CallNode c : callers) kids.add(c.toJson());
-            m.put("callers", kids);
+        Map<String, Object> rootMap = new LinkedHashMap<>();
+        Deque<Frame> stack = new ArrayDeque<>();
+        stack.push(new Frame(this, rootMap, false));
+        while (!stack.isEmpty()) {
+            Frame f = stack.pop();
+            if (f.built) continue;
+            // First pass: emit this node's own fields.
+            if (f.node.file != null) f.map.put("file", f.node.file);
+            if (f.node.line > 0) f.map.put("line", f.node.line);
+            f.map.put("class", f.node.className);
+            f.map.put("method", f.node.methodName);
+            f.map.put("arity", f.node.arity);
+            f.map.put("signature", f.node.signature);
+            if (f.node.cycle) f.map.put("cycle", true);
+            if (f.node.callers.isEmpty()) continue;
+            // Create child maps, then push post-visit for self first so it
+            // runs after all children are in the stack.
+            List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
+            List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
+            for (CallNode c : f.node.callers) {
+                Map<String, Object> childMap = new LinkedHashMap<>();
+                kids.add(childMap);
+                childFrames.add(new Frame(c, childMap, false));
+            }
+            f.map.put("callers", kids);
+            stack.push(new Frame(f.node, f.map, true));  // post-visit: skip re-emit
+            // Children pushed in reverse so they're processed in source order.
+            for (int i = childFrames.size() - 1; i >= 0; i--) {
+                stack.push(childFrames.get(i));
+            }
         }
-        return m;
+        return rootMap;
     }
+
+    private record Frame(CallNode node, Map<String, Object> map, boolean built) {}
 }

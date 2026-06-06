@@ -4,14 +4,19 @@ import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
+import org.eclipse.jdt.core.dom.AbstractTypeDeclaration;
+import org.eclipse.jdt.core.dom.AnnotationTypeDeclaration;
 import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.ConstructorInvocation;
+import org.eclipse.jdt.core.dom.EnumDeclaration;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.ImplicitTypeDeclaration;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.PackageDeclaration;
+import org.eclipse.jdt.core.dom.RecordDeclaration;
 import org.eclipse.jdt.core.dom.SuperConstructorInvocation;
 import org.eclipse.jdt.core.dom.SuperMethodInvocation;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
@@ -24,6 +29,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /** Walks Java source files and produces a {@link ProjectIndex}. */
 public final class JdtIndexer {
@@ -44,38 +54,69 @@ public final class JdtIndexer {
 
         String[] cp = classpath.toArray(new String[0]);
         String[] sp = sourcepath.toArray(new String[0]);
-
         String[] encodingNames = null;  // null = platform default encoding
 
-        for (Path src : sources) {
-            char[] content;
-            try {
-                content = Files.readString(src, StandardCharsets.UTF_8).toCharArray();
-            } catch (IOException e) {
-                continue;   // skip unreadable files
+        int nThreads = Math.min(sources.size(), Runtime.getRuntime().availableProcessors());
+        ExecutorService pool = Executors.newFixedThreadPool(nThreads);
+        try {
+            List<Future<?>> futures = new ArrayList<>(sources.size());
+            for (Path src : sources) {
+                futures.add(pool.submit(() -> parseFile(src, cp, sp, encodingNames, projectRoot, index)));
             }
-
-            ASTParser parser = ASTParser.newParser(AST.JLS_Latest);
-            parser.setSource(content);
-            parser.setUnitName(src.toString());
-            parser.setEnvironment(cp, sp, encodingNames, true);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            parser.setKind(ASTParser.K_COMPILATION_UNIT);
-
-            CompilationUnit cu;
-            try {
-                cu = (CompilationUnit) parser.createAST(null);
-            } catch (RuntimeException e) {
-                // bad source, skip
-                continue;
+            for (Future<?> f : futures) {
+                try {
+                    f.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (ExecutionException e) {
+                    // Already logged inside the task; skip
+                }
             }
-            if (cu == null) continue;
-
-            String relPath = relativize(src, projectRoot);
-            cu.accept(new CallSiteVisitor(index, relPath));
+        } finally {
+            pool.shutdown();
+            try {
+                if (!pool.awaitTermination(30, TimeUnit.SECONDS)) pool.shutdownNow();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                pool.shutdownNow();
+            }
         }
         return index;
+    }
+
+    private void parseFile(Path src, String[] cp, String[] sp, String[] encodingNames,
+                           Path projectRoot, ProjectIndex index) {
+        char[] content;
+        try {
+            content = Files.readString(src, StandardCharsets.UTF_8).toCharArray();
+        } catch (IOException e) {
+            index.recordSkippedFile(src.toString(), "read error: " + e.getMessage());
+            return;
+        }
+
+        ASTParser parser = ASTParser.newParser(AST.JLS_Latest);
+        parser.setSource(content);
+        parser.setUnitName(src.toString());
+        parser.setEnvironment(cp, sp, encodingNames, true);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        parser.setKind(ASTParser.K_COMPILATION_UNIT);
+
+        CompilationUnit cu;
+        try {
+            cu = (CompilationUnit) parser.createAST(null);
+        } catch (RuntimeException e) {
+            index.recordSkippedFile(src.toString(), "parse error: " + e.getMessage());
+            return;
+        }
+        if (cu == null) {
+            index.recordSkippedFile(src.toString(), "AST was null");
+            return;
+        }
+
+        String relPath = relativize(src, projectRoot);
+        cu.accept(new CallSiteVisitor(index, relPath));
     }
 
     private static String relativize(Path file, Path root) {
@@ -87,7 +128,19 @@ public final class JdtIndexer {
         }
     }
 
-    /** AST visitor that records method declarations and call edges. */
+    /**
+     * AST visitor that records method declarations and call edges. Pushes the
+     * enclosing type onto a stack on every type-declaration entry so that
+     * {@code visit(MethodDeclaration)} can attribute each method to its
+     * declaring FQN.
+     *
+     * <p>Covers {@code class}/{@code interface} (TypeDeclaration),
+     * {@code enum}, {@code record}, and {@code @interface} declarations.
+     * In JDT 3.45 with bindings enabled, top-level records may be wrapped in
+     * an {@link ImplicitTypeDeclaration}; we enter/exit that too for forward
+     * compatibility, but its body only carries the canonical constructor
+     * (a known JDT 3.45 limitation — see {@code Point} test fixture).
+     */
     private static final class CallSiteVisitor extends ASTVisitor {
         private final ProjectIndex index;
         private final String file;
@@ -108,13 +161,63 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(TypeDeclaration node) {
-            typeStack.push(node.getName().getFullyQualifiedName());
+            typeStack.push(nameOf(node));
             return true;
         }
 
         @Override
         public void endVisit(TypeDeclaration node) {
             typeStack.pop();
+        }
+
+        @Override
+        public boolean visit(EnumDeclaration node) {
+            typeStack.push(nameOf(node));
+            return true;
+        }
+
+        @Override
+        public void endVisit(EnumDeclaration node) {
+            typeStack.pop();
+        }
+
+        @Override
+        public boolean visit(RecordDeclaration node) {
+            typeStack.push(nameOf(node));
+            return true;
+        }
+
+        @Override
+        public void endVisit(RecordDeclaration node) {
+            typeStack.pop();
+        }
+
+        @Override
+        public boolean visit(AnnotationTypeDeclaration node) {
+            typeStack.push(nameOf(node));
+            return true;
+        }
+
+        @Override
+        public void endVisit(AnnotationTypeDeclaration node) {
+            typeStack.pop();
+        }
+
+        @Override
+        public boolean visit(ImplicitTypeDeclaration node) {
+            // JDT 3.45 wraps top-level records here when bindings are enabled.
+            // The name is empty; we still enter so nested visits are scoped.
+            typeStack.push(nameOf(node));
+            return true;
+        }
+
+        @Override
+        public void endVisit(ImplicitTypeDeclaration node) {
+            typeStack.pop();
+        }
+
+        private static String nameOf(AbstractTypeDeclaration node) {
+            return node.getName() == null ? "" : node.getName().getFullyQualifiedName();
         }
 
         @Override

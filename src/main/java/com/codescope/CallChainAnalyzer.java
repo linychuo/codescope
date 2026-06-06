@@ -70,9 +70,8 @@ public final class CallChainAnalyzer {
                     }
                 } else {
                     // back-edge: mark it on the parent so the tree stays finite
-                    f.node.addChild(new CallNode(
-                            caller.declaringClass, caller.methodName, caller.arity,
-                            null, 0, true));
+                    f.node.addChild(CallNode.cycleMarker(
+                            caller.declaringClass, caller.methodName, caller.arity));
                 }
             }
         }

@@ -186,4 +186,58 @@ class CallChainAnalyzerTest {
                     "test class leaked into declarations: " + k);
         }
     }
+
+    @Test
+    void indexesMethodsInEnum() {
+        MethodKey label = mustResolve(index, "com.example.Kind", "label");
+        assertNotNull(label, "Kind.label should be discoverable (enum methods are declared inside enums)");
+        assertEquals(0, label.arity);
+    }
+
+    @Test
+    void indexesRecordFileWithoutCrashing() {
+        // JDT 3.45 with bindings enabled wraps top-level records in an
+        // ImplicitTypeDeclaration whose body only carries the canonical
+        // constructor — explicit record methods are not reachable through the
+        // AST. We don't expect distanceFromOrigin to be indexed, but the file
+        // must not abort the build. Trigger an indexer pass on a record file.
+        try {
+            index.resolveTarget("com.example.Point", "distanceFromOrigin");
+        } catch (ProjectIndex.AmbiguousMethodException e) {
+            // not expected, but not a crash
+        }
+        // The fixture sources must still all be present in the index's known methods
+        // (i.e. the other types like Target, Mid, etc. survived the parse pass).
+        assertFalse(index.knownMethods().isEmpty());
+        // And the non-record enum fixture is still tracked (regression guard for #8).
+        assertDoesNotThrow(() -> mustResolve(index, "com.example.Kind", "label"));
+    }
+
+    @Test
+    void walksIntoAnnotationDeclaration() {
+        // No methods to index in @interface (annotation members are not MethodDeclarations),
+        // but the indexer must not crash and the annotation's FQN must be reachable.
+        // Use findOverloads to confirm the type is in the index.
+        // (Marker has no regular methods, so we just confirm the type can be referenced.)
+        MethodKey marker = mustResolve(index, "com.example.Marker", "value");
+        // `value` is an annotation member, not a method declaration; it won't be in the index.
+        // We're really asserting that the indexer survived the AnnotationTypeDeclaration visit.
+        assertNull(marker, "annotation members are not MethodDeclarations; expected no entry");
+        // And the indexer must not have crashed. Spot-check the index is still consistent:
+        assertFalse(index.knownMethods().isEmpty());
+    }
+
+    @Test
+    void tracesCallersIntoEnumMethod() {
+        MethodKey label = mustResolve(index, "com.example.Kind", "label");
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, label);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers = (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers, "expected SpecialCaller.useEnumMethod as a caller");
+        assertEquals(1, callers.size());
+        assertEquals("com.example.SpecialCaller", callers.get(0).get("class"));
+        assertEquals("useEnumMethod", callers.get(0).get("method"));
+    }
 }

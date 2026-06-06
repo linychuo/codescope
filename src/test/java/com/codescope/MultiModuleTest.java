@@ -1,6 +1,7 @@
 package com.codescope;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -52,51 +53,36 @@ class MultiModuleTest {
     }
 
     @Test
-    void skipsTargetDirectoriesWhenLookingForPoms() throws IOException {
+    void skipsTargetDirectoriesWhenLookingForPoms(@TempDir Path root) throws IOException {
         // Even if there's a stale target/.../pom.xml (e.g. resolved-pom copy), ignore it.
-        Path root = Files.createTempDirectory("cs-test");
-        try {
-            Files.createDirectories(root.resolve("src/main/java"));
-            Files.writeString(root.resolve("pom.xml"), "<project/>");
-            // Drop a stray pom.xml inside target/ to verify it's ignored
-            Files.createDirectories(root.resolve("target"));
-            Files.writeString(root.resolve("target/pom.xml"), "<project/>");
+        Files.createDirectories(root.resolve("src/main/java"));
+        Files.writeString(root.resolve("pom.xml"), "<project/>");
+        // Drop a stray pom.xml inside target/ to verify it's ignored
+        Files.createDirectories(root.resolve("target"));
+        Files.writeString(root.resolve("target/pom.xml"), "<project/>");
 
-            List<Path> poms = MavenClasspathResolver.findPoms(root);
-            assertEquals(1, poms.size(), "expected only the top-level pom, got " + poms);
-            assertTrue(poms.get(0).getFileName().toString().equals("pom.xml"));
-        } finally {
-            // best-effort cleanup
-            try (var s = Files.walk(root)) {
-                s.sorted((a, b) -> b.getNameCount() - a.getNameCount())
-                        .forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignored) {} });
-            }
-        }
+        List<Path> poms = MavenClasspathResolver.findPoms(root);
+        assertEquals(1, poms.size(), "expected only the top-level pom, got " + poms);
+        assertTrue(poms.get(0).getFileName().toString().equals("pom.xml"));
     }
 
     @Test
-    void settingsParserExtractsLocalRepository() throws IOException {
-        Path tmp = Files.createTempDirectory("cs-settings");
-        try {
-            Path settings = tmp.resolve("settings.xml");
-            Files.writeString(settings, """
-                    <settings>
-                      <localRepository>/var/maven/custom-repo</localRepository>
-                    </settings>
-                    """);
-            Path repo = MavenSettings.readLocalRepository(settings);
-            assertNotNull(repo);
-            assertEquals("/var/maven/custom-repo", repo.toString());
+    void settingsParserExtractsLocalRepository(@TempDir Path tmp) throws IOException {
+        Path settings = tmp.resolve("settings.xml");
+        Files.writeString(settings, """
+                <settings>
+                  <localRepository>/var/maven/custom-repo</localRepository>
+                </settings>
+                """);
+        Path repo = MavenSettings.readLocalRepository(settings);
+        assertNotNull(repo);
+        assertEquals("/var/maven/custom-repo", repo.toString());
 
-            // missing file -> null
-            assertNull(MavenSettings.readLocalRepository(tmp.resolve("nope.xml")));
+        // missing file -> null
+        assertNull(MavenSettings.readLocalRepository(tmp.resolve("nope.xml")));
 
-            // malformed xml -> null (don't crash)
-            Files.writeString(settings, "<not-xml");
-            assertNull(MavenSettings.readLocalRepository(settings));
-        } finally {
-            Files.deleteIfExists(tmp.resolve("settings.xml"));
-            Files.deleteIfExists(tmp);
-        }
+        // malformed xml -> null (don't crash)
+        Files.writeString(settings, "<not-xml");
+        assertNull(MavenSettings.readLocalRepository(settings));
     }
 }
