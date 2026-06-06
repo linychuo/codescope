@@ -10,7 +10,7 @@ public final class Main {
         // MCP `roots` after `initialize`. Wire it into the tool so `project` is optional.
         server.onDefaultProjectRoot(tool::setHostDefaultProject);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
+        Runtime.getRuntime().addShutdownHook(new Thread(server::stop, "codescope-shutdown"));
 
         server.run();
     }
