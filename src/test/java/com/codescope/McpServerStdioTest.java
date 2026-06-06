@@ -107,6 +107,81 @@ class McpServerStdioTest {
         }
     }
 
+    @Test
+    void fetchesRootsWhenClientAdvertisesCapability() throws Exception {
+        Process proc = startServer();
+
+        try (BufferedReader out = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8));
+             OutputStream in = proc.getOutputStream()) {
+
+            // 1) initialize, declaring `roots` capability
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                    + "\"params\":{\"capabilities\":{\"roots\":{}}}}\n");
+            System.err.println("[t] sent initialize");
+            JsonNode initResp = readJson(out);
+            assertEquals("codescope", initResp.path("result").path("serverInfo").path("name").asText());
+
+            // 2) server should follow up with a `roots/list` request — respond with one root
+            JsonNode rootsReq = readJson(out);
+            assertEquals("roots/list", rootsReq.path("method").asText(),
+                    "expected server to call roots/list, got " + rootsReq);
+            long rootsReqId = rootsReq.path("id").asLong();
+            String rootsResp = "{\"jsonrpc\":\"2.0\",\"id\":" + rootsReqId
+                    + ",\"result\":{\"roots\":[{\"uri\":\"file://" + FIXTURE.toAbsolutePath()
+                    + "\",\"name\":\"fixture\"}]}}\n";
+            send(in, rootsResp);
+
+            // 3) a small grace period for the server to record the default
+            Thread.sleep(300);
+
+            // 4) tools/call WITHOUT a `project` arg should now succeed using the root
+            String args = JSON.writeValueAsString(java.util.Map.of(
+                    "class", "com.example.Target",
+                    "method", "leaf"));
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\","
+                    + "\"params\":{\"name\":\"trace_callers\",\"arguments\":" + args + "}}\n");
+            System.err.println("[t] sent tools/call");
+            JsonNode callResp = readJson(out);
+            String text = callResp.path("result").path("content").get(0).path("text").asText();
+            assertFalse(callResp.path("result").path("isError").asBoolean(),
+                    "expected successful call, got error: " + text);
+            JsonNode tree = JSON.readTree(text);
+            assertEquals("com.example.Target#leaf/0", tree.path("target").path("signature").asText());
+            assertTrue(tree.path("target").path("callers").size() >= 1);
+        } finally {
+            proc.destroy();
+            proc.waitFor(5, TimeUnit.SECONDS);
+            if (proc.isAlive()) proc.destroyForcibly();
+        }
+    }
+
+    @Test
+    void doesNotFetchRootsWhenClientDoesNotAdvertise() throws Exception {
+        Process proc = startServer();
+        try (BufferedReader out = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8));
+             OutputStream in = proc.getOutputStream()) {
+
+            // initialize WITHOUT roots capability
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                    + "\"params\":{\"capabilities\":{}}}\n");
+            JsonNode initResp = readJson(out);
+            assertEquals("codescope", initResp.path("result").path("serverInfo").path("name").asText());
+
+            // Verify the server didn't send any other message in the meantime:
+            // tools/list should be the next thing we get.
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
+            JsonNode listResp = readJson(out);
+            assertEquals(2, listResp.path("id").asInt());
+            assertTrue(listResp.path("result").path("tools").isArray());
+        } finally {
+            proc.destroy();
+            proc.waitFor(5, TimeUnit.SECONDS);
+            if (proc.isAlive()) proc.destroyForcibly();
+        }
+    }
+
     private Process startServer() throws Exception {
         // Prefer the packaged fat jar (covers `mvn package && mvn test`).
         // Fall back to launching via the surefire-supplied classpath so the test

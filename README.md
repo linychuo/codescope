@@ -18,8 +18,13 @@
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `class` | 是 | 类的完全限定名,例如 `com.example.Foo` |
-| `method` | 是 | 方法名,例如 `bar`。同名重载不会消歧,匹配第一个 |
-| `project` | 否 | Maven 项目根目录的绝对路径,默认是 MCP host 的当前工作目录 |
+| `method` | 是 | 方法名,例如 `bar` |
+| `arity` | 否 | 参数个数;用于同名重载消歧。`paramTypes` 更精确时优先用 `paramTypes` |
+| `paramTypes` | 否 | 参数类型的完全限定名数组,例如 `["int", "java.lang.String"]`;和 `arity` 一起用来挑出唯一重载 |
+| `project` | 否 | Maven 项目根目录的绝对路径。优先级:本参数 > MCP host 声明的 `roots` > 当前工作目录 |
+
+不传 `arity`/`paramTypes` 而同名方法有多个重载,会报
+`AmbiguousMethodException` 并列出所有候选重载,让你在下次调用里补上。
 
 **输出**: 嵌套 JSON 树。
 
@@ -73,10 +78,13 @@
 
 ## 限制
 
-- 只支持 Maven 项目(读 `pom.xml` 找依赖)
+- 只支持 Maven 项目(读 `pom.xml` 找依赖)。**多模块项目**也支持 —— 顺着 `pom.xml` 树把所有
+  模块的源根都收进来,只要每个子模块有自己的 `pom.xml`
+- 本地 Maven 仓库优先用 `~/.m2/settings.xml` 里的 `<localRepository>`,否则才是 `~/.m2/repository`
+- 只看项目 `src/main/java` 下的源码 —— `src/test/java` 排除掉(测试代码不参与调用链)
 - 只看**项目里**的 `.java` 源码 —— `~/.m2/repository/*.jar` 里的方法调用看不到
   (虽然 binding resolution 会用到 jar 让跨文件类型解析能成功)
-- 重载按 `methodName` 匹配,匹配第一个 arity 命中
+- 重载必须用 `arity` 或 `paramTypes` 显式消歧,否则报错并列出所有候选
 - 构造方法(`<init>`)也按方法处理
 - 一次会话里同一个 project 路径的索引只构建一次,缓存复用
 
@@ -117,9 +125,11 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-包含两组:
+包含三组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
-  验证:传递调用、重载、未被调用、不存在的方法、循环。
+  验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码。
+- `MultiModuleTest` —— 验证多模块项目源码收集、`settings.xml` 解析、产物目录过滤。
 - `McpServerStdioTest` —— `ProcessBuilder` 启 fat jar,发 `initialize` / `tools/list` /
-  `tools/call` 三连,验证整条 stdio 链。
+  `tools/call`,验证整条 stdio 链,包括 MCP `roots` capability(host 声明后
+  服务端主动 `roots/list` 拿默认 project)。
