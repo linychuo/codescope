@@ -191,10 +191,24 @@ class McpServerStdioTest {
             throw new IllegalStateException("no classpath available");
         }
         ProcessBuilder pb = new ProcessBuilder("java", "-cp", cp, "com.codescope.Main");
-        return pb
+        Process proc = pb
                 .redirectError(ProcessBuilder.Redirect.PIPE)
                 .redirectOutput(ProcessBuilder.Redirect.PIPE)
                 .start();
+        // Drain stderr to a side thread so a startup failure (ClassNotFound,
+        // JDT native loader, etc.) surfaces as test output instead of a
+        // silent EOF on stdout.
+        Thread t = new Thread(() -> {
+            try (var r = new BufferedReader(new InputStreamReader(proc.getErrorStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    System.err.println("[server-stderr] " + line);
+                }
+            } catch (Exception ignored) { }
+        }, "server-stderr-drain");
+        t.setDaemon(true);
+        t.start();
+        return proc;
     }
 
     private static void send(OutputStream in, String json) throws Exception {
@@ -213,6 +227,8 @@ class McpServerStdioTest {
                 // skip non-JSON lines (defensive)
             }
         }
-        throw new IllegalStateException("server closed stdout before responding");
+        throw new IllegalStateException("server closed stdout before responding — "
+                + "likely the subprocess failed to start (check the surefire classpath, "
+                + "JDT native hooks, or stdout buffering)");
     }
 }
