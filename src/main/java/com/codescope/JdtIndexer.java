@@ -6,6 +6,7 @@ import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.AbstractTypeDeclaration;
 import org.eclipse.jdt.core.dom.AnnotationTypeDeclaration;
+import org.eclipse.jdt.core.dom.AnonymousClassDeclaration;
 import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.ConstructorInvocation;
@@ -122,7 +123,17 @@ public final class JdtIndexer {
             index.recordSkippedFile(src.toString(), "not under project root: " + e.getMessage());
             return;
         }
-        cu.accept(new CallSiteVisitor(index, relPath));
+        try {
+            cu.accept(new CallSiteVisitor(index, relPath));
+        } catch (RuntimeException e) {
+            // The visitor itself doesn't throw, but JDT's binding recovery
+            // can throw a RuntimeException deep in a BindingResolver
+            // callback when a project's source path is misconfigured.
+            // The parse phase already returned a (possibly partial) AST;
+            // record the failure and let the index carry on without this
+            // file's contributions.
+            index.recordSkippedFile(src.toString(), "visit error: " + e.getMessage());
+        }
     }
 
     private static String relativize(Path file, Path root) {
@@ -220,6 +231,23 @@ public final class JdtIndexer {
 
         @Override
         public void endVisit(ImplicitTypeDeclaration node) {
+            typeStack.pop();
+        }
+
+        @Override
+        public boolean visit(AnonymousClassDeclaration node) {
+            // `new Foo() { void bar() {} }` introduces a synthesized type
+            // whose JDT binary name is "Enclosing$1", "Enclosing$2", etc.
+            // Without this visit, the inner method would be attributed to
+            // the enclosing class, producing wrong call-edge source
+            // locations in the chain.
+            ITypeBinding b = node.resolveBinding();
+            typeStack.push(b != null ? b.getQualifiedName() : "<anon>");
+            return true;
+        }
+
+        @Override
+        public void endVisit(AnonymousClassDeclaration node) {
             typeStack.pop();
         }
 
