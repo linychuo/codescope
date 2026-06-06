@@ -4,3 +4,4 @@ target/
 *.iml
 dependency-reduced-pom.xml.jdt-cache/
 .jdt-cache/
+codescope.jar
