@@ -81,6 +81,11 @@ public final class McpServer {
         while (running.get() && (n = in.read(chunk)) != -1) {
             for (int i = 0; i < n; i++) {
                 byte b = chunk[i];
+                // Skip pure framing whitespace. Per RFC 8259, raw control
+                // characters (including \r and \n) MUST NOT appear inside
+                // JSON strings — they have to be escaped as \r / \n. So
+                // stripping them at the byte level is safe against
+                // spec-compliant hosts and never corrupts string values.
                 if (b == (byte) '\n' || b == (byte) '\r') continue;
                 buf.write(b);
                 // tryParseAndDispatch owns buf on success: it removes the
@@ -375,7 +380,13 @@ public final class McpServer {
             if (id != null) resp.put("id", id);
             resp.put("error", err);
             writeLine(json.writeValueAsBytes(resp));
-        } catch (IOException ignored) { }
+        } catch (IOException e) {
+            // A misconfigured pipe (broken parent process, redirected
+            // stdout to a non-writable file, etc.) leaves us with nowhere
+            // to send the JSON-RPC error. Stderr is the only remaining
+            // channel — log there so the failure is visible at all.
+            System.err.println("[codescope] failed to write error response: " + e);
+        }
     }
 
     private void writeLine(byte[] payload) throws IOException {
