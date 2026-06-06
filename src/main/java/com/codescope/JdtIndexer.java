@@ -332,9 +332,19 @@ public final class JdtIndexer {
             if (typeStack.isEmpty()) return packageName.isEmpty() ? "<unknown>" : packageName;
             StringBuilder sb = new StringBuilder();
             if (!packageName.isEmpty()) sb.append(packageName).append('.');
+            // typeStack is a Deque used as a stack (push = addFirst), so its
+            // iterator visits head-first — i.e. the *innermost* type first.
+            // Naïve iteration produces "package.Inner.Outer", reversing the
+            // nesting; we want outermost first to match what the user types
+            // and what IMethodBinding.getDeclaringClass().getQualifiedName()
+            // returns for calls into nested types. Use '.' separator (not
+            // '$') because the binding side uses getQualifiedName() which is
+            // dotted; mismatched separators silently split the call graph.
             boolean first = true;
-            for (String t : typeStack) {
-                if (!first) sb.append('$');
+            var it = typeStack.descendingIterator();
+            while (it.hasNext()) {
+                String t = it.next();
+                if (!first) sb.append('.');
                 sb.append(t);
                 first = false;
             }

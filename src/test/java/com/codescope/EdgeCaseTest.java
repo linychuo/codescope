@@ -376,6 +376,51 @@ class EdgeCaseTest {
                 + index.knownMethods().stream().filter(k -> k.methodName.equals("target")).toList());
     }
 
+    @Test
+    void nestedClassMethodsUseDottedFqn(@TempDir Path tmp) throws IOException {
+        // A method declared inside Outer.Inner.Deepest must be indexed under
+        // FQN "com.example.Outer.Inner.Deepest" — outermost first, dotted,
+        // matching what IMethodBinding.getDeclaringClass().getQualifiedName()
+        // returns at call sites. The naïve head-first iteration of the
+        // type-stack would produce "com.example.Deepest.Inner.Outer", and
+        // a $-separator would split the graph from the dotted binding side
+        // — both silently break trace_callers for any nested-class project.
+        Files.writeString(tmp.resolve("Outer.java"), """
+                package com.example;
+                public class Outer {
+                    static class Inner {
+                        static class Deepest {
+                            void leaf() {}
+                        }
+                    }
+                    void callsLeaf() {
+                        new Inner.Deepest().leaf();
+                    }
+                }
+                """);
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(tmp.resolve("Outer.java")), List.of(), List.of(), tmp);
+
+        // (a) Declaration is attributed to the correct nested FQN.
+        boolean declCorrect = index.knownMethods().stream()
+                .anyMatch(k -> k.declaringClass.equals("com.example.Outer.Inner.Deepest")
+                            && k.methodName.equals("leaf"));
+        assertTrue(declCorrect, "expected declaration FQN com.example.Outer.Inner.Deepest, "
+                + "got: " + index.knownMethods());
+
+        // (b) The call edge links: a call to Outer.Inner.Deepest#leaf from
+        //     Outer#callsLeaf must show up. Catches the regression where
+        //     decl FQN and binding FQN diverge (different order or
+        //     separator) and silently split the call graph.
+        MethodKey leaf = new MethodKey("com.example.Outer.Inner.Deepest", "leaf", 0, List.of());
+        List<MethodKey> callers = index.callersOf(leaf);
+        assertFalse(callers.isEmpty(),
+                "expected callsLeaf linked as caller of Outer.Inner.Deepest#leaf, "
+                + "got no callers; all calls: " + index.allCalls());
+        assertTrue(callers.stream().anyMatch(k -> k.methodName.equals("callsLeaf")),
+                "expected callsLeaf among callers, got: " + callers);
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
