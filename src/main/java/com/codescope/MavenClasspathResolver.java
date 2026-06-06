@@ -158,9 +158,11 @@ public final class MavenClasspathResolver {
         Path exactPath = base.resolve(exact);
         if (Files.isRegularFile(exactPath)) return exactPath;
 
-        // Fallback: pick the first jar that isn't sources/javadoc. The directory
-        // layout is not guaranteed (e.g. classifier-bearing versions), so be
-        // defensive about what counts as the "main" jar.
+        // Fallback: when the conventional name is missing (a version with a
+        // classifier but no plain jar, or a manually-published artifact),
+        // we have to pick the best available. Filter out sources/javadoc/
+        // tests jars, then prefer the shortest filename — the main jar
+        // conventionally has no extra suffix.
         try (Stream<Path> s = Files.list(base)) {
             return s
                     .filter(p -> p.getFileName().toString().endsWith(".jar"))
@@ -170,7 +172,15 @@ public final class MavenClasspathResolver {
                                 && !fn.endsWith("-javadoc.jar")
                                 && !fn.endsWith("-tests.jar");
                     })
-                    .findFirst()
+                    .min((a, b) -> {
+                        // Shorter filename first. If tied, fall back to
+                        // lexicographic order so the result is deterministic.
+                        int byLen = Integer.compare(
+                                a.getFileName().toString().length(),
+                                b.getFileName().toString().length());
+                        return byLen != 0 ? byLen
+                                : a.getFileName().toString().compareTo(b.getFileName().toString());
+                    })
                     .orElse(null);
         } catch (IOException e) {
             return null;
