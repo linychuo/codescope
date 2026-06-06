@@ -44,7 +44,7 @@ class EdgeCaseTest {
         for (int i = 1; i < depth; i++) {
             MethodKey cur = new MethodKey("com.example.L" + i, "m", 0);
             index.putDeclaration(cur, new ProjectIndex.SourceLoc("L" + i + ".java", 1));
-            index.addCall(cur, prev);   // prev calls cur
+            index.recordInvocation(prev, cur);  // prev calls cur
             prev = cur;
         }
         // After the loop, prev is the deepest node. traceCallers should
@@ -78,11 +78,11 @@ class EdgeCaseTest {
             index.putDeclaration(k, new ProjectIndex.SourceLoc(k.methodName + ".java", 1));
         }
         // b calls d, c calls d (d's direct callers)
-        index.addCall(d, b);
-        index.addCall(d, c);
+        index.recordInvocation(b, d);
+        index.recordInvocation(c, d);
         // a calls b, a calls c
-        index.addCall(b, a);
-        index.addCall(c, a);
+        index.recordInvocation(a, b);
+        index.recordInvocation(a, c);
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, d);
         assertTrue(r.found());
@@ -113,7 +113,7 @@ class EdgeCaseTest {
         MethodKey caller = new MethodKey("com.example.App", "useExternal", 1,
                 List.of("java.lang.String"));
         index.putDeclaration(caller, new ProjectIndex.SourceLoc("App.java", 1));
-        index.addCall(library, caller);
+        index.recordInvocation(caller, library);
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, library);
         assertTrue(r.found(), "library target with project callers should be found");
@@ -129,8 +129,8 @@ class EdgeCaseTest {
         MethodKey b = new MethodKey("com.example.B", "f", 0);
         index.putDeclaration(a, new ProjectIndex.SourceLoc("A.java", 1));
         index.putDeclaration(b, new ProjectIndex.SourceLoc("B.java", 1));
-        index.addCall(a, b);  // b calls a
-        index.addCall(b, a);  // a calls b
+        index.recordInvocation(b, a);  // b calls a
+        index.recordInvocation(a, b);  // a calls b
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, a);
         assertTrue(r.found());
@@ -159,7 +159,7 @@ class EdgeCaseTest {
         for (int i = 0; i < n; i++) {
             MethodKey caller = new MethodKey("com.example.C" + i, "call", 0);
             index.putDeclaration(caller, new ProjectIndex.SourceLoc("C.java", 1));
-            index.addCall(target, caller);
+            index.recordInvocation(caller, target);
         }
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, target);
         assertTrue(r.found());
@@ -260,7 +260,7 @@ class EdgeCaseTest {
                         start.await();
                         for (int i = 0; i < callsPerThread; i++) {
                             MethodKey caller = new MethodKey("com.example.C" + (i % 50), "call", 0);
-                            index.addCall(target, caller);
+                            index.recordInvocation(caller, target);
                         }
                     } catch (Throwable th) {
                         err.set(th);
@@ -301,8 +301,8 @@ class EdgeCaseTest {
                         for (int i = 0; i < 1_000; i++) {
                             index.putDeclaration(new MethodKey("com.example.W" + i, "f", 0),
                                     new ProjectIndex.SourceLoc("W.java", 1));
-                            index.addCall(target,
-                                    new MethodKey("com.example.W" + i, "f", 0));
+                            index.recordInvocation(
+                                    new MethodKey("com.example.W" + i, "f", 0), target);
                         }
                     } catch (Throwable th) { err.set(th); }
                 }));

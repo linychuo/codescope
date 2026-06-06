@@ -286,7 +286,9 @@ public final class JdtIndexer {
             if (methodStack.isEmpty()) return;
             MethodKey target = methodKeyOf(binding);
             if (target == null) return;
-            index.addCall(target, methodStack.peek().key);
+            // recordInvocation(caller, callee): the enclosing method is the
+            // caller, the resolved binding is the callee being invoked.
+            index.recordInvocation(methodStack.peek().key, target);
         }
 
         private MethodKey methodKeyOf(IMethodBinding b) {

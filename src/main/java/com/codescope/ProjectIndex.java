@@ -40,11 +40,18 @@ public final class ProjectIndex {
         }
     }
 
-    public void addCall(MethodKey target, MethodKey caller) {
-        // Dedupe: the same (caller, target) pair can come from a hot method
+    /**
+     * Records that {@code caller} invokes {@code callee}, i.e. the
+     * call-edge {@code caller -> callee}. Argument order matches the
+     * direction of the call (caller first, callee second) so the call
+     * site reads the same as the JDT visit: "this method calls that
+     * method".
+     */
+    public void recordInvocation(MethodKey caller, MethodKey callee) {
+        // Dedupe: the same (caller, callee) pair can come from a hot method
         // being called from many sites in the same caller body. LinkedHashSet
         // gives O(1) add/contains while preserving insertion order.
-        Set<MethodKey> set = calls.computeIfAbsent(target, k -> new LinkedHashSet<>());
+        Set<MethodKey> set = calls.computeIfAbsent(callee, k -> new LinkedHashSet<>());
         synchronized (set) {
             set.add(caller);
         }
