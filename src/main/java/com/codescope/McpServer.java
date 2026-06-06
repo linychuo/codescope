@@ -397,13 +397,28 @@ public final class McpServer {
         if (!(nameObj instanceof String name)) {
             return toolErrorResult("Missing or non-string 'name'");
         }
-        Map<String, Object> args = (Map<String, Object>) params.get("arguments");
+        // Defensive type check on `arguments` (same idea as the `method` /
+        // `params` narrowing in handle()): a buggy or hostile host could
+        // send arguments as a list, string, or number, and a blind
+        // (Map<String,Object>) cast would throw ClassCastException that
+        // would propagate out of the call dispatcher. The host's request
+        // shape is the user's problem to fix, so the right label is
+        // "Invalid arguments" — not a generic "Tool execution failed".
+        Object argsObj = params.get("arguments");
+        Map<String, Object> args = null;
+        if (argsObj == null) {
+            args = Map.of();
+        } else if (argsObj instanceof Map<?, ?> m) {
+            args = (Map<String, Object>) m;
+        } else {
+            return toolErrorResult("Invalid arguments: 'arguments' must be an object");
+        }
         Tool t = tools.get(name);
         if (t == null) {
             return toolErrorResult("Unknown tool: " + name);
         }
         try {
-            return wrap(t.invoke(args == null ? Map.of() : args));
+            return wrap(t.invoke(args));
         } catch (IllegalArgumentException e) {
             return toolErrorResult("Invalid arguments: " + e.getMessage());
         } catch (RuntimeException | IOException e) {

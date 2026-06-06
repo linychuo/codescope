@@ -103,6 +103,26 @@ class McpServerTest {
     }
 
     @Test
+    void toolsCallReturnsErrorForNonMapArguments() throws Exception {
+        // A buggy or hostile host could send "arguments" as a non-object (a
+        // list, a string, a number). Blind (Map<String,Object>) cast would
+        // throw ClassCastException out of invokeTool, which the adapter
+        // would mislabel as "Tool execution failed". The correct mapping
+        // is "Invalid arguments" — the host's request shape is the problem.
+        McpServer s = new McpServer().register(new StubTool("echo", Map.of("type", "object"),
+                args -> Tool.ToolResult.text("ok")));
+        s.handle(req(4, "tools/call", Map.of(
+                "name", "echo",
+                "arguments", List.of("not", "a", "map"))));
+        JsonNode resp = readOne();
+        String msg = resp.path("result").path("content").get(0).path("text").asText();
+        assertTrue(msg.startsWith("Invalid arguments:"),
+                "expected Invalid arguments, got: " + msg);
+        assertTrue(msg.contains("object") || msg.contains("map"),
+                "expected message to mention the type, got: " + msg);
+    }
+
+    @Test
     void toolsCallSurfacesIllegalArgumentAsInvalidArguments() throws Exception {
         // The tool throws IllegalArgumentException -> McpServer should label it as
         // "Invalid arguments", not as a generic "Tool execution failed".

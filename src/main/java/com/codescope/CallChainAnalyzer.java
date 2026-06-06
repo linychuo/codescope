@@ -23,8 +23,9 @@ public final class CallChainAnalyzer {
      * the target's own declaration. A target with no project callers (e.g. a
      * library method that this project never invokes) returns
      * {@code found=true} with an empty chain — that IS the answer, not an
-     * error. We only fail when the target is so ambiguous we can't even
-     * give an empty answer meaningfully (see {@link #diagnoseNotFound}).
+     * error. Ambiguity is reported upstream by
+     * {@link ProjectIndex#resolveTarget} throwing
+     * {@link ProjectIndex.AmbiguousMethodException} before the BFS even runs.
      */
     public Result traceCallers(ProjectIndex index, MethodKey target) {
         return bfs(index, target);

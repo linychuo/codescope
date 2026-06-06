@@ -70,7 +70,7 @@
     ]
   },
   "status": "ok",
-  "message": "OK; 4 method(s) in chain."
+  "message": "OK; 4 caller(s) in chain."
 }
 ```
 

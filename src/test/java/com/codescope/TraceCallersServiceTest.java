@@ -87,6 +87,61 @@ class TraceCallersServiceTest {
     }
 
     @Test
+    void lruEvictsOldestEntryBeyondCapacity() throws Exception {
+        // The indexCache is sized at MAX_CACHED_PROJECTS=8 and uses
+        // access-order. Touching 9 distinct project roots should evict
+        // the first one we touched. We assert this indirectly: after
+        // touching 9 projects in order, the first project's index has
+        // been dropped from the cache. We detect the eviction by
+        // replacing one of the source files in the first project and
+        // calling again WITHOUT refresh — the cached index would NOT
+        // see the change, but since the cache evicted this project,
+        // the second call rebuilds and DOES see it. This locks in both
+        // the cap and the access-order eviction.
+        int n = 9;
+        Path[] projects = new Path[n];
+        for (int i = 0; i < n; i++) {
+            projects[i] = Files.createTempDirectory("codescope-lru-" + i + "-");
+            copyDir(FIXTURE, projects[i]);
+        }
+        try {
+            TraceCallersService svc = new TraceCallersService();
+
+            // Warm: 8 distinct roots, with the first one being project[0].
+            for (int i = 0; i < 8; i++) {
+                svc.traceCallersJson("com.example.Target", "leaf",
+                        null, null, projects[i], false);
+            }
+            // Touch a 9th distinct root — evicts project[0].
+            svc.traceCallersJson("com.example.Target", "leaf",
+                    null, null, projects[8], false);
+
+            // Mutate project[0]'s sources and call again WITHOUT refresh.
+            // If project[0] is still cached, the result won't see the new
+            // file. If evicted (as it should be), the rebuild picks it up.
+            String newCaller = """
+                    package com.example;
+                    public class NewCaller {
+                        public void go() { new com.example.Target().leaf(); }
+                    }
+                    """;
+            Files.writeString(projects[0].resolve(
+                    "src/main/java/com/example/NewCaller.java"), newCaller);
+
+            JsonNode tree = new ObjectMapper().readTree(svc.traceCallersJson(
+                    "com.example.Target", "leaf", null, null, projects[0], false));
+            // We expect 2 callers now (Mid.callsLeaf + NewCaller.go) — the
+            // rebuild path was taken, which only happens when the entry
+            // was evicted.
+            assertEquals(2, tree.path("target").path("callers").size(),
+                    "LRU should have evicted project[0]; expected rebuild to "
+                            + "pick up the new caller, got: " + tree);
+        } finally {
+            for (Path p : projects) deleteRecursively(p);
+        }
+    }
+
+    @Test
     void optionalBoolArgsRejectWrongTypes() {
         // The adapter's boolean coercion must throw IllegalArgumentException
         // for non-boolean non-null values — that's the contract McpServer

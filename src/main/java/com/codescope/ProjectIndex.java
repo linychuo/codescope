@@ -77,8 +77,21 @@ public final class ProjectIndex {
         return Collections.unmodifiableSet(declarations.keySet());
     }
 
+    /**
+     * Returns an immutable snapshot of the reverse call index. Each inner
+     * set is a defensive copy: callers can iterate without seeing concurrent
+     * mutations to {@link #recordInvocation} updates, and they cannot
+     * accidentally reach into a still-live {@link LinkedHashSet} and
+     * corrupt the indexer's data structure.
+     */
     public Map<MethodKey, Set<MethodKey>> allCalls() {
-        return Collections.unmodifiableMap(calls);
+        Map<MethodKey, Set<MethodKey>> snap = new java.util.LinkedHashMap<>(calls.size());
+        for (Map.Entry<MethodKey, Set<MethodKey>> e : calls.entrySet()) {
+            synchronized (e.getValue()) {
+                snap.put(e.getKey(), Set.copyOf(e.getValue()));
+            }
+        }
+        return Collections.unmodifiableMap(snap);
     }
 
     /**

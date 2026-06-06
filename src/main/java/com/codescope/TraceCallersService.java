@@ -117,7 +117,11 @@ public final class TraceCallersService {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("target", r.root().toJson());
-        out.put("status", r.found() ? "ok" : "not_found");
+        // Result.found is always true after the analyzer's contract change
+        // (an empty chain with a "No callers" message is a valid answer,
+        // not a miss). We still emit "status" as a stable, documented
+        // envelope field for clients that key off it.
+        out.put("status", "ok");
         out.put("message", message);
         try {
             return json.writeValueAsString(out);
