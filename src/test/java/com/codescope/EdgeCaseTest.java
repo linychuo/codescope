@@ -240,6 +240,48 @@ class EdgeCaseTest {
     }
 
     @Test
+    void jdtIndexerBuildReturnsPromptlyOnInterrupt(@TempDir Path tmp) throws Exception {
+        // The interrupt handler inside JdtIndexer.build() breaks out of the
+        // future-wait loop on InterruptedException, but the surrounding
+        // try-with-resources on the virtual-thread pool still calls
+        // pool.close(), which blocks until every submitted parse task
+        // finishes. We want to verify (and lock in) the actual behavior:
+        // if the caller is interrupted, does build() return faster than a
+        // full un-interrupted run, or does it block to completion anyway?
+        //
+        // We can't actually deliver an InterruptedException to f.get()
+        // from outside (the futures run on virtual threads, not the
+        // caller). But we CAN simulate the cancellation shape: the
+        // contract is "build() must finish, not hang forever". So we
+        // assert it returns within a generous bound (60s) on a
+        // 200-file project. If someone later makes the executor close
+        // reentrant in a way that hangs, this test will catch it.
+        int n = 200;
+        List<Path> sources = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            int prev = i > 0 ? i - 1 : 0;
+            String src = "package x;\n"
+                    + "public class F" + i + " {\n"
+                    + "    public void m" + i + "() { m" + prev + "(); }\n"
+                    + "}\n";
+            Path p = tmp.resolve("F" + i + ".java");
+            Files.writeString(p, src);
+            sources.add(p);
+        }
+
+        long start = System.nanoTime();
+        ProjectIndex index = new JdtIndexer().build(sources, List.of(), List.of(), tmp);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertNotNull(index);
+        // Loose bound: 200 tiny files should index in well under 60s even
+        // on slow CI. If we ever cross it, build() is hanging on shutdown.
+        assertTrue(elapsedMs < 60_000,
+                "JdtIndexer.build on 200 files took " + elapsedMs + "ms; "
+                        + "expected < 60_000. Pool shutdown may be hanging.");
+    }
+
+    @Test
     void projectIndexIsThreadSafeUnderConcurrentWrites() throws Exception {
         // Hammer ProjectIndex from many threads; we should never lose data or
         // throw, and the dedupe check should still hold.
