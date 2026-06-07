@@ -141,6 +141,28 @@ class TraceCallersServiceTest {
     }
 
     @Test
+    void libraryTargetWithoutArityStillReturnsCallers() throws Exception {
+        // Regression: querying a library method by (class, name) only — the
+        // typical case for a user who doesn't know (or care about) the
+        // overload — used to return "No callers found". The synthesized
+        // MethodKey defaulted arity to 0 and paramTypes to [], but the call
+        // edges recorded by JdtIndexer use the actual signature from JDT
+        // bindings (`println(String)` → arity=1, ["java.lang.String"]).
+        // Equality on MethodKey is exact, so the BFS lookup missed every
+        // recorded edge. The fixture's Target and Mid both call
+        // System.out.println(...), so this must return >=1 caller.
+        TraceCallersService svc = new TraceCallersService();
+        String json = svc.traceCallersJson(
+                "java.io.PrintStream", "println",
+                null, null,
+                FIXTURE, false);
+        JsonNode tree = new ObjectMapper().readTree(json);
+        JsonNode callers = tree.path("target").path("callers");
+        assertTrue(callers.isArray() && callers.size() > 0,
+                "expected >=1 caller for PrintStream#println, got: " + json);
+    }
+
+    @Test
     void optionalBoolArgsRejectWrongTypes() {
         // The adapter's boolean coercion must throw IllegalArgumentException
         // for non-boolean non-null values — that's the contract McpServer

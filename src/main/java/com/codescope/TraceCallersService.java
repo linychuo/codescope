@@ -115,21 +115,49 @@ public final class TraceCallersService {
                             .toList();
             throw new TraceCallersException(e.getMessage() + " " + overloadsHint + ".");
         }
+
+        // Library targets: the class is not declared in project sources
+        // (e.g. java.io.PrintStream). JdtIndexer still recorded every
+        // call edge with the resolved binding signature (arity, FQN
+        // param types), so we look up the call-edge map by the same
+        // selector. Any matches are seeded into the analyzer's BFS as
+        // a single logical target — a method that calls println(String)
+        // AND println(int) appears once under the synthesized root.
+        List<MethodKey> seeds = List.of();
+        CallChainAnalyzer.Result r;
         if (target == null) {
-            // The class+method is not declared in this project's sources.
-            // It might be a library method that the user wants to find
-            // callers for. We still try the BFS — the call-edge map
-            // records every project→target invocation regardless of where
-            // the target is declared. If there are no callers we'll
-            // surface that as a result; if there are, we win.
-            target = new MethodKey(className, methodName,
+            seeds = index.findInvokedKeys(className, methodName, arity, paramTypes);
+            // The displayed root uses the user's selector (arity defaults
+            // to 0 if not provided). It's only the BFS *seeds* that need
+            // to match the recorded keys.
+            MethodKey display = new MethodKey(className, methodName,
                     arity == null ? 0 : arity,
                     paramTypes == null ? List.of() : paramTypes);
+            if (seeds.isEmpty()) {
+                // Synthesize the display key as the single seed so the
+                // analyzer still produces a coherent "no callers"
+                // message instead of a degenerate result.
+                r = analyzer.traceCallers(index, display, List.of(display));
+            } else {
+                r = analyzer.traceCallers(index, display, seeds);
+            }
+        } else {
+            r = analyzer.traceCallers(index, target);
         }
 
-        CallChainAnalyzer.Result r = analyzer.traceCallers(index, target);
-
         String message = r.message();
+        // For library targets where multiple overloads matched, surface
+        // which signatures we unioned so the user knows what was bundled
+        // into the displayed root.
+        if (target == null && seeds.size() > 1) {
+            String overloads = seeds.stream()
+                    .map(MethodKey::fullSignature)
+                    .sorted()
+                    .toList()
+                    .toString();
+            message = message + " (combined callers across "
+                    + seeds.size() + " library overloads: " + overloads + ")";
+        }
         List<String> skipped = index.skippedFiles();
         if (!skipped.isEmpty()) {
             // Note: the file list itself is omitted from the wire response —

@@ -137,6 +137,32 @@ public final class ProjectIndex {
         return out;
     }
 
+    /**
+     * Find every method KEY in the call-edge map (i.e. methods that this
+     * project's sources invoke) matching {@code className} and
+     * {@code methodName}, optionally narrowed by {@code arity} and
+     * {@code paramTypes}. Used to resolve library-method targets: those
+     * methods have no project declaration, so {@link #resolveTarget} sees
+     * nothing, but {@link JdtIndexer} still recorded the call edges with
+     * the exact signature from the JDT binding (e.g.
+     * {@code java.io.PrintStream#println/1(java.lang.String)}). The
+     * caller can then union {@link #callersOf} across the returned keys.
+     *
+     * <p>Returns an empty list if nothing matches. The order is
+     * undefined.
+     */
+    public List<MethodKey> findInvokedKeys(String className, String methodName,
+                                           Integer arity, List<String> paramTypes) {
+        List<MethodKey> out = new ArrayList<>();
+        for (MethodKey k : calls.keySet()) {
+            if (!k.declaringClass.equals(className) || !k.methodName.equals(methodName)) continue;
+            if (arity != null && k.arity != arity.intValue()) continue;
+            if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
+            out.add(k);
+        }
+        return out;
+    }
+
     public static final class AmbiguousMethodException extends Exception {
         public AmbiguousMethodException(String className, String methodName,
                                         Integer arity, List<String> paramTypes) {
