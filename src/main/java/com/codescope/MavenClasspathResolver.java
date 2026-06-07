@@ -146,11 +146,19 @@ public final class MavenClasspathResolver {
     }
 
     private Path findJar(Dependency dep) {
-        String groupPath = dep.getGroupId().replace('.', '/');
+        // Maven schema requires all three, but malformed poms in the wild
+        // omit fields or leave them unresolved as ${property} references
+        // (which MavenXpp3Reader returns as the literal string, not null —
+        // those misses fall through silently in findJar). A NULL on any
+        // required field used to NPE in the .replace call below; the NPE
+        // escaped walk() and aborted the per-pom Future, silently dropping
+        // every dep after this one in the same pom.
+        String groupId = dep.getGroupId();
         String artifactId = dep.getArtifactId();
         String version = dep.getVersion();
-        if (version == null) return null;
+        if (groupId == null || artifactId == null || version == null) return null;
 
+        String groupPath = groupId.replace('.', '/');
         Path base = localRepo.resolve(groupPath).resolve(artifactId).resolve(version);
         if (!Files.isDirectory(base)) return null;
 
@@ -188,10 +196,18 @@ public final class MavenClasspathResolver {
     }
 
     private Path pomFor(Dependency dep) {
-        String groupPath = dep.getGroupId().replace('.', '/');
-        Path pom = localRepo.resolve(groupPath).resolve(dep.getArtifactId())
-                .resolve(dep.getVersion())
-                .resolve(dep.getArtifactId() + "-" + dep.getVersion() + ".pom");
+        // Symmetric null-safety to findJar(): a malformed dep with a null
+        // groupId/artifactId/version used to NPE here too, escaping walk()
+        // and aborting the per-pom Future (which silently dropped every
+        // transitive dep in that pom).
+        String groupId = dep.getGroupId();
+        String artifactId = dep.getArtifactId();
+        String version = dep.getVersion();
+        if (groupId == null || artifactId == null || version == null) return null;
+        String groupPath = groupId.replace('.', '/');
+        Path pom = localRepo.resolve(groupPath).resolve(artifactId)
+                .resolve(version)
+                .resolve(artifactId + "-" + version + ".pom");
         return Files.isRegularFile(pom) ? pom : null;
     }
 
