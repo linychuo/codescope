@@ -35,14 +35,24 @@ public final class MavenClasspathResolver {
     private static final int MAX_POM_DEPTH = 10;
     /** Cap on the directory walk for pom discovery. */
     private static final int POM_WALK_DEPTH = 12;
-    private static final int MAX_DIRECTORIES_VISITED = 5_000;
+    /**
+     * Cap on the number of pom.xml files returned. The variable used to be
+     * named MAX_DIRECTORIES_VISITED and was applied via {@code .limit()} to
+     * the filtered stream of *files* (pom.xml), not directories — the
+     * directory walk itself is bounded by {@link #POM_WALK_DEPTH}. Renamed
+     * to reflect what it actually caps; the old name was misleading.
+     */
+    private static final int MAX_POMS = 5_000;
 
     private final Path localRepo;
 
     public MavenClasspathResolver() {
-        this(MavenSettings.readLocalRepository() != null
-                ? MavenSettings.readLocalRepository()
-                : defaultLocalRepo());
+        this(MavenClasspathResolver.firstNonNull(
+                MavenSettings.readLocalRepository(), defaultLocalRepo()));
+    }
+
+    private static <T> T firstNonNull(T a, T b) {
+        return a != null ? a : b;
     }
 
     public MavenClasspathResolver(Path localRepo) {
@@ -98,7 +108,7 @@ public final class MavenClasspathResolver {
             s.filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().equals("pom.xml"))
                     .filter(p -> !isUnderBuildDir(p, projectRoot))
-                    .limit(MAX_DIRECTORIES_VISITED)
+                    .limit(MAX_POMS)
                     .forEach(out::add);
         }
         return out;
