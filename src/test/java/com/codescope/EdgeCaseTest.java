@@ -427,19 +427,45 @@ class EdgeCaseTest {
         ProjectIndex index = new JdtIndexer().build(
                 List.of(tmp.resolve("Outer.java")), List.of(), List.of(), tmp);
 
-        // The anonymous-class 'run' must be in the index, not on Outer itself.
+        // (a) The FQN must be well-formed: no trailing dot, no empty
+        //     component. A typeStack push of an empty string from
+        //     ITypeBinding.getQualifiedName() (which returns "" for anonymous
+        //     classes) used to produce FQNs like "x.Outer." — visually
+        //     "outside x.Outer" but actually malformed and unjoinable to
+        //     call-site bindings (which use a different empty string).
+        for (MethodKey k : index.knownMethods()) {
+            assertFalse(k.declaringClass.endsWith(".") || k.declaringClass.startsWith(".")
+                            || k.declaringClass.contains(".."),
+                    "malformed FQN with empty segment or trailing dot: " + k);
+        }
+
+        // (b) The anonymous 'run' must be in the index, not on Outer itself.
         boolean foundAnonRun = index.knownMethods().stream()
                 .anyMatch(k -> !k.declaringClass.equals("x.Outer") && k.methodName.equals("run"));
         assertTrue(foundAnonRun, "expected anonymous 'run' to live outside x.Outer, got: "
                 + index.knownMethods());
 
-        // The anon-class 'target' too.
+        // (c) The anon-class 'target' too.
         boolean foundAnonTarget = index.knownMethods().stream()
                 .filter(k -> k.methodName.equals("target"))
                 .anyMatch(k -> !k.declaringClass.equals("x.Outer"));
         assertTrue(foundAnonTarget,
                 "expected anonymous 'target' to live outside x.Outer, got: "
                 + index.knownMethods().stream().filter(k -> k.methodName.equals("target")).toList());
+
+        // (d) The call edge from the anon 'run' to the anon 'target' must
+        //     LINK: the decl-side FQN and the call-site FQN must agree, so
+        //     traceCallers(anonTarget) returns the anon 'run' as a caller.
+        //     Pre-fix, the decl side was "x.Outer." (trailing dot from
+        //     empty-string push) but the call site used "" (empty), so the
+        //     edge silently dropped on the floor.
+        MethodKey anonTarget = index.knownMethods().stream()
+                .filter(k -> k.methodName.equals("target") && !k.declaringClass.equals("x.Outer"))
+                .findFirst().orElseThrow();
+        List<MethodKey> targetCallers = index.callersOf(anonTarget);
+        assertTrue(targetCallers.stream().anyMatch(k -> k.methodName.equals("run")),
+                "expected anon 'run' linked as caller of anon 'target', got callers: "
+                        + targetCallers + " — all calls: " + index.allCalls());
     }
 
     @Test

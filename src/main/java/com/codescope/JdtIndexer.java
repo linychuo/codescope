@@ -179,7 +179,7 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(TypeDeclaration node) {
-            typeStack.push(nameOf(node));
+            typeStack.push(fqnOfType(nameOf(node)));
             return true;
         }
 
@@ -190,7 +190,7 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(EnumDeclaration node) {
-            typeStack.push(nameOf(node));
+            typeStack.push(fqnOfType(nameOf(node)));
             return true;
         }
 
@@ -201,7 +201,7 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(RecordDeclaration node) {
-            typeStack.push(nameOf(node));
+            typeStack.push(fqnOfType(nameOf(node)));
             return true;
         }
 
@@ -212,7 +212,7 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(AnnotationTypeDeclaration node) {
-            typeStack.push(nameOf(node));
+            typeStack.push(fqnOfType(nameOf(node)));
             return true;
         }
 
@@ -225,7 +225,7 @@ public final class JdtIndexer {
         public boolean visit(ImplicitTypeDeclaration node) {
             // JDT 3.45 wraps top-level records here when bindings are enabled.
             // The name is empty; we still enter so nested visits are scoped.
-            typeStack.push(nameOf(node));
+            typeStack.push(fqnOfType(nameOf(node)));
             return true;
         }
 
@@ -236,13 +236,28 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(AnonymousClassDeclaration node) {
-            // `new Foo() { void bar() {} }` introduces a synthesized type
-            // whose JDT binary name is "Enclosing$1", "Enclosing$2", etc.
-            // Without this visit, the inner method would be attributed to
-            // the enclosing class, producing wrong call-edge source
-            // locations in the chain.
+            // `new Foo() { void bar() {} }` introduces a synthesized type.
+            // ITypeBinding.getQualifiedName() returns "" for anonymous
+            // classes; pushing that produced FQNs like "x.Outer." (trailing
+            // dot, empty segment) for the *declaration* side, while the
+            // call-site path uses getDeclaringClass().getQualifiedName()
+            // which is also "" — different shapes, so the call edge
+            // silently split off from the declaration and traceCallers
+            // would miss every caller of an anon-class method.
+            // getBinaryName() returns "x.Outer$1" reliably on both sides;
+            // convert '$' to '.' for visual consistency with how we report
+            // regular nested classes.
             ITypeBinding b = node.resolveBinding();
-            typeStack.push(b != null ? b.getQualifiedName() : "<anon>");
+            String fqn = fqnFromBinding(b);
+            if (fqn == null) {
+                // Fallback: synthesize a stable-ish name from the enclosing
+                // type and the anon's source position. Worse than the
+                // binding-derived name (no cross-file deduplication) but at
+                // least well-formed.
+                String enclosing = typeStack.isEmpty() ? packageName : typeStack.peek();
+                fqn = (enclosing.isEmpty() ? "" : enclosing + ".") + "<anon@" + node.getStartPosition() + ">";
+            }
+            typeStack.push(fqn);
             return true;
         }
 
@@ -322,33 +337,47 @@ public final class JdtIndexer {
         private MethodKey methodKeyOf(IMethodBinding b) {
             ITypeBinding dc = b.getDeclaringClass();
             if (dc == null) return null;
+            String dcFqn = fqnFromBinding(dc);
+            if (dcFqn == null) return null;
             ITypeBinding[] pts = b.getParameterTypes();
             List<String> paramTypes = new ArrayList<>(pts.length);
             for (ITypeBinding pt : pts) paramTypes.add(pt.getQualifiedName());
-            return new MethodKey(dc.getQualifiedName(), b.getName(), pts.length, paramTypes);
+            return new MethodKey(dcFqn, b.getName(), pts.length, paramTypes);
+        }
+
+        /**
+         * Resolves an {@link ITypeBinding} to the FQN we use in {@link MethodKey}.
+         * Anonymous classes have an empty {@code getQualifiedName()}; we fall
+         * back to {@code getBinaryName()} ("x.Outer$1") with {@code $}
+         * normalized to {@code .} so the decl side ({@link #fqnOfType}) and
+         * the call side ({@link #methodKeyOf}) produce identical strings.
+         * Returns {@code null} if the binding has no usable name at all.
+         */
+        private static String fqnFromBinding(ITypeBinding tb) {
+            if (tb == null) return null;
+            if (tb.isAnonymous()) {
+                String bin = tb.getBinaryName();
+                return bin == null ? null : bin.replace('$', '.');
+            }
+            String q = tb.getQualifiedName();
+            return q == null || q.isEmpty() ? null : q;
+        }
+
+        /**
+         * Computes the FQN for a (non-anonymous) type declaration by joining
+         * the enclosing-type FQN (or package) with the type's simple name.
+         * The typeStack holds full FQNs, so currentClass is just peek().
+         */
+        private String fqnOfType(String simpleName) {
+            String enclosing = typeStack.isEmpty() ? packageName : typeStack.peek();
+            if (enclosing.isEmpty()) return simpleName;
+            if (simpleName.isEmpty()) return enclosing;
+            return enclosing + "." + simpleName;
         }
 
         private String currentClass() {
             if (typeStack.isEmpty()) return packageName.isEmpty() ? "<unknown>" : packageName;
-            StringBuilder sb = new StringBuilder();
-            if (!packageName.isEmpty()) sb.append(packageName).append('.');
-            // typeStack is a Deque used as a stack (push = addFirst), so its
-            // iterator visits head-first — i.e. the *innermost* type first.
-            // Naïve iteration produces "package.Inner.Outer", reversing the
-            // nesting; we want outermost first to match what the user types
-            // and what IMethodBinding.getDeclaringClass().getQualifiedName()
-            // returns for calls into nested types. Use '.' separator (not
-            // '$') because the binding side uses getQualifiedName() which is
-            // dotted; mismatched separators silently split the call graph.
-            boolean first = true;
-            var it = typeStack.descendingIterator();
-            while (it.hasNext()) {
-                String t = it.next();
-                if (!first) sb.append('.');
-                sb.append(t);
-                first = false;
-            }
-            return sb.toString();
+            return typeStack.peek();
         }
 
         private static int cuLine(ASTNode n) {
