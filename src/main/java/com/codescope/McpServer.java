@@ -147,6 +147,28 @@ public final class McpServer {
      * if the buffer doesn't yet contain a complete value.
      */
     private int findObjectEnd(byte[] bytes) {
+        // Fast-path: if the first non-whitespace byte is a closing bracket
+        // (} or ]), this is not a valid top-level JSON value. Returning
+        // bytes.length makes the caller's catch block reset the buffer and
+        // send a Parse error, instead of hanging waiting for more bytes
+        // that would never balance the depth counter (depth starts at 1,
+        // the END_OBJECT makes the next START_OBJECT push it to 2, the
+        // matching END_OBJECT drops it to 1, and EOF returns -1 — the
+        // buffer never shrinks and the server wedges).
+        //
+        // We can't rely on the JsonParser for this check: Jackson's
+        // nextToken() throws on the very first call when it sees a stray
+        // '}' at top level ("Unexpected close marker"), so the END_OBJECT
+        // check below would never get a chance to fire. Scanning the byte
+        // ourselves is the only way to keep the parser from going down
+        // the "incomplete" path.
+        int firstNonWs = firstNonWhitespaceIndex(bytes);
+        if (firstNonWs >= 0) {
+            byte b = bytes[firstNonWs];
+            if (b == (byte) '}' || b == (byte) ']') {
+                return bytes.length;
+            }
+        }
         try (JsonParser p = json.getFactory().createParser(bytes)) {
             JsonToken first = p.nextToken();
             if (first == null) return -1;
@@ -171,6 +193,22 @@ public final class McpServer {
             // case — we'll see more bytes next round.
             return -1;
         }
+    }
+
+    /**
+     * @return index of the first non-whitespace byte, or -1 if the buffer
+     *         is empty or all-whitespace. Whitespace here is space, tab,
+     *         CR, and LF — the same set Jackson skips between tokens.
+     */
+    private static int firstNonWhitespaceIndex(byte[] bytes) {
+        for (int i = 0; i < bytes.length; i++) {
+            byte b = bytes[i];
+            if (b == (byte) ' ' || b == (byte) '\t' || b == (byte) '\n' || b == (byte) '\r') {
+                continue;
+            }
+            return i;
+        }
+        return -1;
     }
 
     public void stop() {

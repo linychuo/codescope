@@ -249,6 +249,48 @@ class McpServerTest {
     }
 
     @Test
+    void strayClosingBracketTriggersParseErrorAndDoesNotHang() throws Exception {
+        // Regression: a buffer starting with a stray '}' or ']' (e.g. from a
+        // buggy host sending the tail of a previous frame) used to make the
+        // depth-counter in findObjectEnd never reach zero. depth starts at 1
+        // for the END_OBJECT, then a following balanced "{...}" pushes it up
+        // to 2 and back to 1, and EOF returns -1 — the buffer is preserved
+        // and the server waits forever for bytes that would never balance
+        // the counter. The fix: when the first non-whitespace byte is a
+        // closing bracket, return bytes.length so the caller's catch block
+        // resets the buffer and sends a Parse error.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        // Stray } followed by a valid request. The current code would hang
+        // on this input (tryParseAndDispatch returns false, buffer is never
+        // consumed, and any follow-up bytes can never balance the counter).
+        buf.write("}{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "stray '}' should be detected and the buffer reset");
+        JsonNode err = readOne();
+        assertEquals(-32700, err.path("error").path("code").asInt(),
+                "expected Parse error (-32700), got: " + err);
+        outBuf.reset();
+        // Buffer is reset: a fresh valid request should be dispatched.
+        buf.write("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf));
+        JsonNode resp = readOne();
+        assertEquals(2, resp.path("id").asInt(),
+                "expected id=2 from the follow-up request, got: " + resp);
+
+        // Same shape for a stray ']'.
+        outBuf.reset();
+        s = new McpServer();
+        buf = new ByteArrayOutputStream();
+        buf.write("][1,2]".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "stray ']' should be detected and the buffer reset");
+        err = readOne();
+        assertEquals(-32700, err.path("error").path("code").asInt(),
+                "expected Parse error for stray ']', got: " + err);
+    }
+
+    @Test
     void notificationsCancelledCancelsPendingRequest() throws Exception {
         // JSON-RPC 2.0 §6.1: a notifications/cancelled carrying the request
         // id must actually cancel the pending server→client future. We
