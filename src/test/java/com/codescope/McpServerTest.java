@@ -291,6 +291,80 @@ class McpServerTest {
     }
 
     @Test
+    void garbageInputTriggersParseErrorAndDoesNotHang() throws Exception {
+        // Regression: non-JSON garbage (e.g. 'g' from a buggy host) used to
+        // make findObjectEnd return -1 for every IOException, so the
+        // buffer was treated as "incomplete, wait for more". It never
+        // shrank and the server hung. The fix: byte-shape check on the
+        // first non-whitespace byte — if it's not a valid JSON value
+        // start, return bytes.length so the caller resets the buffer and
+        // sends a Parse error.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write("garbage".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "garbage should trigger a parse error and reset the buffer");
+        JsonNode err = readOne();
+        assertEquals(-32700, err.path("error").path("code").asInt(),
+                "expected Parse error (-32700), got: " + err);
+    }
+
+    @Test
+    void incompleteStreamingBufferIsNotMisclassifiedAsParseError() throws Exception {
+        // Regression: when bytes arrive in chunks (as McpServer.run() drives
+        // the parser byte-by-byte), partial buffers like `{"jsonrpc":"2.0",`
+        // sit mid-structure. Jackson throws a plain JsonParseException with
+        // the message "Unexpected end-of-input within/between Object
+        // entries" — NOT JsonEOFException. A catch that only treated
+        // JsonEOFException as "wait for more bytes" would reset the buffer
+        // here and send a spurious Parse error, breaking the whole stdio
+        // protocol. Locked in so a future refactor of findObjectEnd cannot
+        // silently re-introduce the bug.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        // Buffer ends with a trailing comma — the exact post-comma EOF case.
+        buf.write("{\"jsonrpc\":\"2.0\",".getBytes(StandardCharsets.UTF_8));
+        assertFalse(s.tryParseAndDispatch(buf),
+                "incomplete buffer must return false (wait for more bytes)");
+        assertEquals(17, buf.size(),
+                "buffer must be left untouched when incomplete, got size: " + buf.size());
+        // No Parse error should have been written to stdout.
+        assertEquals(0, outBuf.size(),
+                "no output expected for incomplete buffer; got: "
+                        + outBuf.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void partialNullKeywordIsTreatedAsIncomplete() throws Exception {
+        // Regression for a real streaming case: a host's response of
+        // `{...,"result":null}` arrives byte-by-byte. When the buffer is
+        // `{"r":n`, Jackson throws "Unrecognized token 'n'" — not an
+        // EOF-flavoured message. An earlier fix that used the message text
+        // to discriminate (looking for "end-of-input") would treat this as
+        // a real parse error, reset the buffer mid-stream, and break the
+        // server's ability to receive any roots/list response carrying a
+        // null result. Same story for partial `t`, `tr`, `f`, `fal`, etc.
+        // — these are streaming-incomplete, not garbage. Lock in the
+        // byte-shape discriminator that handles all of these correctly.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        for (String partial : new String[]{
+                "{\"r\":n", "{\"r\":nu", "{\"r\":nul",
+                "{\"r\":t", "{\"r\":tr", "{\"r\":tru",
+                "{\"r\":f", "{\"r\":fa", "{\"r\":fal", "{\"r\":fals",
+                "{\"r\":1.",
+        }) {
+            buf.reset();
+            buf.write(partial.getBytes(StandardCharsets.UTF_8));
+            assertFalse(s.tryParseAndDispatch(buf),
+                    "partial buffer '" + partial + "' must be treated as incomplete");
+            assertEquals(0, outBuf.size(),
+                    "no output expected for partial buffer '" + partial
+                            + "'; got: " + outBuf.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void notificationsCancelledCancelsPendingRequest() throws Exception {
         // JSON-RPC 2.0 §6.1: a notifications/cancelled carrying the request
         // id must actually cancel the pending server→client future. We

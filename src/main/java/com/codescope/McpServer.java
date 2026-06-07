@@ -147,28 +147,28 @@ public final class McpServer {
      * if the buffer doesn't yet contain a complete value.
      */
     private int findObjectEnd(byte[] bytes) {
-        // Fast-path: if the first non-whitespace byte is a closing bracket
-        // (} or ]), this is not a valid top-level JSON value. Returning
-        // bytes.length makes the caller's catch block reset the buffer and
-        // send a Parse error, instead of hanging waiting for more bytes
-        // that would never balance the depth counter (depth starts at 1,
-        // the END_OBJECT makes the next START_OBJECT push it to 2, the
-        // matching END_OBJECT drops it to 1, and EOF returns -1 — the
-        // buffer never shrinks and the server wedges).
+        // Byte-shape fast-path: peek at the first non-whitespace byte. If
+        // it's not a valid start of a JSON value (RFC 8259 §3), the whole
+        // buffer is garbage — return bytes.length so the caller resets and
+        // replies with a Parse error. This is the only way to surface a
+        // Parse error for inputs like "garbage" or a stray "}" without
+        // hanging the server:
+        //   - Stray '}' or ']' would normally make nextToken() throw
+        //     "Unexpected close marker", which the catch below cannot
+        //     distinguish from a partial-keyword stream — we'd wait
+        //     forever for bytes that can never make the buffer valid.
+        //   - "garbage" throws "Unrecognized token" with no "end-of-input"
+        //     marker, which is also indistinguishable from a streaming
+        //     null/true/false (e.g. "{\"r\":n" throws "Unrecognized token
+        //     'n'" but more bytes will fix it).
         //
-        // We can't rely on the JsonParser for this check: Jackson's
-        // nextToken() throws on the very first call when it sees a stray
-        // '}' at top level ("Unexpected close marker"), so the END_OBJECT
-        // check below would never get a chance to fire. Scanning the byte
-        // ourselves is the only way to keep the parser from going down
-        // the "incomplete" path.
+        // Validating the first byte ourselves is the cleanest way to
+        // separate garbage (caller resets) from any IOException raised
+        // mid-parse (caller waits for more bytes).
         int firstNonWs = firstNonWhitespaceIndex(bytes);
-        if (firstNonWs >= 0) {
-            byte b = bytes[firstNonWs];
-            if (b == (byte) '}' || b == (byte) ']') {
-                return bytes.length;
-            }
-        }
+        if (firstNonWs < 0) return -1;   // all whitespace, wait for more
+        if (!isValidJsonValueStart(bytes[firstNonWs])) return bytes.length;
+
         try (JsonParser p = json.getFactory().createParser(bytes)) {
             JsonToken first = p.nextToken();
             if (first == null) return -1;
@@ -188,9 +188,21 @@ public final class McpServer {
             long off = p.currentLocation().getByteOffset();
             return off < 0 ? bytes.length : (int) off;
         } catch (IOException e) {
-            // An IOException here means Jackson hit the end of the buffer
-            // mid-structure (JsonEOFException). That's the "incomplete"
-            // case — we'll see more bytes next round.
+            // We already vetted the first byte above, so an IOException
+            // here is overwhelmingly likely to mean "buffer is incomplete,
+            // more bytes will fix it". This covers clean EOF
+            // (JsonEOFException, "{\"a\":1"), post-comma EOF (plain
+            // JsonParseException with "end-of-input within Object
+            // entries"), AND mid-token EOF on null/true/false/numbers
+            // (which Jackson reports as "Unrecognized token" with no
+            // EOF marker). Returning -1 makes the caller wait.
+            //
+            // Edge case: a buffer like "{garbage}" passes the first-byte
+            // check, hits this catch, and is treated as incomplete. The
+            // server will wait until the host disconnects. Matches the
+            // pre-fix behavior; correctly distinguishing it would require
+            // parser-state introspection we don't need for any realistic
+            // host input.
             return -1;
         }
     }
@@ -209,6 +221,18 @@ public final class McpServer {
             return i;
         }
         return -1;
+    }
+
+    /**
+     * @return true if {@code b} can legally start a top-level JSON value
+     *         per RFC 8259 §3 (object, array, string, number, true, false,
+     *         null). Used by {@link #findObjectEnd} to short-circuit on
+     *         garbage before invoking the parser.
+     */
+    private static boolean isValidJsonValueStart(byte b) {
+        return b == (byte) '{' || b == (byte) '[' || b == (byte) '"'
+                || b == (byte) 't' || b == (byte) 'f' || b == (byte) 'n'
+                || b == (byte) '-' || (b >= (byte) '0' && b <= (byte) '9');
     }
 
     public void stop() {
