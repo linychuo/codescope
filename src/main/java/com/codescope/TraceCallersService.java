@@ -22,7 +22,30 @@ public final class TraceCallersService {
 
     private static final int MAX_CACHED_PROJECTS = 8;
 
-    private final ObjectMapper json = new ObjectMapper();
+    /**
+     * Jackson's default StreamWriteConstraints cap nesting at 1000. Our
+     * {@link CallChainAnalyzer} caps BFS depth at 500, which is well within
+     * that limit, so this raised cap is belt-and-suspenders: if the BFS
+     * depth cap is ever loosened (or a future bug widens the tree), the
+     * mapper itself won't be the choke point. 50_000 matches the BFS node
+     * cap.
+     *
+     * <p>Package-private factory so tests can exercise the same mapper
+     * the service uses, without going through the full Maven-project
+     * loading path (which would take seconds to set up just to test
+     * Jackson's nesting cap).
+     */
+    static ObjectMapper newObjectMapper() {
+        ObjectMapper m = new ObjectMapper();
+        m.getFactory().setStreamWriteConstraints(
+                com.fasterxml.jackson.core.StreamWriteConstraints.builder()
+                        .maxNestingDepth(50_000)
+                        .build());
+        return m;
+    }
+
+    private final ObjectMapper json = newObjectMapper();
+
     private final JdtIndexer indexer = new JdtIndexer();
     private final CallChainAnalyzer analyzer = new CallChainAnalyzer();
 

@@ -16,14 +16,20 @@ public final class CallNode {
     public final String file;        // declaration file, relative if possible
     public final int line;           // declaration line, 0 if unknown
     public final boolean cycle;      // true if this is a back-edge marker
+    public final boolean truncated;  // true if this branch was cut at MAX_DEPTH
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
-        this(className, methodName, arity, file, line, false);
+        this(className, methodName, arity, file, line, false, false);
     }
 
     public CallNode(String className, String methodName, int arity,
                     String file, int line, boolean cycle) {
+        this(className, methodName, arity, file, line, cycle, false);
+    }
+
+    private CallNode(String className, String methodName, int arity,
+                     String file, int line, boolean cycle, boolean truncated) {
         this.className = className;
         this.methodName = methodName;
         this.arity = arity;
@@ -31,6 +37,7 @@ public final class CallNode {
         this.file = file;
         this.line = line;
         this.cycle = cycle;
+        this.truncated = truncated;
     }
 
     /**
@@ -39,7 +46,17 @@ public final class CallNode {
      * source location, so the tree stays compact when cycles are present.
      */
     public static CallNode cycleMarker(String className, String methodName, int arity) {
-        return new CallNode(className, methodName, arity, null, 0, true);
+        return new CallNode(className, methodName, arity, null, 0, true, false);
+    }
+
+    /**
+     * Builds a depth-cap marker for a branch that hit the BFS depth limit.
+     * Distinct from {@link #cycleMarker} so callers can tell "we stopped to
+     * avoid a loop" from "we stopped because the chain is too deep to
+     * serialize safely".
+     */
+    public static CallNode depthMarker(String className, String methodName, int arity) {
+        return new CallNode(className, methodName, arity, null, 0, false, true);
     }
 
     public CallNode addChild(CallNode child) {
@@ -68,6 +85,7 @@ public final class CallNode {
             f.map.put("arity", f.node.arity);
             f.map.put("signature", f.node.signature);
             if (f.node.cycle) f.map.put("cycle", true);
+            if (f.node.truncated) f.map.put("truncated", true);
             if (f.node.callers.isEmpty()) continue;
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());

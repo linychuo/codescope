@@ -32,11 +32,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class EdgeCaseTest {
 
     @Test
-    void deepCallChainDoesNotOverflowStack() {
-        // Build a synthetic index with a deep call chain.
-        // That used to overflow CallNode.toJson() when it was recursive.
-        // We use a depth well above the JVM's default stack limit (~1000
-        // frames) but small enough to keep the test fast.
+    void deepCallChainIsTruncatedAtMaxDepthAndSerializesCleanly() throws Exception {
+        // Two prior tests covered the same scenario from different angles:
+        // (a) toJson() must be iterative so deep chains don't blow the stack,
+        // (b) Jackson serialization of the envelope must not StackOverflow on
+        // a deep chain (Jackson's MapSerializer.serialize is recursive even
+        // though our toJson() is iterative).
+        //
+        // The fix puts a MAX_DEPTH cap inside the BFS itself: any branch
+        // deeper than MAX_DEPTH gets cut and replaced with a truncated
+        // marker. That sidesteps both stack-overflow paths at the source.
+        // This test pins down the new contract — depth-cap + clean
+        // serialization — in one place.
         int depth = 2_000;
         ProjectIndex index = new ProjectIndex();
         MethodKey prev = new MethodKey("com.example.L0", "m", 0);
@@ -44,24 +51,41 @@ class EdgeCaseTest {
         for (int i = 1; i < depth; i++) {
             MethodKey cur = new MethodKey("com.example.L" + i, "m", 0);
             index.putDeclaration(cur, new ProjectIndex.SourceLoc("L" + i + ".java", 1));
-            index.recordInvocation(prev, cur);  // prev calls cur
+            index.recordInvocation(prev, cur);
             prev = cur;
         }
-        // After the loop, prev is the deepest node. traceCallers should
-        // produce a chain of (depth-1) callers.
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, prev);
         assertTrue(r.found());
 
         CallNode root = r.root();
         int actualDepth = depthOf(root);
-        assertEquals(depth - 1, actualDepth, "expected chain depth of " + (depth - 1));
+        // BFS caps depth at MAX_DEPTH (500). The cap is private; we assert
+        // it's strictly less than the input chain length (so we know the
+        // cap kicked in) and that there IS a truncation marker at the leaf.
+        assertTrue(actualDepth < depth - 1,
+                "expected BFS to cap at MAX_DEPTH; input was " + (depth - 1)
+                        + ", got " + actualDepth);
+        assertTrue(actualDepth > 0, "chain should have nonzero depth");
+        CallNode leaf = root;
+        while (!leaf.callers.isEmpty()) leaf = leaf.callers.get(0);
+        assertTrue(leaf.truncated,
+                "expected leaf to be a truncated marker (BFS hit depth cap), got: " + leaf);
 
-        // toJson() is iterative and must not throw StackOverflowError on deep
-        // trees. (Jackson's StreamWriteConstraints would later reject >1000
-        // nesting, but that's a downstream concern — we only assert the
-        // in-process tree-build succeeds.)
+        // toJson() is iterative and must not throw StackOverflowError.
         Map<String, Object> tree = root.toJson();
         assertNotNull(tree);
+
+        // Jackson serialization of the envelope must succeed. With the cap
+        // in place this is now trivially within Jackson's default nesting
+        // limit; TraceCallersService also raises StreamWriteConstraints as
+        // belt-and-suspenders for the same scenario.
+        Map<String, Object> envelope = new java.util.LinkedHashMap<>();
+        envelope.put("target", tree);
+        envelope.put("status", "ok");
+        envelope.put("message", "test");
+        String json = TraceCallersService.newObjectMapper().writeValueAsString(envelope);
+        assertTrue(json.contains("\"truncated\":true"),
+                "expected truncated marker in JSON output");
     }
 
     @Test

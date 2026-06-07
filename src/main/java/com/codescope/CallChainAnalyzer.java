@@ -39,12 +39,18 @@ public final class CallChainAnalyzer {
                 rootLoc != null ? rootLoc.line() : 0);
 
         Deque<PathFrame> queue = new ArrayDeque<>();
-        queue.addLast(new PathFrame(target, root, Set.of(target)));
+        queue.addLast(new PathFrame(target, root, Set.of(target), 1));
 
         int nodes = 1;
         int callerCount = 0;
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
+            // depth cap: see MAX_DEPTH javadoc.
+            if (f.depth >= MAX_DEPTH) {
+                f.node.addChild(CallNode.depthMarker(
+                        f.key.declaringClass, f.key.methodName, f.key.arity));
+                continue;
+            }
             for (MethodKey caller : index.callersOf(f.key)) {
                 if (f.ancestors.contains(caller)) {
                     // True back-edge on the current path -> cycle marker.
@@ -64,7 +70,7 @@ public final class CallChainAnalyzer {
                 Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
                 childAncestors.add(caller);
                 childAncestors.addAll(f.ancestors);
-                queue.addLast(new PathFrame(caller, child, childAncestors));
+                queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1));
                 nodes++;
                 callerCount++;
                 if (nodes > MAX_NODES) {
@@ -84,8 +90,18 @@ public final class CallChainAnalyzer {
         return new Result(root, true, "OK; " + callerCount + " caller(s) in chain.");
     }
 
-    private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors) {}
+    private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors, int depth) {}
 
     /** Safety cap on tree size; configurable per-tool-call later. */
     private static final int MAX_NODES = 50_000;
+
+    /**
+     * Safety cap on tree depth. {@link CallNode#toJson()} builds the tree
+     * iteratively, so depth is not bounded by the JVM stack — but
+     * Jackson's serializer recurses, and a 2000-deep chain blows the
+     * default thread stack with {@code StackOverflowError}. 500 leaves
+     * headroom for production server stacks (default 512KB) and is well
+     * under what any realistic caller-chain project would produce.
+     */
+    private static final int MAX_DEPTH = 500;
 }
