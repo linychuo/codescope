@@ -365,6 +365,49 @@ class McpServerTest {
     }
 
     @Test
+    void structurallyInvalidJsonTriggersParseErrorNotHang() throws Exception {
+        // Regression: a buffer with a valid first byte ({, [, ", etc.) but
+        // broken inside — e.g. `{"k":}` (missing value) or `{"k":nil}` (not
+        // a real keyword) — used to make findObjectEnd return -1 from its
+        // IOException catch, so tryParseAndDispatch waited forever for more
+        // bytes. The byte-shape discriminator handles "garbage" whose first
+        // byte is not a valid JSON value start; this test covers the
+        // "structurally invalid" half where the first byte is valid but
+        // the rest is not. The fix: in the IOException catch, treat
+        // Jackson's "this token is not and could never be a valid value"
+        // signals (full unrecognized keyword like `nil`, unexpected
+        // structural character like `}` after `:`) as parse errors, while
+        // genuine EOF signals (JsonEOFException, "end-of-input" anywhere
+        // in the message, partial keyword like `n`/`nu`/`nul` whose only
+        // failing is being a prefix of `null`) still return -1 to keep
+        // waiting.
+        McpServer s = new McpServer();
+        String[] invalid = new String[]{
+                "{\"k\":}",         // missing value after colon
+                "{\"a\":1,\"b\":}", // missing value (mid-object)
+                "{\"k\":nil}",      // not a real keyword (full token)
+                "{\"k\":1,}",       // trailing comma in object
+                "{\"k\":1,\"k\"}",  // string with no colon
+                "{\"r\":trueX",     // garbage after complete `true`
+                "{\"r\":nulll}",    // full unrecognized token
+                "{\"r\":.5}",       // leading-dot number
+                "{\"r\":+1}",       // plus-sign number
+        };
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        for (String input : invalid) {
+            buf.reset();
+            buf.write(input.getBytes(StandardCharsets.UTF_8));
+            assertTrue(s.tryParseAndDispatch(buf),
+                    "invalid buffer '" + input + "' must be consumed (parse error fired)");
+            JsonNode err = readOne();
+            assertEquals(-32700, err.path("error").path("code").asInt(),
+                    "expected Parse error (-32700) for invalid buffer '"
+                            + input + "', got: " + err);
+            outBuf.reset();
+        }
+    }
+
+    @Test
     void notificationsCancelledCancelsPendingRequest() throws Exception {
         // JSON-RPC 2.0 §6.1: a notifications/cancelled carrying the request
         // id must actually cancel the pending server→client future. We

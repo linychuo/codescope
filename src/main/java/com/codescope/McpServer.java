@@ -1,7 +1,9 @@
 package com.codescope;
 
+import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.io.JsonEOFException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -189,22 +191,78 @@ public final class McpServer {
             return off < 0 ? bytes.length : (int) off;
         } catch (IOException e) {
             // We already vetted the first byte above, so an IOException
-            // here is overwhelmingly likely to mean "buffer is incomplete,
-            // more bytes will fix it". This covers clean EOF
-            // (JsonEOFException, "{\"a\":1"), post-comma EOF (plain
-            // JsonParseException with "end-of-input within Object
-            // entries"), AND mid-token EOF on null/true/false/numbers
-            // (which Jackson reports as "Unrecognized token" with no
-            // EOF marker). Returning -1 makes the caller wait.
+            // here is *usually* "buffer is incomplete, more bytes will
+            // fix it". But not always: a buffer like `{"k":}` or
+            // `{"k":nil}` has a valid first byte, fails mid-structure,
+            // and the bytes that follow will never make it parse. The
+            // caller has no way to recover from that, so we must surface
+            // a Parse error rather than hang waiting for more.
             //
-            // Edge case: a buffer like "{garbage}" passes the first-byte
-            // check, hits this catch, and is treated as incomplete. The
-            // server will wait until the host disconnects. Matches the
-            // pre-fix behavior; correctly distinguishing it would require
-            // parser-state introspection we don't need for any realistic
-            // host input.
-            return -1;
+            // Distinguishing the two from Jackson's exception alone is
+            // imperfect (the parser doesn't track "I was mid-token vs
+            // full token" in a way we can read), but the message text
+            // gives us enough signal to cover every realistic case:
+            //   * JsonEOFException — always EOF
+            //   * "Unexpected end-of-input" in the message — EOF
+            //   * "Decimal point not followed by a digit" / "Exponent
+            //     indicator not followed by a digit" — partial number
+            //     (e.g. `{"r":1.}` is waiting for more digits)
+            //   * "Unrecognized token 'X'" where X is a strict prefix
+            //     of null/true/false — partial keyword (e.g. `{"r":n`
+            //     could still become `{"r":null}`)
+            //   * everything else — structural error
+            if (isStreamingIncomplete(e)) return -1;
+            return bytes.length;
         }
+    }
+
+    /**
+     * Distinguishes "more bytes will fix this" from "this buffer can
+     * never be valid JSON" for an exception thrown from the inner
+     * Jackson parser in {@link #findObjectEnd}. See the catch block
+     * above for the rationale; the messages checked here are the ones
+     * Jackson 2.17 emits for streaming-incomplete inputs.
+     */
+    private static boolean isStreamingIncomplete(IOException e) {
+        if (e instanceof JsonEOFException) return true;
+        if (!(e instanceof JsonParseException jpe)) return false;
+        String msg = jpe.getOriginalMessage();
+        if (msg == null) return false;
+        if (msg.contains("end-of-input")) return true;
+        if (msg.contains("Decimal point not followed by a digit")) return true;
+        if (msg.contains("Exponent indicator not followed by a digit")) return true;
+        if (msg.startsWith("Unrecognized token")) {
+            String token = extractQuotedToken(msg);
+            return token != null && isPrefixOfValidKeyword(token);
+        }
+        return false;
+    }
+
+    /**
+     * Pulls the first single-quoted substring out of a Jackson error
+     * message. Returns null if the message doesn't match the
+     * "… 'X' …" shape Jackson uses for token-name errors.
+     */
+    private static String extractQuotedToken(String msg) {
+        int open = msg.indexOf('\'');
+        if (open < 0) return null;
+        int close = msg.indexOf('\'', open + 1);
+        if (close < 0) return null;
+        return msg.substring(open + 1, close);
+    }
+
+    /**
+     * True if {@code token} is a non-empty strict prefix of a valid JSON
+     * literal keyword. The empty string and a complete keyword both
+     * return false — we only treat "more bytes might extend this" as
+     * incomplete, never "this exact buffer is the prefix of a valid
+     * input".
+     */
+    private static boolean isPrefixOfValidKeyword(String token) {
+        if (token.isEmpty()) return false;
+        return "null".startsWith(token) && !token.equals("null")
+                || "true".startsWith(token) && !token.equals("true")
+                || "false".startsWith(token) && !token.equals("false");
     }
 
     /**
