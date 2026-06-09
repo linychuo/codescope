@@ -24,6 +24,32 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ProjectIndex {
     public record SourceLoc(String file, int line) {}
 
+    /**
+     * A single declared symbol — a type (class/interface/enum/record/annotation),
+     * a method, a constructor, or a field. Carries enough metadata for
+     * {@code find_symbols} to render a useful search hit without re-walking
+     * the AST: the simple name (search key), the FQN (stable identifier),
+     * the kind (for filtering), and the source location.
+     *
+     * <p>For top-level/nested types, {@code fqn} is the type FQN
+     * (e.g. {@code com.example.UserRepository}) and {@code container} is
+     * the enclosing-type FQN for nested types, or null for top-level
+     * types. For methods/constructors, {@code fqn} is
+     * {@code Container#name/arity} and {@code container} is the declaring
+     * class FQN. For fields, {@code fqn} is {@code Container.fieldName}
+     * and {@code container} is the declaring class FQN. {@code signature}
+     * carries the method/constructor full parameter-type list, or null
+     * for types and fields.
+     */
+    public record Symbol(
+            String name,
+            String kind,
+            String fqn,
+            String container,
+            String file,
+            int line,
+            String signature) {}
+
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
     private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
@@ -36,6 +62,16 @@ public final class ProjectIndex {
     // synchronized inner).
     private final Map<MethodKey, Map<MethodKey, List<SourceLoc>>> callSites
             = new ConcurrentHashMap<>();
+    // Flat symbol table populated by JdtIndexer. Outer key: lowercase simple
+    // name (for case-insensitive lookup); inner: ordered list of matching
+    // symbols (a single name can match many types/methods/fields). Each
+    // Symbol carries its own FQN + kind, so a search result row is one
+    // Symbol object. Same thread-safety pattern as `calls` /
+    // `callSites`. We index by lowercase simple name because find_symbols
+    // is a substring-on-name search; substring matching still scans the
+    // entry set, so the lowercase key only saves us a toLowerCase per
+    // comparison.
+    private final Map<String, List<Symbol>> symbols = new ConcurrentHashMap<>();
 
     /** Records a source file that the indexer could not parse, for diagnostic reporting. */
     public void recordSkippedFile(String path, String reason) {
@@ -86,6 +122,67 @@ public final class ProjectIndex {
 
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
+    }
+
+    /**
+     * Records one symbol (type, method, constructor, or field) in the
+     * symbol table, keyed by its lowercase simple name. Duplicate
+     * (name, kind, fqn) entries are coalesced — the indexer may visit the
+     * same declaration more than once in pathological cases (e.g. an
+     * ImplicitTypeDeclaration wrapping a top-level record in JDT 3.45)
+     * and we don't want a noisy result. Different FQNs under the same
+     * simple name (a common case, e.g. {@code equals} in many classes)
+     * are kept distinct.
+     */
+    public void recordSymbol(Symbol s) {
+        if (s == null || s.name == null || s.name.isEmpty()) return;
+        List<Symbol> bucket = symbols.computeIfAbsent(s.name.toLowerCase(),
+                k -> Collections.synchronizedList(new ArrayList<>()));
+        synchronized (bucket) {
+            for (Symbol existing : bucket) {
+                if (existing.kind.equals(s.kind)
+                        && existing.fqn.equals(s.fqn)
+                        && java.util.Objects.equals(existing.signature, s.signature)) {
+                    return;  // duplicate, skip
+                }
+            }
+            bucket.add(s);
+        }
+    }
+
+    /**
+     * Returns every recorded symbol whose simple name contains
+     * {@code query} (case-insensitive substring match), optionally
+     * filtered to a single kind. Results are sorted by (fqn, signature)
+     * for stable output. {@code limit} caps the number of returned
+     * symbols; pass {@link Integer#MAX_VALUE} for "no cap" (caller's
+     * responsibility). Returns an empty list if nothing matches.
+     */
+    public List<Symbol> searchSymbols(String query, String kindFilter, int limit) {
+        if (query == null || query.isEmpty()) return List.of();
+        String needle = query.toLowerCase();
+        List<Symbol> hits = new ArrayList<>();
+        for (List<Symbol> bucket : symbols.values()) {
+            List<Symbol> snap;
+            synchronized (bucket) {
+                snap = List.copyOf(bucket);
+            }
+            for (Symbol s : snap) {
+                if (kindFilter != null && !kindFilter.equals(s.kind)) continue;
+                if (s.name.toLowerCase().contains(needle)) {
+                    hits.add(s);
+                }
+            }
+        }
+        hits.sort((a, b) -> {
+            int byFqn = a.fqn.compareTo(b.fqn);
+            if (byFqn != 0) return byFqn;
+            String sa = a.signature == null ? "" : a.signature;
+            String sb = b.signature == null ? "" : b.signature;
+            return sa.compareTo(sb);
+        });
+        if (hits.size() <= limit) return hits;
+        return hits.subList(0, limit);
     }
 
     public List<MethodKey> callersOf(MethodKey target) {

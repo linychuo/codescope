@@ -10,7 +10,9 @@ import org.eclipse.jdt.core.dom.AnonymousClassDeclaration;
 import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.ConstructorInvocation;
+import org.eclipse.jdt.core.dom.EnumConstantDeclaration;
 import org.eclipse.jdt.core.dom.EnumDeclaration;
+import org.eclipse.jdt.core.dom.FieldDeclaration;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.ImplicitTypeDeclaration;
@@ -21,6 +23,7 @@ import org.eclipse.jdt.core.dom.RecordDeclaration;
 import org.eclipse.jdt.core.dom.SuperConstructorInvocation;
 import org.eclipse.jdt.core.dom.SuperMethodInvocation;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
+import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -179,7 +182,9 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(TypeDeclaration node) {
-            typeStack.push(fqnOfType(nameOf(node)));
+            String fqn = fqnOfType(nameOf(node));
+            typeStack.push(fqn);
+            recordTypeSymbol(node, fqn, node.isInterface() ? "interface" : "class");
             return true;
         }
 
@@ -190,7 +195,22 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(EnumDeclaration node) {
-            typeStack.push(fqnOfType(nameOf(node)));
+            String fqn = fqnOfType(nameOf(node));
+            typeStack.push(fqn);
+            recordTypeSymbol(node, fqn, "enum");
+            // Enum constants are NOT FieldDeclaration nodes in JDT — they
+            // have their own EnumConstantDeclaration. Record each as a
+            // "field" so find_symbols can find them by name.
+            String callerClass = fqn;
+            int typeLine = cuLine(node);
+            for (Object c : node.enumConstants()) {
+                EnumConstantDeclaration ec = (EnumConstantDeclaration) c;
+                String constName = ec.getName().getIdentifier();
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        constName, "field",
+                        callerClass + "." + constName,
+                        callerClass, file, typeLine, null));
+            }
             return true;
         }
 
@@ -201,7 +221,25 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(RecordDeclaration node) {
-            typeStack.push(fqnOfType(nameOf(node)));
+            String fqn = fqnOfType(nameOf(node));
+            typeStack.push(fqn);
+            recordTypeSymbol(node, fqn, "record");
+            // Record components (e.g. `int x, int y` in `record Point(int x, int y)`)
+            // are NOT FieldDeclaration nodes — JDT models them as the
+            // canonical constructor's parameters. Record each as a "field"
+            // so find_symbols can find them by name (and to expose the
+            // record's data shape, which is its main purpose).
+            String callerClass = fqn;
+            int typeLine = cuLine(node);
+            for (Object rc : node.recordComponents()) {
+                org.eclipse.jdt.core.dom.SingleVariableDeclaration svd =
+                        (org.eclipse.jdt.core.dom.SingleVariableDeclaration) rc;
+                String compName = svd.getName().getIdentifier();
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        compName, "field",
+                        callerClass + "." + compName,
+                        callerClass, file, typeLine, null));
+            }
             return true;
         }
 
@@ -212,7 +250,9 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(AnnotationTypeDeclaration node) {
-            typeStack.push(fqnOfType(nameOf(node)));
+            String fqn = fqnOfType(nameOf(node));
+            typeStack.push(fqn);
+            recordTypeSymbol(node, fqn, "annotation");
             return true;
         }
 
@@ -225,13 +265,10 @@ public final class JdtIndexer {
         public boolean visit(ImplicitTypeDeclaration node) {
             // JDT 3.45 wraps top-level records here when bindings are enabled.
             // The name is empty; we still enter so nested visits are scoped.
+            // No symbol recorded: the wrapped record is visited separately
+            // via visit(RecordDeclaration) and recorded there.
             typeStack.push(fqnOfType(nameOf(node)));
             return true;
-        }
-
-        @Override
-        public void endVisit(ImplicitTypeDeclaration node) {
-            typeStack.pop();
         }
 
         @Override
@@ -258,11 +295,21 @@ public final class JdtIndexer {
                 fqn = (enclosing.isEmpty() ? "" : enclosing + ".") + "<anon@" + node.getStartPosition() + ">";
             }
             typeStack.push(fqn);
+            // Anonymous classes are not recorded as symbols — their FQN is
+            // a synthesized identity (e.g. "x.Outer$1") that doesn't match
+            // any user-facing concept. Members declared inside them are
+            // still attributed to the synthesized FQN for call-edge
+            // correctness, so trace_callers works for them.
             return true;
         }
 
         @Override
         public void endVisit(AnonymousClassDeclaration node) {
+            typeStack.pop();
+        }
+
+        @Override
+        public void endVisit(ImplicitTypeDeclaration node) {
             typeStack.pop();
         }
 
@@ -280,18 +327,51 @@ public final class JdtIndexer {
                 org.eclipse.jdt.core.dom.ITypeBinding tb = svd.getType().resolveBinding();
                 paramTypes.add(tb != null ? tb.getQualifiedName() : svd.getType().toString());
             }
+            String methodName = node.getName().getIdentifier();
             MethodKey callerKey = new MethodKey(
-                    callerClass, node.getName().getIdentifier(),
+                    callerClass, methodName,
                     paramTypes.size(), paramTypes);
             int line = cuLine(node);
             index.putDeclaration(callerKey, new ProjectIndex.SourceLoc(file, line));
             methodStack.push(new MethodContext(callerKey));
+            // Also record a method/constructor symbol for find_symbols.
+            // JDT's MethodDeclaration covers both regular methods and
+            // constructors; isConstructor() distinguishes them. The
+            // constructor's name in JDT is the class simple name, not
+            // "<init>" (that's the JVM-level identifier) — using the JDT
+            // form is more user-friendly for search.
+            recordMethodSymbol(callerClass, methodName, paramTypes, line,
+                    node.isConstructor() ? "constructor" : "method");
             return true;
         }
 
         @Override
         public void endVisit(MethodDeclaration node) {
             methodStack.pop();
+        }
+
+        @Override
+        public boolean visit(FieldDeclaration node) {
+            // A single FieldDeclaration can declare multiple variables
+            // (e.g. `int a, b, c;`) — each is a separate VariableDeclarationFragment
+            // and we record one symbol per fragment. The line is the
+            // declaration's line (the modifiers' line); all fragments on
+            // the same line share it, which matches how IDEs show fields.
+            String callerClass = currentClass();
+            int line = cuLine(node);
+            for (Object f : node.fragments()) {
+                VariableDeclarationFragment frag = (VariableDeclarationFragment) f;
+                String fieldName = frag.getName().getIdentifier();
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        fieldName,
+                        "field",
+                        callerClass + "." + fieldName,
+                        callerClass,
+                        file,
+                        line,
+                        null));
+            }
+            return false;  // don't descend into the fragments (no nested methods/classes to find)
         }
 
         @Override
@@ -350,6 +430,52 @@ public final class JdtIndexer {
             List<String> paramTypes = new ArrayList<>(pts.length);
             for (ITypeBinding pt : pts) paramTypes.add(pt.getQualifiedName());
             return new MethodKey(dcFqn, b.getName(), pts.length, paramTypes);
+        }
+
+        /**
+         * Records a type symbol for the indexer's symbol table. Skips
+         * empty/blank names (which can happen for {@link
+         * ImplicitTypeDeclaration} wrappers in JDT 3.45) so they don't
+         * pollute search results. Container is the FQN of the
+         * immediately enclosing TYPE, or null for top-level types —
+         * distinguished from the package prefix by comparing against
+         * {@link #packageName}. The line uses the type-name's start
+         * position (not the declaration's), so a leading Javadoc
+         * doesn't push the line up.
+         */
+        private void recordTypeSymbol(ASTNode node, String fqn, String kind) {
+            if (fqn == null || fqn.isEmpty()) return;
+            int dot = fqn.lastIndexOf('.');
+            String simpleName = dot < 0 ? fqn : fqn.substring(dot + 1);
+            if (simpleName.isEmpty()) return;
+            String rawContainer = dot < 0 ? null : fqn.substring(0, dot);
+            String container = packageName.equals(rawContainer) ? null : rawContainer;
+            int line = node instanceof AbstractTypeDeclaration atd && atd.getName() != null
+                    ? cuLine(atd.getName())
+                    : cuLine(node);
+            index.recordSymbol(new ProjectIndex.Symbol(
+                    simpleName, kind, fqn, container, file, line, null));
+        }
+
+        /**
+         * Records a method/constructor symbol. The fqn uses the
+         * {@code Container#name/arity} shape (matching {@link
+         * MethodKey#shortSignature}) so a search hit for a method name
+         * produces a stable identifier the caller can hand back to
+         * {@code trace_callers} or {@code find_call_sites} without
+         * re-parsing.
+         */
+        private void recordMethodSymbol(String declaringClass, String name,
+                                        List<String> paramTypes, int line, String kind) {
+            String signature = formatSignature(paramTypes);
+            String fqn = declaringClass + "#" + name + "/" + paramTypes.size();
+            index.recordSymbol(new ProjectIndex.Symbol(
+                    name, kind, fqn, declaringClass, file, line, signature));
+        }
+
+        private static String formatSignature(List<String> paramTypes) {
+            if (paramTypes.isEmpty()) return "";
+            return String.join(",", paramTypes);
         }
 
         /**
