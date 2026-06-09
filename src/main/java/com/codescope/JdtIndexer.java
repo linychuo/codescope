@@ -296,42 +296,49 @@ public final class JdtIndexer {
 
         @Override
         public boolean visit(MethodInvocation node) {
-            recordCall(node.resolveMethodBinding());
+            recordCall(node.resolveMethodBinding(), node);
             return true;
         }
 
         @Override
         public boolean visit(SuperMethodInvocation node) {
-            recordCall(node.resolveMethodBinding());
+            recordCall(node.resolveMethodBinding(), node);
             return true;
         }
 
         @Override
         public boolean visit(ClassInstanceCreation node) {
-            recordCall(node.resolveConstructorBinding());
+            recordCall(node.resolveConstructorBinding(), node);
             return true;
         }
 
         @Override
         public boolean visit(ConstructorInvocation node) {
-            recordCall(node.resolveConstructorBinding());
+            recordCall(node.resolveConstructorBinding(), node);
             return true;
         }
 
         @Override
         public boolean visit(SuperConstructorInvocation node) {
-            recordCall(node.resolveConstructorBinding());
+            recordCall(node.resolveConstructorBinding(), node);
             return true;
         }
 
-        private void recordCall(IMethodBinding binding) {
+        private void recordCall(IMethodBinding binding, ASTNode node) {
             if (binding == null) return;
             if (methodStack.isEmpty()) return;
             MethodKey target = methodKeyOf(binding);
             if (target == null) return;
+            MethodKey caller = methodStack.peek().key;
             // recordInvocation(caller, callee): the enclosing method is the
             // caller, the resolved binding is the callee being invoked.
-            index.recordInvocation(methodStack.peek().key, target);
+            index.recordInvocation(caller, target);
+            // Also record the source position of the call expression so
+            // find_call_sites can answer "on which line is this called?".
+            // cuLine(node) maps node.getStartPosition() to a 1-based line
+            // via the CompilationUnit line table; same helper used for
+            // method declarations in visit(MethodDeclaration).
+            index.recordCallSite(caller, target, new ProjectIndex.SourceLoc(file, cuLine(node)));
         }
 
         private MethodKey methodKeyOf(IMethodBinding b) {

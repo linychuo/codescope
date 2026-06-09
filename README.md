@@ -9,9 +9,12 @@
 
 ## 工具
 
-只有一个工具:
+两个工具,共享同一套 args schema(`class` / `method` / `arity` / `paramTypes` /
+`project` / `refresh`)、同一个索引缓存:
 
 ### `trace_callers`
+
+返回目标方法的**所有调用方**嵌套调用链树,沿调用链一直向上,直到没有更多调用方为止。
 
 **输入** (`arguments`):
 
@@ -77,15 +80,66 @@
 如果某个 caller 把方法传给已经出现过的祖先方法(成环),会在那个父节点上挂一个
 带 `"cycle": true` 的占位节点,树保持有限。
 
+### `find_call_sites`
+
+返回目标方法在项目源码里的**所有调用点**(扁平列表),每条记录回答"是谁在哪一行
+调了它"。和 `trace_callers` 的区别:`trace_callers` 给一棵调用链树(且只看 caller
+方法**自身**的声明位置),`find_call_sites` 只看**直接调用点**,每条记录里有
+调用的精确行号。同一个 caller 调多次同一 callee 会按出现顺序全部出现(不按行
+去重,因为同一行合法地可以有两个调用)。
+
+**输入** 与 `trace_callers` 完全相同。
+
+**输出**: 扁平 JSON 数组,按 `caller_file / caller_line / call_site.line`
+稳定排序。
+
+```json
+{
+  "target": {
+    "class": "com.example.Target",
+    "method": "leaf",
+    "arity": 0,
+    "signature": "com.example.Target#leaf/0",
+    "file": "src/main/java/com/example/Target.java",
+    "line": 5
+  },
+  "status": "ok",
+  "message": "Found 2 call sites across 1 caller method.",
+  "call_sites": [
+    {
+      "caller": "com.example.Mid#callsLeaf/0",
+      "caller_file": "src/main/java/com/example/Mid.java",
+      "caller_line": 6,
+      "call_site": { "file": "src/main/java/com/example/Mid.java", "line": 7 }
+    },
+    {
+      "caller": "com.example.Mid#callsLeaf/0",
+      "caller_file": "src/main/java/com/example/Mid.java",
+      "caller_line": 6,
+      "call_site": { "file": "src/main/java/com/example/Mid.java", "line": 11 }
+    }
+  ]
+}
+```
+
+- `caller` 是被调方法的 caller 的短签名,`caller_file` / `caller_line` 是 caller
+  方法**声明**位置
+- `call_site.file` / `call_site.line` 是这一次具体调用的源位置 —— 这是
+  `trace_callers` 给不出的信息
+- 没人在项目里调 → `call_sites: []`,message 含 "No call sites found"
+- target 是 jar 方法时,`find_call_sites` 会把所有 overload 的调用点 union 起来,
+  message 里会列出合并的 overload 数和签名
+
 ## 限制
 
 - 只支持 Maven 项目(读 `pom.xml` 找依赖)。**多模块项目**也支持 —— 顺着 `pom.xml` 树把所有
   模块的源根都收进来,只要每个子模块有自己的 `pom.xml`
 - 本地 Maven 仓库优先用 `~/.m2/settings.xml` 里的 `<localRepository>`,否则才是 `~/.m2/repository`
 - 只看项目 `src/main/java` 下的源码 —— `src/test/java` 排除掉(测试代码不参与调用链)
-- `trace_callers` 的 target 可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
-  只要项目里有谁调用了它 —— 这种情况工具能找到项目的调用方并返回;
-  如果项目里压根没人调用这个库方法,返回结果是一棵空树(message 会说"No callers found")
+- 两个工具的 target 都可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
+  只要项目里有谁调用了它 —— 这种情况工具能找到项目的调用方/调用点并返回;
+  如果项目里压根没人调用这个库方法,`trace_callers` 返回一棵空树(message 含
+  "No callers found"),`find_call_sites` 返回空数组(message 含 "No call sites found")
 - `project` 必须是**绝对路径** —— 工具不做相对路径猜测。
   不传 `project` 且 MCP host 没通过 `roots` 告知 workspace 根,工具会显式报错,
   不会去用服务进程的 CWD(那通常不是用户的当前目录)
@@ -130,7 +184,7 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-78 个测试,7 组:
+97 个测试,8 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
   验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
@@ -148,3 +202,8 @@ mvn test
   `result: null` 这类畸形响应不影响后续调用)。
 - `MavenClasspathResolverTest` / `MavenSettingsTest` —— pom 解析、
   classifier 排除、XXE 防御的边界。
+- `FindCallSitesServiceTest` —— `find_call_sites` 的服务层:单/多调用点、
+  library target 多 overload union、no-callers / unknown target / ambiguity
+  诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点。
+- `EdgeCaseTest` 里有一条 `callSitesRecordMultipleSitesForSameCaller` 钉住
+  `ProjectIndex.callSitesOf` 的数据模型契约(多调用点保序、同行不去重)。

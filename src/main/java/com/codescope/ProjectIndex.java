@@ -27,6 +27,15 @@ public final class ProjectIndex {
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
     private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
+    // Parallel to `calls` but per (callee, caller) edge carries a list of
+    // call-site positions. Populated eagerly at index time so that
+    // find_call_sites can answer "on which line" without re-walking the AST.
+    // Outer key: callee MethodKey. Inner key: caller MethodKey. Value:
+    // ordered list of SourceLoc (the call expression's source position).
+    // Same thread-safety pattern as `calls` (ConcurrentHashMap outer,
+    // synchronized inner).
+    private final Map<MethodKey, Map<MethodKey, List<SourceLoc>>> callSites
+            = new ConcurrentHashMap<>();
 
     /** Records a source file that the indexer could not parse, for diagnostic reporting. */
     public void recordSkippedFile(String path, String reason) {
@@ -57,6 +66,24 @@ public final class ProjectIndex {
         }
     }
 
+    /**
+     * Records that {@code caller} invokes {@code callee} at source location
+     * {@code loc}. Multiple calls to this method for the same
+     * (caller, callee) pair append — they are NOT deduplicated, because
+     * two call expressions at different lines are distinct facts (a caller
+     * can invoke the same callee from many sites, and the user wants all
+     * of them).
+     */
+    public void recordCallSite(MethodKey caller, MethodKey callee, SourceLoc loc) {
+        Map<MethodKey, List<SourceLoc>> byCaller =
+                callSites.computeIfAbsent(callee, k -> new ConcurrentHashMap<>());
+        List<SourceLoc> sites = byCaller.computeIfAbsent(caller, k ->
+                Collections.synchronizedList(new ArrayList<>()));
+        synchronized (sites) {
+            sites.add(loc);
+        }
+    }
+
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
     }
@@ -67,6 +94,25 @@ public final class ProjectIndex {
         synchronized (set) {
             return List.copyOf(set);
         }
+    }
+
+    /**
+     * Returns a defensive snapshot of call sites for {@code target}, keyed
+     * by the caller MethodKey. Each value is the ordered list of call
+     * sites within that caller's body (one entry per AST node that
+     * resolves to {@code target}). Returns an empty map if {@code target}
+     * has no recorded call sites.
+     */
+    public Map<MethodKey, List<SourceLoc>> callSitesOf(MethodKey target) {
+        Map<MethodKey, List<SourceLoc>> m = callSites.get(target);
+        if (m == null) return Collections.emptyMap();
+        Map<MethodKey, List<SourceLoc>> snap = new java.util.LinkedHashMap<>(m.size());
+        for (Map.Entry<MethodKey, List<SourceLoc>> e : m.entrySet()) {
+            synchronized (e.getValue()) {
+                snap.put(e.getKey(), List.copyOf(e.getValue()));
+            }
+        }
+        return Collections.unmodifiableMap(snap);
     }
 
     public SourceLoc declarationOf(MethodKey method) {

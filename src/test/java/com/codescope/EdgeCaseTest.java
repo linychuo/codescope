@@ -513,6 +513,69 @@ class EdgeCaseTest {
                 "expected callsLeaf among callers, got: " + callers);
     }
 
+    @Test
+    void callSitesRecordMultipleSitesForSameCaller() {
+        // The find_call_sites feature relies on ProjectIndex.callSitesOf
+        // returning every recorded call site, in order, undeduped — even
+        // when the same caller invokes the same callee from many lines
+        // in its body. Two call expressions on the same line should
+        // collapse (a line in source code is one fact), but two on
+        // different lines must both surface. This is the load-bearing
+        // data-model contract for the new tool.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey target = new MethodKey("com.lib.External", "doStuff", 1,
+                List.of("java.lang.String"));
+        // target is not declared in this index — library method shape.
+        MethodKey caller = new MethodKey("com.example.App", "hot", 0);
+        index.putDeclaration(caller, new ProjectIndex.SourceLoc("App.java", 5));
+
+        // Three sites at three different lines, then a duplicate site
+        // (same line) which should also be preserved (a caller can
+        // legitimately call the same method twice from the same line —
+        // e.g. a method invocation that's split by a comment, or a
+        // statement written on a single line). Then a fourth site in a
+        // different caller.
+        index.recordCallSite(caller, target,
+                new ProjectIndex.SourceLoc("App.java", 10));
+        index.recordCallSite(caller, target,
+                new ProjectIndex.SourceLoc("App.java", 20));
+        index.recordCallSite(caller, target,
+                new ProjectIndex.SourceLoc("App.java", 30));
+        index.recordCallSite(caller, target,
+                new ProjectIndex.SourceLoc("App.java", 20));   // duplicate line
+
+        MethodKey otherCaller = new MethodKey("com.example.Other", "use", 0);
+        index.putDeclaration(otherCaller, new ProjectIndex.SourceLoc("Other.java", 5));
+        index.recordCallSite(otherCaller, target,
+                new ProjectIndex.SourceLoc("Other.java", 8));
+
+        Map<MethodKey, List<ProjectIndex.SourceLoc>> sites = index.callSitesOf(target);
+        assertEquals(2, sites.size(), "expected 2 callers with sites, got: " + sites.keySet());
+
+        // Same-caller's sites must be in insertion order, with the
+        // duplicate preserved (NOT deduped to a Set).
+        List<ProjectIndex.SourceLoc> hotSites = sites.get(caller);
+        assertNotNull(hotSites);
+        assertEquals(4, hotSites.size(), "duplicate-line site should NOT be deduped, got: " + hotSites);
+        assertEquals(10, hotSites.get(0).line());
+        assertEquals(20, hotSites.get(1).line());
+        assertEquals(30, hotSites.get(2).line());
+        assertEquals(20, hotSites.get(3).line(), "duplicate site at line 20 preserved");
+
+        // All sites carry their file too — important for the new tool's
+        // output to attribute sites back to the source file.
+        for (ProjectIndex.SourceLoc loc : hotSites) {
+            assertEquals("App.java", loc.file());
+        }
+
+        // Second caller's site is independent.
+        List<ProjectIndex.SourceLoc> otherSites = sites.get(otherCaller);
+        assertNotNull(otherSites);
+        assertEquals(1, otherSites.size());
+        assertEquals(8, otherSites.get(0).line());
+        assertEquals("Other.java", otherSites.get(0).file());
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
