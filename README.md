@@ -9,8 +9,9 @@
 
 ## 工具
 
-两个工具,共享同一套 args schema(`class` / `method` / `arity` / `paramTypes` /
-`project` / `refresh`)、同一个索引缓存:
+三个工具,共享同一个索引缓存。`trace_callers` / `find_call_sites` 共享一类 args
+schema(`class` / `method` / `arity` / `paramTypes` / `project` / `refresh`),`find_symbols`
+用另一套(`query` / `kind` / `project` / `refresh` / `limit`):
 
 ### `trace_callers`
 
@@ -130,13 +131,73 @@
 - target 是 jar 方法时,`find_call_sites` 会把所有 overload 的调用点 union 起来,
   message 里会列出合并的 overload 数和签名
 
+### `find_symbols`
+
+按简单名做**大小写不敏感的子串匹配**,在项目索引里找出所有 class / interface /
+enum / record / annotation / method / constructor / field,回答"X 在哪儿定义"
+和"哪些标识符包含 Y"。和 `trace_callers` / `find_call_sites` 不同,这个工具不
+需要知道完整 FQN —— 给一个名字片段就能搜。
+
+**输入** (`arguments`):
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `query` | 是 | 大小写不敏感的子串,匹配 symbol 的简单名。例如 `"Repository"` 匹配 `UserRepository`、`OrderRepository`;`"get"` 匹配所有 getter;`"validate"` 同时匹配 `validate()` 方法和 `Validator` 类 |
+| `kind` | 否 | 过滤,可选值 `class` / `interface` / `enum` / `record` / `annotation` / `method` / `constructor` / `field`。不传则所有 kind 一起返回(同名 class `equals` 和 `Object#equals` 方法会同时出现) |
+| `project` | 否 | 同上 |
+| `refresh` | 否 | 同上 |
+| `limit` | 否 | 返回上限,默认 `100`,最大 `1000`。命中上限时 `message` 含 "capped" 提示,让你收紧 `query` 或加 `kind` 过滤 |
+
+**输出**: 扁平 JSON 数组,按 `(fqn, signature)` 稳定排序。
+
+```json
+{
+  "query": "leaf",
+  "kind": null,
+  "status": "ok",
+  "message": "OK; 3 match(es).",
+  "symbols": [
+    {
+      "name": "leaf",
+      "kind": "method",
+      "fqn": "com.example.Target#leaf/0",
+      "container": "com.example.Target",
+      "file": "src/main/java/com/example/Target.java",
+      "line": 6,
+      "signature": ""
+    },
+    {
+      "name": "leafWithArg",
+      "kind": "method",
+      "fqn": "com.example.Target#leafWithArg/1",
+      "container": "com.example.Target",
+      "file": "src/main/java/com/example/Target.java",
+      "line": 10,
+      "signature": "int"
+    }
+  ]
+}
+```
+
+- `container` 是直接包它的类型的 FQN;**顶层类型的 `container` 是 `null`**(不是
+  package 名),这样能直接区分"X 是顶层类"和"X 是某个类的内部类"
+- `signature` 只对 method / constructor 有意义 —— 是参数类型的完全限定名按声明
+  顺序用 `,` 拼起来;零参方法是空串。class / field / enum 常量 / record 组件的
+  `signature` 永远是 `null`
+- `fqn` 对 method / constructor 是 `Container#name/arity` 形状,可以直接原样回传
+  给 `trace_callers` / `find_call_sites`,不用再解析
+- enum 常量按 `field` kind 暴露(例如 `com.example.Kind.ALPHA`);record 组件
+  也按 `field` 暴露
+- `line` 是声明位置的源行号 —— 对类型来说用的是类型名那一行(不是 `public class`
+  修饰符的行),所以前面的 Javadoc 不会把行号往上推
+
 ## 限制
 
 - 只支持 Maven 项目(读 `pom.xml` 找依赖)。**多模块项目**也支持 —— 顺着 `pom.xml` 树把所有
   模块的源根都收进来,只要每个子模块有自己的 `pom.xml`
 - 本地 Maven 仓库优先用 `~/.m2/settings.xml` 里的 `<localRepository>`,否则才是 `~/.m2/repository`
 - 只看项目 `src/main/java` 下的源码 —— `src/test/java` 排除掉(测试代码不参与调用链)
-- 两个工具的 target 都可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
+- 两个工具(`trace_callers` / `find_call_sites`)的 target 都可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
   只要项目里有谁调用了它 —— 这种情况工具能找到项目的调用方/调用点并返回;
   如果项目里压根没人调用这个库方法,`trace_callers` 返回一棵空树(message 含
   "No callers found"),`find_call_sites` 返回空数组(message 含 "No call sites found")
@@ -146,6 +207,10 @@
 - 重载必须用 `arity` 或 `paramTypes` 显式消歧,否则报错并列出所有候选
 - 构造方法(`<init>`)也按方法处理
 - 一次会话里同一个 project 路径的索引只构建一次,缓存复用
+- JDT 3.45 的一个限制:**顶层 `record` 声明会被包在 `ImplicitTypeDeclaration` 里**,
+  `find_symbols` 看不到这种 record 自身(kind 永远拿不到 `record`)以及它的
+  components —— 嵌套 record 正常。这个限制在 `find_symbols` 的 description 里
+  也写了,宿主/客户端能看到
 
 ## 编译运行
 
@@ -184,7 +249,7 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-97 个测试,8 组:
+112 个测试,9 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
   验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
@@ -205,5 +270,9 @@ mvn test
 - `FindCallSitesServiceTest` —— `find_call_sites` 的服务层:单/多调用点、
   library target 多 overload union、no-callers / unknown target / ambiguity
   诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点。
+- `FindSymbolsServiceTest` —— `find_symbols` 的服务层:大小写不敏感子串、
+  kind 过滤、各类声明的索引路径(类/方法/构造器/普通字段/enum 常量/record
+  组件)、no-match 诊断、limit 截断提示、blank query / unknown kind /
+  缺 `pom.xml` 报错、缓存 + `refresh` 在新文件加入后能拾到新符号。
 - `EdgeCaseTest` 里有一条 `callSitesRecordMultipleSitesForSameCaller` 钉住
   `ProjectIndex.callSitesOf` 的数据模型契约(多调用点保序、同行不去重)。

@@ -20,31 +20,33 @@
    │  - pending: id → Future      │   服务端挂起请求的关联表
    └──────────────┬───────────────┘
                   ▼ tools/call
-   ┌──────────────────────────────┐
-   │ TraceCallersTool             │   MCP 适配层:参数校验、project 解析
-   │  - inputSchema()             │   JSON-Schema 描述,host 用它生成 UI
-   │  - invoke(args)              │   → TraceCallersService
-   └──────────────┬───────────────┘
-                  ▼
-   ┌──────────────────────────────┐
-   │ TraceCallersService          │   业务编排
-   │  - LRU indexCache (8 项)     │   同 project 路径只构建一次,跨会话复用
-   │  - resolveTarget             │   项目内声明的方法做精确解析
-   │  - traceCallersJson          │   包成 MCP `tools/call` 的响应 JSON
-   └─────┬────────────────┬───────┘
-         │                │
-         ▼                ▼
-   ┌────────────┐   ┌──────────────────────┐
-   │ JdtIndexer │   │ CallChainAnalyzer    │
-   │ (构建索引) │   │ (BFS 反向回溯调用链) │
-   └────────────┘   └──────────────────────┘
-         │                │
-         ▼                ▼
+        ┌─────────┼─────────────┐
+        ▼         ▼             ▼
+   ┌────────┐ ┌────────┐ ┌────────────────┐
+   │ ...Tool│ │ ...Tool│ │ FindSymbolsTool│   MCP 适配层:参数校验、project 解析
+   │  同模式 │ │  同模式 │ │  - inputSchema │   JSON-Schema,host 用它生成 UI
+   │        │ │        │ │  - invoke(args)│   → FindSymbolsService
+   └────┬───┘ └────┬───┘ └────────┬───────┘
+        ▼         ▼              ▼
+   ┌─────────────────────────────────────┐
+   │ TraceCallersService / ... /         │   业务编排
+   │ FindSymbolsService                  │   都各自有 LRU indexCache
+   │  - LRU indexCache (8 项)            │   同 project 路径只构建一次,跨会话复用
+   └─────┬───────────────────────────────┘
+         │
+         ▼
+   ┌────────────┐
+   │ JdtIndexer │   构建索引(单次跑出全部数据:方法调用 + 符号表)
+   └────────────┘
+         │
+         ▼
    ┌─────────────────────────────────────┐
    │ ProjectIndex                        │
-   │  - calls:   callee → {caller...}    │  ← 关键:反向
-   │  - declarations: method → SourceLoc │
-   │  - skippedFiles: List<String>       │  解析失败的文件名+原因
+   │  - calls:   callee → {caller...}    │  ← trace_callers 用
+   │  - callSites: caller+callee → Loc[] │  ← find_call_sites 用
+   │  - declarations: method → SourceLoc │  ← 工具通用
+   │  - symbols: name → List<Symbol>     │  ← find_symbols 用(子串检索)
+   │  - skippedFiles: List<String>       │   解析失败的文件名+原因
    └─────────────────────────────────────┘
 ```
 
@@ -99,3 +101,5 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 - **`McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
 - **`McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
 - **`MavenClasspathResolverTest` / `MavenSettingsTest` / `MultiModuleTest`** — pom 解析各自的边界
+- **`FindCallSitesServiceTest`** — `find_call_sites` 服务层:单/多调用点、library target 多 overload union、no-callers / unknown target / ambiguity 诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点
+- **`FindSymbolsServiceTest`** — `find_symbols` 服务层:大小写不敏感子串、kind 过滤、各类声明的索引路径(类/方法/构造器/普通字段/enum 常量/record 组件)、no-match 诊断、limit 截断提示、blank query / unknown kind / 缺 `pom.xml` 报错、缓存 + `refresh` 在新文件加入后能拾到新符号
