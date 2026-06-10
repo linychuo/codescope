@@ -1,8 +1,14 @@
 package com.codescope;
 
-/** Entry point: starts the MCP server on stdio. */
+/** Entry point: starts the MCP server on stdio, or the CLI front-end if args are present. */
 public final class Main {
     public static void main(String[] args) throws Exception {
+        if (args.length > 0) {
+            // CLI mode: bypass JSON-RPC, exit when done. Cli.run returns
+            // the exit code; Cli.main wraps it with System.exit.
+            Cli.main(args);
+            return;
+        }
         TraceCallersTool traceCallers = new TraceCallersTool();
         FindCallSitesTool findCallSites = new FindCallSitesTool();
         FindSymbolsTool findSymbols = new FindSymbolsTool();
