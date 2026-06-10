@@ -57,7 +57,17 @@ public final class JdtIndexer {
 
         String[] cp = classpath.toArray(new String[0]);
         String[] sp = sourcepath.toArray(new String[0]);
-        String[] encodingNames = null;  // null = platform default encoding
+        // Match the read charset (UTF-8) above. Passing null falls back to
+        // the JVM default charset, which on a non-UTF-8 host (Windows CI,
+        // legacy GBK locales) makes JDT re-decode sourcepath reads with a
+        // different charset than the reader, corrupting identifiers and
+        // silently dropping call edges. The encoding names array must have
+        // the same length as the sourcepath array — JDT rejects mismatches
+        // — so fill per-entry, leaving an empty array when sourcepath is
+        // empty (the main file's encoding comes from setSource's char[],
+        // not from this array).
+        String[] encodingNames = new String[sp.length];
+        java.util.Arrays.fill(encodingNames, "UTF-8");
 
         // Java 21 virtual thread per file: parsing is mostly CPU (AST build)
         // but each task also does file I/O (readString) and JDT binding

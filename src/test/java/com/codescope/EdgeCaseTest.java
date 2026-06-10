@@ -264,6 +264,69 @@ class EdgeCaseTest {
     }
 
     @Test
+    void jdtIndexerUsesUtf8Consistently(@TempDir Path tmp) throws IOException {
+        // Regression: JdtIndexer reads source files as UTF-8
+        // (Files.readString(path, StandardCharsets.UTF_8)) but previously
+        // passed encodingNames=null to ASTParser, which makes JDT fall
+        // back to the JVM's default charset for sourcepath reads. The
+        // encoding parameter has no effect on setSource(char[]) content
+        // (already decoded), so a single-file test won't catch the bug —
+        // JDT only consults the encoding when it reads another source
+        // file from the sourcepath to resolve a binding.
+        //
+        // The bug manifests when (1) the JVM default charset is not UTF-8
+        // (Windows CI runners, legacy GBK locales) AND (2) the sourcepath
+        // contains a file with non-ASCII identifiers. The cross-file
+        // read uses the wrong charset, the identifier becomes mojibake,
+        // the caller's binding to that class fails, and the call edge
+        // is silently dropped.
+        //
+        // To reproduce on a UTF-8 host:
+        //   mvn test -Dtest=EdgeCaseTest#jdtIndexerUsesUtf8Consistently \
+        //           -DargLine="-Dfile.encoding=US-ASCII"
+        //
+        // On the buggy code with US-ASCII default, Caller.run's call to
+        // 工具.服务() is not recorded (the binding to 工具 fails when JDT
+        // re-decodes Util.java with US-ASCII). With the fix
+        // (encodingNames = new String[]{"UTF-8"}), the call is recorded.
+        // The sourcepath layout must mirror the package: com.example →
+        // com/example/.
+        Path pkgRoot = tmp.resolve("src/main/java/com/example");
+        Files.createDirectories(pkgRoot);
+        Path util = pkgRoot.resolve("Util.java");
+        Files.writeString(util, """
+                package com.example;
+                public class 工具 {
+                    public void 服务() {}
+                }
+                """, java.nio.charset.StandardCharsets.UTF_8);
+        Path caller = pkgRoot.resolve("Caller.java");
+        Files.writeString(caller, """
+                package com.example;
+                public class Caller {
+                    public void run() {
+                        工具 t = new 工具();
+                        t.服务();
+                    }
+                }
+                """, java.nio.charset.StandardCharsets.UTF_8);
+
+        Path srcRoot = tmp.resolve("src/main/java");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(caller, util),
+                List.of(),
+                List.of(srcRoot.toString()),
+                tmp);
+        // 工具.服务 should be in the index as a callee, with Caller.run
+        // recorded as one of its callers.
+        MethodKey callee = new MethodKey("com.example.工具", "服务", 0);
+        List<MethodKey> callers = index.callersOf(callee);
+        assertTrue(callers.stream().anyMatch(c -> "run".equals(c.methodName)),
+                "expected Caller.run to be a caller of 工具.服务, got: " + callers
+                + "; skipped=" + index.skippedFiles());
+    }
+
+    @Test
     void jdtIndexerBuildReturnsPromptlyOnInterrupt(@TempDir Path tmp) throws Exception {
         // The interrupt handler inside JdtIndexer.build() breaks out of the
         // future-wait loop on InterruptedException, but the surrounding
