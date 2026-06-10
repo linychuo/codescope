@@ -219,11 +219,32 @@ mvn package
 # 产出 target/codescope.jar,自带所有依赖
 ```
 
-直接用 stdio 跑:
+### CLI 模式(不用 AI,直接看结果)
+
+`java -jar codescope.jar <command> [options]` 三个子命令,直接打到 stdout 一段
+pretty-printed JSON,退出码 0 成功 / 1 工具错 / 2 用法错。共享 `*Service` 业务层,
+输出和 MCP 工具一字不差。
+
+```bash
+java -jar target/codescope.jar trace-callers com.example.Foo bar --project /abs/path
+java -jar target/codescope.jar find-call-sites com.example.Foo bar --project /abs/path
+java -jar target/codescope.jar find-symbols validate --project /abs/path --kind method --limit 20
+java -jar target/codescope.jar --help
+```
+
+不接 MCP host、想自己看原始 JSON 排查"是不是 AI 漏报"的时候用这个。
+`project` 必须是**绝对路径**(Linux/macOS 用 `/`,Windows 两种分隔符都行,推荐
+`C:/projects/foo` 这种正斜杠,避开 JSON 字符串里的反斜杠转义)。
+
+### stdio 模式(给 MCP host)
 
 ```bash
 java -jar target/codescope.jar
 ```
+
+无参数启动 = 起 MCP server,stdio 上跑 JSON-RPC 2.0。这条路径通常只用于
+接 Claude Desktop / Claude Code 这类 host;想自己手写请求可以看
+[`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md)(bash + PowerShell)。
 
 ## 接入 MCP host
 
@@ -249,7 +270,7 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-112 个测试,9 组:
+125 个测试,12 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
   验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
@@ -276,3 +297,7 @@ mvn test
   缺 `pom.xml` 报错、缓存 + `refresh` 在新文件加入后能拾到新符号。
 - `EdgeCaseTest` 里有一条 `callSitesRecordMultipleSitesForSameCaller` 钉住
   `ProjectIndex.callSitesOf` 的数据模型契约(多调用点保序、同行不去重)。
+- `CliTest` — `java -jar codescope.jar <command> ...` CLI 路径:子命令分发、
+  `--project` 必填、缺位置参数、未知 option、未知 kind、退出码(`Cli.run` 直驱,
+  不走 `System.exit`);三个子命令的 happy path 跑 codescope 自身,看输出 envelope
+  形状。

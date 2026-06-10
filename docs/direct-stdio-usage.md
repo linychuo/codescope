@@ -4,6 +4,18 @@
 
 跨平台：本文档的协议部分与平台无关；具体命令给出 **bash**（Linux / macOS / Git Bash / WSL）和 **PowerShell 5.1+**（Windows 原生）两个版本。
 
+> **更简单的替代：`java -jar codescope.jar <command> [options]`** —— 不走 JSON-RPC，
+> 直接 stdout 出一段 pretty-printed JSON，退出码 0/1/2。子命令有 `trace-callers` /
+> `find-call-sites` / `find-symbols`，`--help` 看完整选项。
+>
+> ```bash
+> java -jar target/codescope.jar trace-callers com.example.Foo bar --project C:/projects/foo
+> ```
+>
+> 输出 envelope 和 MCP 工具一字不差。需要"看一次工具原始长什么样"的话优先用这个。
+> 本文档剩下的部分是 stdio / JSON-RPC 路径，**仅在写 MCP host 客户端 / 想跑半交互
+> session 时才需要看**。
+
 ## 启动
 
 ```bash
