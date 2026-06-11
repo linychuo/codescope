@@ -62,20 +62,22 @@ public final class ProjectLoader {
             s.filter(Files::isDirectory)
                     // we want a directory whose name is "java"
                     .filter(p -> p.getFileName().toString().equals("java"))
-                    // whose parent is "main" (e.g. src/main/java, core/src/main/java)
+                    // whose parent is "main" (e.g. src/main/java, core/src/main/java,
+                    // and annotation-processor outputs like
+                    // target/generated-sources/annotations/main/java)
                     .filter(p -> {
                         Path parent = p.getParent();
                         return parent != null && parent.getFileName().toString().equals("main");
                     })
-                    // and grandparent is "src" (avoids matching any deep .../main/java)
-                    .filter(p -> {
-                        Path grand = p.getParent() == null ? null : p.getParent().getParent();
-                        return grand != null && grand.getFileName().toString().equals("src");
-                    })
-                    // and we don't want to descend into build outputs
-                    .filter(p -> !relativeSegmentEquals(p, projectRoot, "target")
-                            && !relativeSegmentEquals(p, projectRoot, "build")
-                            && !relativeSegmentEquals(p, projectRoot, "node_modules"))
+                    // node_modules is the only path segment we still refuse to
+                    // descend into wholesale. target/ and build/ used to be
+                    // blanket-excluded here, but that hides real source roots
+                    // under target/generated-sources/... (MapStruct, JAXB,
+                    // Spring Data, etc.). Compiled bytecode dirs like
+                    // target/classes are filtered out naturally by the .java
+                    // extension check in collectSources, so we don't need
+                    // a directory-level blacklist for them.
+                    .filter(p -> !relativeSegmentEquals(p, projectRoot, "node_modules"))
                     .forEach(out::add);
         } catch (IOException e) {
             // best-effort
