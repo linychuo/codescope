@@ -52,6 +52,16 @@ public final class ProjectIndex {
 
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
     private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
+    // Method-hierarchy index: for each MethodKey M, the set of other
+    // MethodKeys in M's hierarchy group (the methods M overrides in a
+    // supertype, plus the methods that implement M in subtypes). Both
+    // directions are recorded bidirectionally by recordHierarchy.
+    // Populated eagerly by JdtIndexer during visit(MethodDeclaration) —
+    // see recordMethodHierarchy there. Used by CallChainAnalyzer to
+    // cross interface boundaries during BFS, so a caller that statically
+    // references an interface method is reachable when the BFS reaches
+    // a concrete implementation (or vice versa).
+    private final Map<MethodKey, Set<MethodKey>> hierarchy = new ConcurrentHashMap<>();
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
     // Parallel to `calls` but per (callee, caller) edge carries a list of
     // call-site positions. Populated eagerly at index time so that
@@ -122,6 +132,49 @@ public final class ProjectIndex {
 
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
+    }
+
+    /**
+     * Records that {@code child} and {@code parent} belong to the same
+     * method-hierarchy group — i.e. they have the same name + arity and
+     * are linked by an implements / extends relationship through their
+     * declaring types. Stored bidirectionally: callers of either can find
+     * the other via {@link #relatedMethods}.
+     *
+     * <p>Self-pairs are silently skipped. Both keys must already be
+     * declared in {@link #declarations} (the indexer records hierarchy
+     * from {@code visit(MethodDeclaration)}, which also calls
+     * {@code putDeclaration} — so this is naturally true for project
+     * methods; library methods recorded via {@code findInvokedKeys} never
+     * get hierarchy entries because they are not declared in project
+     * sources).
+     */
+    public void recordHierarchy(MethodKey child, MethodKey parent) {
+        if (child == null || parent == null || child.equals(parent)) return;
+        hierarchy.computeIfAbsent(child, k -> ConcurrentHashMap.newKeySet()).add(parent);
+        hierarchy.computeIfAbsent(parent, k -> ConcurrentHashMap.newKeySet()).add(child);
+    }
+
+    /**
+     * Returns the set of MethodKeys that share {@code m}'s method-hierarchy
+     * group, including {@code m} itself. Iteration order is sorted by
+     * {@link MethodKey#toString()} for deterministic BFS expansion.
+     *
+     * <p>Returns a singleton {@code Set.of(m)} if {@code m} has no
+     * hierarchy entries (the common case for plain class methods that
+     * don't override anything).
+     */
+    public Set<MethodKey> relatedMethods(MethodKey m) {
+        if (m == null) return Set.of();
+        Set<MethodKey> group = hierarchy.get(m);
+        if (group == null || group.isEmpty()) {
+            return Set.of(m);
+        }
+        java.util.TreeSet<MethodKey> out = new java.util.TreeSet<>(
+                (a, b) -> a.toString().compareTo(b.toString()));
+        out.add(m);
+        out.addAll(group);
+        return out;
     }
 
     /**

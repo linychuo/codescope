@@ -32,7 +32,9 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -343,6 +345,15 @@ public final class JdtIndexer {
                     paramTypes.size(), paramTypes);
             int line = cuLine(node);
             index.putDeclaration(callerKey, new ProjectIndex.SourceLoc(file, line));
+            // Walk the declaring type's supertypes to find methods with
+            // the same name+arity — those are M's hierarchy siblings
+            // (overridden in superclass, or declared in a super-interface
+            // that M implements). Used by CallChainAnalyzer to cross
+            // interface boundaries. See ProjectIndex.recordHierarchy.
+            IMethodBinding declBinding = node.resolveBinding();
+            if (declBinding != null) {
+                recordMethodHierarchy(declBinding);
+            }
             methodStack.push(new MethodContext(callerKey));
             // Also record a method/constructor symbol for find_symbols.
             // JDT's MethodDeclaration covers both regular methods and
@@ -440,6 +451,67 @@ public final class JdtIndexer {
             List<String> paramTypes = new ArrayList<>(pts.length);
             for (ITypeBinding pt : pts) paramTypes.add(pt.getQualifiedName());
             return new MethodKey(dcFqn, b.getName(), pts.length, paramTypes);
+        }
+
+        /**
+         * Walks the declaring type of {@code b} and its supertypes, looking
+         * for methods with the same name + arity. Each match is recorded
+         * as a hierarchy sibling of {@code b} via
+         * {@link ProjectIndex#recordHierarchy}, so a BFS expanding {@code b}
+         * can also expand its overrides / implementors.
+         *
+         * <p>Walks the full supertype chain (superclass + interfaces +
+         * super-interfaces) so diamond inheritance is handled: if a class
+         * D implements I1 and I2, and both declare {@code m()}, then
+         * D#m ends up related to both I1#m and I2#m. The walk is bounded
+         * by the size of the type hierarchy (small in practice) and
+         * deduplicated by a visited set, so a diamond doesn't re-walk
+         * any type.
+         *
+         * <p>Synthetic methods (e.g. JDT bridge methods for generic
+         * erasure) are filtered out by binding.isSynthetic() — they
+         * would otherwise pollute the index with non-user-facing
+         * entries.
+         */
+        private void recordMethodHierarchy(IMethodBinding b) {
+            if (b == null) return;
+            ITypeBinding dc = b.getDeclaringClass();
+            if (dc == null) return;
+            MethodKey myKey = methodKeyOf(b);
+            if (myKey == null) return;
+            String myName = b.getName();
+            int myArity = b.getParameterTypes().length;
+
+            Set<org.eclipse.jdt.core.dom.ITypeBinding> visited =
+                    new HashSet<>();
+            Deque<org.eclipse.jdt.core.dom.ITypeBinding> queue =
+                    new ArrayDeque<>();
+            // Seed with the direct supertypes of M's declaring class.
+            // For a class: superclass + implemented interfaces.
+            // For an interface: super-interfaces (getSuperclass() is null).
+            if (dc.getSuperclass() != null) queue.add(dc.getSuperclass());
+            for (org.eclipse.jdt.core.dom.ITypeBinding iface : dc.getInterfaces()) {
+                queue.add(iface);
+            }
+            while (!queue.isEmpty()) {
+                org.eclipse.jdt.core.dom.ITypeBinding st = queue.removeFirst();
+                if (st == null || !visited.add(st)) continue;
+                for (IMethodBinding m : st.getDeclaredMethods()) {
+                    if (m.isSynthetic()) continue;
+                    if (!m.getName().equals(myName)) continue;
+                    if (m.getParameterTypes().length != myArity) continue;
+                    MethodKey parentKey = methodKeyOf(m);
+                    if (parentKey != null) {
+                        index.recordHierarchy(myKey, parentKey);
+                    }
+                }
+                // Recurse into this supertype's own supertypes — captures
+                // the I2-extends-I1 case where I2 inherits m from I1.
+                if (st.getSuperclass() != null) queue.add(st.getSuperclass());
+                for (org.eclipse.jdt.core.dom.ITypeBinding iface : st.getInterfaces()) {
+                    queue.add(iface);
+                }
+            }
         }
 
         /**

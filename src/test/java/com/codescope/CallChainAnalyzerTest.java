@@ -245,4 +245,49 @@ class CallChainAnalyzerTest {
         assertEquals("com.example.SpecialCaller", callers.get(0).get("class"));
         assertEquals("useEnumMethod", callers.get(0).get("method"));
     }
+
+    @Test
+    void crossesInterfaceBoundaryToFindDomainCaller() {
+        // Mirrors the typical Spring + MyBatis + JPA layering:
+        //   IfaceDao#findById   ←   IfaceRepositoryImpl#findById   (impl calls dao)
+        //                                       ↑ implements
+        //                              IfaceRepository#findById   ←   IfaceDomainImpl#findById
+        //                                                                              ↑ implements
+        //                                                                       IfaceDomain#findById
+        //
+        // IfaceDomainImpl's static type for `repository` is the IfaceRepository
+        // interface, so JDT binding resolves its call to IfaceRepository#findById,
+        // NOT IfaceRepositoryImpl#findById. With the current BFS that follows
+        // MethodKey literally, the chain stops at IfaceRepositoryImpl.
+        //
+        // The fix: when BFS expands IfaceRepositoryImpl#findById, it should also
+        // look at the callers of IfaceRepository#findById (interface-typed callsite).
+        // That brings IfaceDomainImpl into the chain.
+
+        MethodKey dao = mustResolve(index, "com.example.IfaceDao", "findById");
+        assertNotNull(dao);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, dao);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers = (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers);
+        assertEquals(1, callers.size(), "IfaceRepositoryImpl is the only direct caller of IfaceDao");
+        assertEquals("com.example.IfaceRepositoryImpl", callers.get(0).get("class"));
+        assertEquals("findById", callers.get(0).get("method"));
+
+        // The chain must cross the interface boundary here: IfaceRepositoryImpl
+        // implements IfaceRepository, and IfaceDomainImpl calls through the
+        // interface. The fix should make IfaceDomainImpl appear as a caller of
+        // IfaceRepositoryImpl#findById (via the interface).
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> implCallers =
+                (List<Map<String, Object>>) callers.get(0).get("callers");
+        assertNotNull(implCallers,
+                "expected BFS to cross the interface boundary and find IfaceDomainImpl");
+        assertEquals(1, implCallers.size());
+        assertEquals("com.example.IfaceDomainImpl", implCallers.get(0).get("class"));
+        assertEquals("findById", implCallers.get(0).get("method"));
+    }
 }
