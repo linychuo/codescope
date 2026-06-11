@@ -18,6 +18,7 @@ import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.ImplicitTypeDeclaration;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.MethodInvocation;
+import org.eclipse.jdt.core.dom.Modifier;
 import org.eclipse.jdt.core.dom.PackageDeclaration;
 import org.eclipse.jdt.core.dom.RecordDeclaration;
 import org.eclipse.jdt.core.dom.SuperConstructorInvocation;
@@ -479,6 +480,17 @@ public final class JdtIndexer {
             if (dc == null) return;
             MethodKey myKey = methodKeyOf(b);
             if (myKey == null) return;
+            // Private and static methods don't participate in virtual
+            // dispatch — skip the entire supertype walk for them. A
+            // private method in Child shadows the superclass's
+            // same-named method lexically but is NOT an override; a
+            // static method in Child hides the superclass's static
+            // but is also NOT an override. Linking either would let a
+            // BFS that lands on Child#privateM or Child#staticM pick
+            // up callers of the (different) Parent#publicM as phantom
+            // callers.
+            int myMods = b.getModifiers();
+            if (Modifier.isPrivate(myMods) || Modifier.isStatic(myMods)) return;
             String myName = b.getName();
             int myArity = b.getParameterTypes().length;
 
@@ -498,6 +510,15 @@ public final class JdtIndexer {
                 if (st == null || !visited.add(st)) continue;
                 for (IMethodBinding m : st.getDeclaredMethods()) {
                     if (m.isSynthetic()) continue;
+                    // Symmetric guard: a supertype's private/static
+                    // method is not a valid override target for anything
+                    // (private methods aren't visible to subclasses;
+                    // static methods are hidden, not overridden). This
+                    // is the dual of the early-return guard above and
+                    // keeps the index clean even if a future refactor
+                    // drops the early return.
+                    int mMods = m.getModifiers();
+                    if (Modifier.isPrivate(mMods) || Modifier.isStatic(mMods)) continue;
                     if (!m.getName().equals(myName)) continue;
                     if (m.getParameterTypes().length != myArity) continue;
                     MethodKey parentKey = methodKeyOf(m);

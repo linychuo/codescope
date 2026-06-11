@@ -290,4 +290,45 @@ class CallChainAnalyzerTest {
         assertEquals("com.example.IfaceDomainImpl", implCallers.get(0).get("class"));
         assertEquals("findById", implCallers.get(0).get("method"));
     }
+
+    @Test
+    void privateMethodsAreNotCrossClassHierarchy() {
+        // The companion test to crossesInterfaceBoundaryToFindDomainCaller:
+        // when M is *private*, two methods named M in related classes
+        // are NOT virtual overrides — JDT doesn't dispatch through
+        // them, and the bytecode doesn't either. Parent#inheritDoPrivate
+        // and Child#inheritDoPrivate are independent methods; tracing
+        // Child#inheritDoPrivate must NOT see Parent#inheritDoPublic as
+        // a caller (its body's doPrivate() call resolves to
+        // Parent#inheritDoPrivate, not Child's).
+        //
+        // Concrete layout:
+        //   InheritParent.inheritDoPublic() calls Parent#inheritDoPrivate
+        //   InheritChild.inheritDoPublic()  calls Child#inheritDoPrivate
+        //                                (overrides InheritParent's)
+        //   InheritTop.run()               calls Child#inheritDoPublic
+        //
+        // Expected: tracing Child#inheritDoPrivate, the only direct
+        // caller is Child#inheritDoPublic (then InheritTop#run).
+        // Parent#inheritDoPublic must NOT appear in the chain — its body
+        // calls Parent#inheritDoPrivate, not Child's.
+
+        MethodKey childPrivate = mustResolve(index, "com.example.InheritChild", "inheritDoPrivate");
+        assertNotNull(childPrivate);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, childPrivate);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> directCallers =
+                (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(directCallers);
+        assertEquals(1, directCallers.size(),
+                "only Child#inheritDoPublic calls Child#inheritDoPrivate; "
+                        + "Parent#inheritDoPublic must not appear. Got: "
+                        + directCallers.stream().map(m -> m.get("class") + "#" + m.get("method"))
+                                .toList());
+        assertEquals("com.example.InheritChild", directCallers.get(0).get("class"));
+        assertEquals("inheritDoPublic", directCallers.get(0).get("method"));
+    }
 }
