@@ -334,6 +334,59 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void methodReferencesAreIndexedAsCallers() {
+        // `this::aRef`, `u::bRef`, `MethodRefUser::cRef`, `MethodRefUser::new`
+        // are all ExpressionMethodReference / CreationReference nodes.
+        // The indexer must record them as call edges to the target method,
+        // just like a regular MethodInvocation.
+        //
+        // Regression: only MethodInvocation/SuperMethodInvocation/
+        // ClassInstanceCreation/ConstructorInvocation/SuperConstructorInvocation
+        // were visited, so method references were silently dropped.
+
+        // Field-based instance ref: this::aRef
+        MethodKey aRef = mustResolve(index, "com.example.MethodRefUser", "aRef");
+        assertNotNull(aRef);
+        CallChainAnalyzer.Result ra = new CallChainAnalyzer().traceCallers(index, aRef);
+        assertTrue(ra.found());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> aCallers = (List<Map<String, Object>>) ra.root().toJson().get("callers");
+        assertNotNull(aCallers, "MethodRefUser#useInstanceRef (via `this::aRef`) must call aRef");
+        assertEquals(1, aCallers.size());
+        assertEquals("useInstanceRef", aCallers.get(0).get("method"));
+
+        // Local-var-based instance ref: u::bRef
+        MethodKey bRef = mustResolve(index, "com.example.MethodRefUser", "bRef");
+        CallChainAnalyzer.Result rb = new CallChainAnalyzer().traceCallers(index, bRef);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> bCallers = (List<Map<String, Object>>) rb.root().toJson().get("callers");
+        assertNotNull(bCallers, "MethodRefUser#useInstanceRefLocal (via `u::bRef`) must call bRef");
+        assertEquals("useInstanceRefLocal", bCallers.get(0).get("method"));
+
+        // Static ref: MethodRefUser::cRef
+        MethodKey cRef = mustResolve(index, "com.example.MethodRefUser", "cRef");
+        CallChainAnalyzer.Result rc = new CallChainAnalyzer().traceCallers(index, cRef);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cCallers = (List<Map<String, Object>>) rc.root().toJson().get("callers");
+        assertNotNull(cCallers, "MethodRefUser#useStaticRef (via `MethodRefUser::cRef`) must call cRef");
+        assertEquals("useStaticRef", cCallers.get(0).get("method"));
+
+        // Constructor ref: MethodRefUser::new. JDT does not visit implicit
+        // default constructors, so the ctor isn't in declarations — but
+        // the call edge from `useCtorRef` IS recorded. We verify it
+        // through find_call_sites on the ctor key, not trace_callers.
+        MethodKey ctor = new MethodKey("com.example.MethodRefUser", "MethodRefUser", 0);
+        java.util.Map<MethodKey, java.util.List<ProjectIndex.SourceLoc>> sites =
+                index.callSitesOf(ctor);
+        boolean foundCtorRefSite = sites.keySet().stream()
+                .anyMatch(c -> "com.example.MethodRefUser".equals(c.declaringClass)
+                        && "useCtorRef".equals(c.methodName));
+        assertTrue(foundCtorRefSite,
+                "useCtorRef (via `MethodRefUser::new`) must record a call site to the ctor. "
+                        + "Got callers: " + sites.keySet());
+    }
+
+    @Test
     void varargsCallSitesAreIndexed() {
         // VarArgs#fmt has a `String, Object...` signature. VarArgs#use calls
         // it with `fmt("hi %s", "world")` and `fmt("hi %s %s", "a", "b")` —

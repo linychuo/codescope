@@ -16,6 +16,8 @@ import org.eclipse.jdt.core.dom.FieldDeclaration;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.ImplicitTypeDeclaration;
+import org.eclipse.jdt.core.dom.CreationReference;
+import org.eclipse.jdt.core.dom.ExpressionMethodReference;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.Modifier;
@@ -23,7 +25,9 @@ import org.eclipse.jdt.core.dom.PackageDeclaration;
 import org.eclipse.jdt.core.dom.RecordDeclaration;
 import org.eclipse.jdt.core.dom.SuperConstructorInvocation;
 import org.eclipse.jdt.core.dom.SuperMethodInvocation;
+import org.eclipse.jdt.core.dom.SuperMethodReference;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
+import org.eclipse.jdt.core.dom.TypeMethodReference;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 
 import java.io.IOException;
@@ -438,6 +442,39 @@ public final class JdtIndexer {
         @Override
         public boolean visit(SuperConstructorInvocation node) {
             recordCall(node.resolveConstructorBinding(), node);
+            return true;
+        }
+
+        @Override
+        public boolean visit(ExpressionMethodReference node) {
+            // `expr::m` (instance or static method reference) — the
+            // resolved binding points at the target method, just like
+            // MethodInvocation. recordCall uses the enclosing method
+            // as the caller.
+            recordCall(node.resolveMethodBinding(), node);
+            return true;
+        }
+
+        @Override
+        public boolean visit(CreationReference node) {
+            // `Type::new` — constructor reference. resolveMethodBinding
+            // returns the constructor as a method binding.
+            recordCall(node.resolveMethodBinding(), node);
+            return true;
+        }
+
+        @Override
+        public boolean visit(SuperMethodReference node) {
+            // `super::m` — same shape as SuperMethodInvocation.
+            recordCall(node.resolveMethodBinding(), node);
+            return true;
+        }
+
+        @Override
+        public boolean visit(TypeMethodReference node) {
+            // `Type<R>::m` — method reference on a parameterized type.
+            // resolveMethodBinding returns the target method.
+            recordCall(node.resolveMethodBinding(), node);
             return true;
         }
 
