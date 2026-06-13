@@ -17,8 +17,14 @@ class CallChainAnalyzerTest {
 
     /** Convenience: find a target method or fail the test (hides the checked exception). */
     private static MethodKey mustResolve(ProjectIndex idx, String cls, String name) {
+        return mustResolve(idx, cls, name, -1);
+    }
+
+    private static MethodKey mustResolve(ProjectIndex idx, String cls, String name, int arity) {
         try {
-            return idx.resolveTarget(cls, name);
+            return arity < 0
+                    ? idx.resolveTarget(cls, name)
+                    : idx.resolveTarget(cls, name, arity);
         } catch (ProjectIndex.AmbiguousMethodException e) {
             throw new AssertionError("unexpected ambiguity for " + cls + "#" + name + ": " + e.getMessage(), e);
         }
@@ -289,6 +295,73 @@ class CallChainAnalyzerTest {
         assertEquals(1, implCallers.size());
         assertEquals("com.example.IfaceDomainImpl", implCallers.get(0).get("class"));
         assertEquals("findById", implCallers.get(0).get("method"));
+    }
+
+    @Test
+    void constructorsChainThroughSuper() {
+        // `super()` in CtorChild#CtorChild is recorded as a real call edge
+        // to CtorParent#CtorParent (via SuperConstructorInvocation), not a
+        // phantom from the hierarchy walk. Tracing CtorParent#CtorParent
+        // must surface CtorChild#CtorChild as a direct caller — and beyond
+        // that, CtorUser#makeDefault (which constructs CtorChild) shows up
+        // at depth 2. This is the CORRECT chain: CtorUser creates
+        // CtorChild, whose constructor calls super() which runs
+        // CtorParent's body.
+
+        MethodKey parentCtor = mustResolve(index, "com.example.CtorParent", "CtorParent", 0);
+        assertNotNull(parentCtor);
+        assertEquals(0, parentCtor.arity);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, parentCtor);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers =
+                (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers, "CtorChild#CtorChild must call CtorParent#CtorParent via super()");
+        assertEquals(1, callers.size());
+        assertEquals("com.example.CtorChild", callers.get(0).get("class"));
+        assertEquals("CtorChild", callers.get(0).get("method"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> grandCallers =
+                (List<Map<String, Object>>) callers.get(0).get("callers");
+        assertNotNull(grandCallers,
+                "CtorUser#makeDefault creates CtorChild, which super()s to CtorParent");
+        assertEquals(1, grandCallers.size());
+        assertEquals("com.example.CtorUser", grandCallers.get(0).get("class"));
+        assertEquals("makeDefault", grandCallers.get(0).get("method"));
+    }
+
+    @Test
+    void varargsCallSitesAreIndexed() {
+        // VarArgs#fmt has a `String, Object...` signature. VarArgs#use calls
+        // it with `fmt("hi %s", "world")` and `fmt("hi %s %s", "a", "b")` —
+        // both bind to the declared 2-arg overload (Object[] absorbed into
+        // a single varargs parameter).
+        //
+        // Regression: previously the indexer stored declarations with
+        // params=[String, Object] (varargs marker dropped at the AST
+        // level) but call-site bindings with params=[String, Object[]]
+        // (JDT's binding form). The keys never matched, so use() didn't
+        // appear as a caller of fmt/2.
+        MethodKey fmt = mustResolve(index, "com.example.VarArgs", "fmt", 2);
+        assertNotNull(fmt, "VarArgs#fmt/2 should resolve (varargs declared arity is 2)");
+        // The recorded param types should include the varargs `[]` suffix
+        // so that callers (whose binding includes the `[]`) match the key.
+        assertTrue(fmt.parameterTypes.contains("java.lang.Object[]"),
+                "expected Object[] (with varargs brackets) in params, got: " + fmt.parameterTypes);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, fmt);
+        assertTrue(r.found());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers =
+                (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers, "VarArgs#use must be a caller of VarArgs#fmt/2");
+        assertEquals(1, callers.size());
+        assertEquals("com.example.VarArgs", callers.get(0).get("class"));
+        assertEquals("use", callers.get(0).get("method"));
     }
 
     @Test

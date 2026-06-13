@@ -338,7 +338,22 @@ public final class JdtIndexer {
                 org.eclipse.jdt.core.dom.SingleVariableDeclaration svd =
                         (org.eclipse.jdt.core.dom.SingleVariableDeclaration) p;
                 org.eclipse.jdt.core.dom.ITypeBinding tb = svd.getType().resolveBinding();
-                paramTypes.add(tb != null ? tb.getQualifiedName() : svd.getType().toString());
+                // svd.getType() for a varargs parameter returns the element
+                // type (not the array), so the binding's getQualifiedName()
+                // is just the element name. We need to add `[]` for the
+                // varargs marker and for any extra dimensions declared
+                // after the parameter name (`String args[]` style).
+                String name;
+                if (tb == null) {
+                    name = svd.getType().toString();
+                } else {
+                    name = tb.getQualifiedName();
+                    if (svd.isVarargs()) name = name + "[]";
+                    if (svd.getExtraDimensions() > 0) {
+                        for (int i = 0; i < svd.getExtraDimensions(); i++) name = name + "[]";
+                    }
+                }
+                paramTypes.add(name);
             }
             String methodName = node.getName().getIdentifier();
             MethodKey callerKey = new MethodKey(
