@@ -26,7 +26,13 @@ public final class ProjectLoader {
      * Loads sources + classpath for a Maven project.
      *
      * Sources: every .java under any src/ directory.
-     * Classpath: JRE modules + every dependency jar in pom.xml (transitive).
+     * Classpath: JRE modules + every dependency jar in pom.xml (transitive) +
+     *            a small set of well-known DI/EE API jars that JDT needs to
+     *            resolve bindings to {@code javax.inject.*} etc. when the
+     *            project's pom doesn't declare them (e.g. CDI-style code
+     *            that uses {@code Provider<T>} in a Spring project that
+     *            gets {@code javax.inject} as a transitive dep at runtime,
+     *            but where the dep doesn't appear in this module's pom).
      * Sourcepath: every src/&lt;...&gt;/java directory under the project, so JDT can
      *             resolve bindings across our own .java files.
      */
@@ -38,9 +44,105 @@ public final class ProjectLoader {
         List<Path> sources = collectSources(effective);
         List<String> classpath = new MavenClasspathResolver().resolve(effective);
         classpath.addAll(jreClasspath());
+        classpath.addAll(wellKnownApiJars(classpath));
         List<String> sourcepath = collectSourceRoots(effective);
         return new LoadResult(sources, classpath, sourcepath);
     }
+
+    /**
+     * Bundled fallback for standard API jars that are often used but rarely
+     * declared in a project pom. JDT's binding resolver returns null for
+     * a method invocation whose receiver type can't be resolved — that
+     * silently drops the call edge, which makes
+     * {@code trace_callers} stop one level above the dropped call. CDI-style
+     * code is the common case: {@code @Inject Provider<X>} is everywhere in
+     * JSR-330 / Jakarta EE codebases, and {@code javax.inject} frequently
+     * arrives as a transitive runtime dep that the user-facing module's pom
+     * doesn't list, so {@link MavenClasspathResolver} never sees it.
+     *
+     * <p>Each entry is loaded from a classpath resource bundled inside
+     * {@code codescope.jar} (no network, no system jars) and added only
+     * if the project classpath doesn't already contain the corresponding
+     * package — duplicating jars on the classpath is wasteful and can
+     * confuse JDT's binding resolution.
+     *
+     * <p>Keep this list short. Every entry grows the codescope jar and
+     * slows down classpath scans; only add APIs that show up in
+     * real-world projects and that are too small to be worth a network
+     * fetch.
+     */
+    private static List<String> wellKnownApiJars(List<String> projectClasspath) {
+        List<String> out = new ArrayList<>();
+        for (String[] entry : WELL_KNOWN_APIS) {
+            String resource = entry[0];
+            String pkgPrefix = entry[1];
+            if (containsPackage(projectClasspath, pkgPrefix)) continue;
+            Path extracted = extractBundledResource(resource);
+            if (extracted != null) out.add(extracted.toString());
+        }
+        return out;
+    }
+
+    /**
+     * Copy a resource bundled inside {@code codescope.jar} out to a temp
+     * file, returning the absolute path. JDT's classpath expects a real
+     * file on disk (not a {@code jar:file:.../codescope.jar!/...} URL),
+     * so we materialize the resource rather than passing the URL
+     * through. The temp file lives for the duration of the JVM and is
+     * cleaned up by the OS; codescope runs as a short-lived CLI so this
+     * is fine. Returns null if the resource can't be found or written.
+     */
+    private static Path extractBundledResource(String resource) {
+        ClassLoader cl = ProjectLoader.class.getClassLoader();
+        try (java.io.InputStream in = cl.getResourceAsStream(resource)) {
+            if (in == null) return null;
+            Path tmp = Files.createTempFile("codescope-", "-" + resource);
+            Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            // Don't reserve the file; JDT opens it for reading and the
+            // temp dir cleanup is OS-driven. Mark for delete-on-exit as
+            // a belt-and-braces measure for short-lived JVMs.
+            tmp.toFile().deleteOnExit();
+            return tmp;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Cheap check: does any classpath entry (jar file or classes dir) contain
+     * a class file under {@code pkgPrefix}? For jars, look for a directory
+     * entry like {@code javax/inject/}; for class dirs, check the directory
+     * directly. Used to decide whether to add the bundled fallback jar —
+     * if the user already has it on the classpath (declared in pom, or via
+     * a sibling module), don't duplicate.
+     */
+    private static boolean containsPackage(List<String> classpath, String pkgPrefix) {
+        String pathPrefix = pkgPrefix.replace('.', '/');
+        for (String entry : classpath) {
+            try {
+                if (entry.endsWith(".jar")) {
+                    try (java.util.jar.JarFile jf = new java.util.jar.JarFile(entry)) {
+                        if (jf.getEntry(pathPrefix + "/") != null) return true;
+                    }
+                } else {
+                    Path p = Path.of(entry, pathPrefix);
+                    if (Files.isDirectory(p)) return true;
+                }
+            } catch (IOException e) {
+                // unreadable entry — skip
+            }
+        }
+        return false;
+    }
+
+    /**
+     * {@code [resource-on-codescope-classpath, java-package-prefix]}.
+     * Each row is the bundled API jar plus the package we use to detect
+     * whether the project already has it (avoid duplicating).
+     */
+    private static final String[][] WELL_KNOWN_APIS = {
+            { "javax.inject-1.jar", "javax.inject" },
+    };
 
     /**
      * Returns the directory that should be used as the effective project
