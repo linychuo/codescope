@@ -347,11 +347,14 @@ public final class JdtIndexer {
                 // is just the element name. We need to add `[]` for the
                 // varargs marker and for any extra dimensions declared
                 // after the parameter name (`String args[]` style).
+                // For type-variable parameters (`<T> void m(T x)`), use
+                // the upper-bound's erasure so the key matches call-site
+                // bindings (which have the substituted type, e.g. `String`).
                 String name;
                 if (tb == null) {
                     name = svd.getType().toString();
                 } else {
-                    name = tb.getQualifiedName();
+                    name = tb.getErasure().getQualifiedName();
                     if (svd.isVarargs()) name = name + "[]";
                     if (svd.getExtraDimensions() > 0) {
                         for (int i = 0; i < svd.getExtraDimensions(); i++) name = name + "[]";
@@ -500,10 +503,60 @@ public final class JdtIndexer {
             if (dc == null) return null;
             String dcFqn = fqnFromBinding(dc);
             if (dcFqn == null) return null;
-            ITypeBinding[] pts = b.getParameterTypes();
+            // For a generic method, the binding returned at a call site
+            // has substituted parameter types (e.g. process(String) for
+            // a call site to process("hi")), while the declaration side
+            // stored the formal types (process(T)). These keys never
+            // match, so a BFS for the declaration misses every call site.
+            //
+            // getMethodDeclaration() returns the original (unsubstituted)
+            // method binding — use it to recover the formal parameter
+            // types. For non-generic methods it's a no-op.
+            IMethodBinding formal = b.getMethodDeclaration();
+            IMethodBinding src = formal != null ? formal : b;
+            // Use the formal (declaration) declaring class so the key
+            // matches the declaration's record. For non-generic methods
+            // this is the same class; for generic methods it strips the
+            // type arguments (GenericHost<String> → GenericHost).
+            ITypeBinding dcFormal = src.getDeclaringClass();
+            String dcKey = fqnFromBinding(dcFormal);
+            if (dcKey == null) dcKey = dcFqn;
+            ITypeBinding[] pts = src.getParameterTypes();
             List<String> paramTypes = new ArrayList<>(pts.length);
-            for (ITypeBinding pt : pts) paramTypes.add(pt.getQualifiedName());
-            return new MethodKey(dcFqn, b.getName(), pts.length, paramTypes);
+            for (ITypeBinding pt : pts) paramTypes.add(erasedTypeNameOf(pt));
+            return new MethodKey(dcKey, b.getName(), pts.length, paramTypes);
+        }
+
+        /**
+         * Canonical name for a parameter type that erases type variables
+         * to their bound's erasure (or {@code java.lang.Object} if
+         * unbounded). JDT's {@code IMethodBinding.getParameterTypes()}
+         * gives different shapes on the two sides of a call for a
+         * generic method:
+         *
+         * <ul>
+         *   <li>Declaration side: the parameter type is the type variable
+         *   (e.g. {@code T}), and the declaring class is the raw class
+         *   (e.g. {@code GenericHost}).</li>
+         *   <li>Call site: the parameter type is the substituted type
+         *   (e.g. {@code java.lang.String}), and the declaring class is
+         *   the parameterized class (e.g. {@code GenericHost<String>}).</li>
+         * </ul>
+         *
+         * <p>Without normalization, a BFS for {@code process/1(T)} (the
+         * declaration key) can't find call sites that bind to
+         * {@code process/1(String)} — the chain stops at depth 0 even
+         * though the call is right there in the source.
+         *
+         * <p>Calling {@code getErasure()} on a type binding returns the
+         * raw type for parameterized types ({@code List<String>} →
+         * {@code java.util.List}) and replaces type variables with their
+         * upper bound's erasure (or {@code Object} if unbounded). That's
+         * exactly what we need for both sides to agree.
+         */
+        private String erasedTypeNameOf(ITypeBinding tb) {
+            ITypeBinding erased = tb.getErasure();
+            return erased.getQualifiedName();
         }
 
         /**

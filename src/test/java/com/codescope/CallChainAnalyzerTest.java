@@ -418,6 +418,50 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void genericMethodsCallSitesAreIndexed() {
+        // Regression: tracing a private method inside a generic class only
+        // surfaced its direct caller and nothing above — because the
+        // declaration side stored the key with the formal type variable
+        // (process/1(T)) while the call site stored the substituted type
+        // (process/1(java.lang.String)). The two never matched, so the
+        // BFS for the declaration missed every call site.
+        //
+        // Fix: methodKeyOf now recovers the formal method binding
+        // (b.getMethodDeclaration()) and erases type variables to their
+        // bound, so both sides agree on process/1(java.lang.Object).
+        // The same fix lights up the chain for the private doIt(T)
+        // method called from process(T).
+        MethodKey doIt = mustResolve(index, "com.example.GenericHost", "doIt", 1);
+        assertNotNull(doIt, "GenericHost#doIt/1 should resolve");
+        // The formal T must be erased to java.lang.Object so the key
+        // matches the call-site binding (which has String substituted).
+        assertEquals(List.of("java.lang.Object"), doIt.parameterTypes,
+                "expected T erased to java.lang.Object; got: " + doIt.parameterTypes);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, doIt);
+        assertTrue(r.found(), "expected callers of doIt; got: " + r.message());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers =
+                (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers, "GenericHost#process must call doIt");
+        assertEquals(1, callers.size());
+        assertEquals("com.example.GenericHost", callers.get(0).get("class"));
+        assertEquals("process", callers.get(0).get("method"));
+
+        // And the chain must reach GenericUser#run — that's the whole
+        // point of the bug, the chain used to stop at depth 0.
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> grandCallers =
+                (List<Map<String, Object>>) callers.get(0).get("callers");
+        assertNotNull(grandCallers,
+                "GenericUser#run calls process which calls doIt — chain must reach depth 2");
+        assertEquals(1, grandCallers.size());
+        assertEquals("com.example.GenericUser", grandCallers.get(0).get("class"));
+        assertEquals("run", grandCallers.get(0).get("method"));
+    }
+
+    @Test
     void privateMethodsAreNotCrossClassHierarchy() {
         // The companion test to crossesInterfaceBoundaryToFindDomainCaller:
         // when M is *private*, two methods named M in related classes
