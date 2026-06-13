@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -30,11 +31,152 @@ public final class ProjectLoader {
      *             resolve bindings across our own .java files.
      */
     public LoadResult load(Path projectRoot) throws IOException {
-        List<Path> sources = collectSources(projectRoot);
-        List<String> classpath = new MavenClasspathResolver().resolve(projectRoot);
+        // If --project points to a sub-module, walk up to the aggregator
+        // so sibling modules' sources and dependencies are included.
+        // See discoverEffectiveRoot.
+        Path effective = discoverEffectiveRoot(projectRoot);
+        List<Path> sources = collectSources(effective);
+        List<String> classpath = new MavenClasspathResolver().resolve(effective);
         classpath.addAll(jreClasspath());
-        List<String> sourcepath = collectSourceRoots(projectRoot);
+        List<String> sourcepath = collectSourceRoots(effective);
         return new LoadResult(sources, classpath, sourcepath);
+    }
+
+    /**
+     * Returns the directory that should be used as the effective project
+     * root for indexing. If {@code projectRoot} contains a pom.xml that
+     * has a {@code <parent>} reference (i.e. it is a sub-module), walk
+     * up the chain to the aggregator — the nearest ancestor whose pom
+     * has {@code <modules>...</modules>}. Otherwise, return
+     * {@code projectRoot} unchanged.
+     *
+     * <p>This makes {@code --project} forgiving: pointing at any sub-module
+     * gives the same view as pointing at the aggregator, so cross-module
+     * call edges (e.g. {@code Helper.coreMethod} called by
+     * {@code app.Entry.run}) are visible regardless of which directory the
+     * user started from.
+     *
+     * <p>Bounded depth to defend against pathological
+     * {@code relativePath} values; the loop is also self-terminating
+     * because we only walk up, not sideways.
+     */
+    public static Path discoverEffectiveRoot(Path projectRoot) {
+        if (projectRoot == null || !Files.isDirectory(projectRoot)) {
+            return projectRoot;
+        }
+        Path current = projectRoot;
+        for (int depth = 0; depth < MAX_PARENT_WALK_DEPTH; depth++) {
+            Path pom = current.resolve("pom.xml");
+            if (!Files.isRegularFile(pom)) {
+                // No pom here — give up walking up.
+                return current;
+            }
+            if (!hasParentSection(pom)) {
+                // No <parent> in this pom — it's the aggregator (or a
+                // standalone project). Stop here.
+                return current;
+            }
+            // This pom has a <parent>. Try to find the parent directory.
+            Path parentDir = resolveParentDirectory(current, pom);
+            if (parentDir == null) {
+                // Can't resolve parent — stop here so we don't guess.
+                return current;
+            }
+            current = parentDir;
+        }
+        return current;
+    }
+
+    /**
+     * Cap on the parent-pom walk to defend against cycles (e.g. a
+     * {@code relativePath} that points at a child, or a circular
+     * symbolic-link setup). 8 levels is more than enough for any real
+     * Maven layout.
+     */
+    private static final int MAX_PARENT_WALK_DEPTH = 8;
+
+    /** Lightweight check: does this pom declare a {@code <parent>}? */
+    private static boolean hasParentSection(Path pom) {
+        try (Stream<String> lines = Files.lines(pom)) {
+            return lines.anyMatch(line -> {
+                String trimmed = line.trim();
+                // Match an opening <parent> tag (with or without attrs).
+                return trimmed.startsWith("<parent>")
+                        || trimmed.startsWith("<parent ");
+            });
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Resolve the parent directory for a child pom. Returns null if the
+     * parent's location can't be determined — caller should stop the
+     * walk-up rather than guess.
+     *
+     * <p>Maven's {@code <parent><relativePath>} default is
+     * {@code ../pom.xml}, so we look one directory up first. If a
+     * {@code relativePath} is specified, we follow it; if it's an
+     * absolute path or doesn't exist, we fall back to a sibling
+     * search (a pom in any ancestor directory).
+     */
+    private static Path resolveParentDirectory(Path current, Path pom) {
+        // Default Maven relativePath: ../pom.xml
+        Path defaultParent = current.getParent();
+        if (defaultParent != null
+                && Files.isRegularFile(defaultParent.resolve("pom.xml"))) {
+            return defaultParent;
+        }
+        // Read <relativePath> from the pom
+        String rel = readRelativePath(pom);
+        if (rel != null && !rel.isEmpty()) {
+            // relativePath is a path to the parent pom.xml (or its
+            // directory). Maven treats values ending in "pom.xml" as
+            // a file and others as a directory.
+            Path resolved = current.resolve(rel).toAbsolutePath().normalize();
+            if (Files.exists(resolved)) {
+                Path dir = Files.isDirectory(resolved) ? resolved : resolved.getParent();
+                if (dir != null) return dir;
+            }
+        }
+        // Last resort: walk up to the nearest directory that has a
+        // pom.xml without a <parent> (the aggregator). This handles
+        // the case where relativePath is missing/wrong.
+        Path ancestor = current.getParent();
+        while (ancestor != null) {
+            Path ancestorPom = ancestor.resolve("pom.xml");
+            if (Files.isRegularFile(ancestorPom) && !hasParentSection(ancestorPom)) {
+                return ancestor;
+            }
+            ancestor = ancestor.getParent();
+        }
+        return null;
+    }
+
+    /**
+     * Extract the {@code <relativePath>} value from a child pom, or
+     * null if not specified. Best-effort line scan — we don't need a
+     * full XML parser for this.
+     */
+    private static String readRelativePath(Path pom) {
+        try (Stream<String> lines = Files.lines(pom)) {
+            Iterator<String> it = lines.iterator();
+            while (it.hasNext()) {
+                String line = it.next().trim();
+                if (!line.startsWith("<relativePath>") && !line.startsWith("<relativePath ")) {
+                    continue;
+                }
+                int open = line.indexOf('>');
+                if (open < 0 || line.startsWith("</")) continue;
+                int close = line.indexOf("</relativePath>", open);
+                if (close > open) {
+                    return line.substring(open + 1, close).trim();
+                }
+            }
+        } catch (IOException e) {
+            // ignore
+        }
+        return null;
     }
 
     /** Walks every src/ directory under the project (multi-module aware) and returns every .java file. */
