@@ -115,7 +115,19 @@ public final class MavenClasspathResolver {
     }
 
     private static boolean isUnderBuildDir(Path p, Path root) {
-        Path rel = root.relativize(p);
+        // Path#relativize throws IllegalArgumentException when `p` is not
+        // under `root` (different roots on Windows, or a malformed entry
+        // slipped through). findPoms walks from `root`, so this should be
+        // unreachable in practice — but a defensive guard here turns a
+        // potential walk-aborting IAE into a silent skip, which is what
+        // every other branch of findPoms already does on failure.
+        if (root == null) return false;
+        Path rel;
+        try {
+            rel = root.relativize(p);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
         for (Path part : rel) {
             String name = part.toString();
             if (name.equals("target") || name.equals("build") || name.equals("node_modules")) {

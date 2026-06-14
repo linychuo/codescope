@@ -77,23 +77,35 @@ public final class McpServer {
 
     public void run() throws IOException {
         InputStream in = stdin;
+        // Reusable scratch buffer: we drain stdin in fixed-size chunks and
+        // hand each chunk to tryParseAndDispatch, which copies any
+        // incomplete tail into a small overflow buffer. This avoids the
+        // previous per-byte parse attempt (which re-allocated a full copy
+        // of the buffer and re-entered the Jackson state machine on every
+        // single byte read) — the state machine is cheap, but the byte
+        // arraycopy on a 4KB+ buffer dominated the per-message cost on
+        // hosts that batch many small requests into one stdout write.
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         byte[] chunk = new byte[STDIN_CHUNK_SIZE];
         int n;
         while (running.get() && (n = in.read(chunk)) != -1) {
+            // Skip pure framing whitespace. Per RFC 8259, raw control
+            // characters (including \r and \n) MUST NOT appear inside
+            // JSON strings — they have to be escaped as \r / \n. So
+            // stripping them at the byte level is safe against
+            // spec-compliant hosts and never corrupts string values.
             for (int i = 0; i < n; i++) {
                 byte b = chunk[i];
-                // Skip pure framing whitespace. Per RFC 8259, raw control
-                // characters (including \r and \n) MUST NOT appear inside
-                // JSON strings — they have to be escaped as \r / \n. So
-                // stripping them at the byte level is safe against
-                // spec-compliant hosts and never corrupts string values.
                 if (b == (byte) '\n' || b == (byte) '\r') continue;
                 buf.write(b);
-                // tryParseAndDispatch owns buf on success: it removes the
-                // consumed bytes (preserving any trailing data) or resets
-                // the whole buffer on parse error.
-                tryParseAndDispatch(buf);
+            }
+            // Drain as many complete objects as we can from the chunk.
+            // tryParseAndDispatch owns buf on success: it removes the
+            // consumed bytes (preserving any trailing data) or resets
+            // the whole buffer on parse error. Loop until it returns
+            // false (no more complete objects in the current buffer).
+            while (tryParseAndDispatch(buf)) {
+                // keep going until the buffer holds no complete object
             }
         }
     }
@@ -328,7 +340,13 @@ public final class McpServer {
                     return;
                 }
             }
-            return;     // unknown response, ignore
+            // Log a stray response — id we didn't issue (or that already
+            // timed out and was removed) — so a misbehaving host is
+            // diagnosable. Stderr only, not JSON-RPC: the host already
+            // moved on and there's no id we could reply to anyway.
+            System.err.println("[codescope] stray response with id=" + responseId
+                    + (msg.containsKey("error") ? " (error)" : "") + " — ignored");
+            return;
         }
 
         Object id = msg.get("id");

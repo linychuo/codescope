@@ -703,6 +703,34 @@ class McpServerTest {
                 + outBuf.toString(StandardCharsets.UTF_8));
     }
 
+    @Test
+    void strayResponseIsLoggedNotReplied() throws Exception {
+        // A response with an id we never issued should be ignored (no
+        // JSON-RPC reply possible) but logged to stderr so a misbehaving
+        // host is diagnosable. Previously this was silently swallowed.
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(errBuf, true, StandardCharsets.UTF_8));
+        try {
+            McpServer s = new McpServer();
+            Map<String, Object> stray = new LinkedHashMap<>();
+            stray.put("jsonrpc", "2.0");
+            stray.put("id", 999_999L);
+            stray.put("result", Map.of("unused", true));
+            s.handle(stray);
+            // Nothing should have been written to stdout — we can't reply
+            // to an id we didn't issue.
+            String out = outBuf.toString(StandardCharsets.UTF_8);
+            assertTrue(out.isBlank(), "expected no stdout reply to stray response, got: " + out);
+            // But stderr should have a diagnostic line.
+            String err = errBuf.toString(StandardCharsets.UTF_8);
+            assertTrue(err.contains("stray response"), "expected stray-response log, got: " + err);
+            assertTrue(err.contains("999999"), "expected id in log, got: " + err);
+        } finally {
+            System.setErr(originalErr);
+        }
+    }
+
     // --- helpers ---
 
     private static Map<String, Object> req(Object id, String method, Map<String, Object> params) {

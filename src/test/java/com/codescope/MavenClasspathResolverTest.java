@@ -241,4 +241,15 @@ class MavenClasspathResolverTest {
         assertEquals(1, poms.size());
         assertEquals("pom.xml", poms.get(0).getFileName().toString());
     }
+
+    @Test
+    void isUnderBuildDirTolerantOfNullRoot() throws Exception {
+        // Defensive guard: root==null used to NPE on root.relativize(p).
+        // After the fix it returns false (no build-dir segments possible).
+        java.lang.reflect.Method m = MavenClasspathResolver.class
+                .getDeclaredMethod("isUnderBuildDir", Path.class, Path.class);
+        m.setAccessible(true);
+        Path p = Path.of("/tmp/some/target/x");
+        assertEquals(false, m.invoke(null, p, null));
+    }
 }
