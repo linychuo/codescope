@@ -3,11 +3,9 @@ package com.codescope;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,47 +18,16 @@ import java.util.Map;
  */
 public final class TraceCallersService {
 
-    private static final int MAX_CACHED_PROJECTS = 8;
+    private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 
-    /**
-     * Jackson's default StreamWriteConstraints cap nesting at 1000. Our
-     * {@link CallChainAnalyzer} caps BFS depth at 500, which is well within
-     * that limit, so this raised cap is belt-and-suspenders: if the BFS
-     * depth cap is ever loosened (or a future bug widens the tree), the
-     * mapper itself won't be the choke point. 50_000 matches the BFS node
-     * cap.
-     *
-     * <p>Package-private factory so tests can exercise the same mapper
-     * the service uses, without going through the full Maven-project
-     * loading path (which would take seconds to set up just to test
-     * Jackson's nesting cap).
-     */
-    static ObjectMapper newObjectMapper() {
-        ObjectMapper m = new ObjectMapper();
-        m.getFactory().setStreamWriteConstraints(
-                com.fasterxml.jackson.core.StreamWriteConstraints.builder()
-                        .maxNestingDepth(50_000)
-                        .build());
-        return m;
-    }
-
-    private final ObjectMapper json = newObjectMapper();
-
-    private final JdtIndexer indexer = new JdtIndexer();
     private final CallChainAnalyzer analyzer = new CallChainAnalyzer();
 
     /**
-     * Bounded LRU: bounds memory for long-running MCP sessions that may be
-     * pointed at many different project roots over time. Synchronized because
-     * the MCP host may dispatch concurrent tool calls on different threads.
+     * Shared LRU + index builder. Centralized in {@link ProjectIndexCache}
+     * so a single MCP session that uses {@code trace_callers} and
+     * {@code find_symbols} against the same project indexes it once.
      */
-    private final Map<Path, ProjectIndex> indexCache = Collections.synchronizedMap(
-            new LinkedHashMap<>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<Path, ProjectIndex> e) {
-                    return size() > MAX_CACHED_PROJECTS;
-                }
-            });
+    private final ProjectIndexCache indexCache = new ProjectIndexCache();
 
     public TraceCallersService() {}
 
@@ -85,12 +52,7 @@ public final class TraceCallersService {
 
         ProjectIndex index;
         try {
-            if (refresh) {
-                // Evict first so concurrent computeIfAbsent from another
-                // thread can't return the stale value while we're rebuilding.
-                indexCache.remove(projectRoot);
-            }
-            index = indexCache.computeIfAbsent(projectRoot, this::buildIndex);
+            index = indexCache.loadOrRebuild(projectRoot, refresh);
         } catch (UncheckedIOException e) {
             throw new TraceCallersException(e.getCause().getMessage());
         }
@@ -178,18 +140,6 @@ public final class TraceCallersService {
             return json.writeValueAsString(out);
         } catch (JsonProcessingException e) {
             throw new TraceCallersException("Failed to serialize result: " + e.getMessage());
-        }
-    }
-
-    private ProjectIndex buildIndex(Path projectRoot) {
-        try {
-            ProjectLoader.LoadResult load = new ProjectLoader().load(projectRoot);
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), projectRoot);
-        } catch (IOException e) {
-            // Wrapped so the computeIfAbsent lambda can throw it. Failure is
-            // not cached, so a future call (e.g. after fixing the project)
-            // will retry.
-            throw new UncheckedIOException("Failed to load project at " + projectRoot, e);
         }
     }
 
