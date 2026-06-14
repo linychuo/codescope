@@ -60,10 +60,34 @@ public final class MavenClasspathResolver {
     }
 
     /**
-     * @param projectRoot root of the Maven project (may contain a multi-module tree)
-     * @return classpath of jar + class dir paths aggregated from every pom in the tree
+     * One failed pom resolution, recorded so callers can surface it. We
+     * don't want to abort resolution because of a single broken pom, but
+     * silent skips were hiding real problems (malformed pom, missing
+     * local-repo jar, unparseable dep) — users couldn't tell whether the
+     * missing jar in their classpath was a codescope bug or their pom.
+     *
+     * @param pom the pom that failed
+     * @param phase {@code "read"} for parse failures, {@code "walk"} for
+     *              failures during dep walking
+     * @param cause the exception (message is what matters; we keep the
+     *              throwable for callers that want to log with stack)
      */
-    public List<String> resolve(Path projectRoot) throws IOException {
+    public record PomError(Path pom, String phase, Throwable cause) {
+        public String message() {
+            return pom + " [" + phase + "]: " + cause.getClass().getSimpleName()
+                    + (cause.getMessage() != null ? ": " + cause.getMessage() : "");
+        }
+    }
+
+    /** Result of a classpath resolution, including any poms that failed to walk. */
+    public record ResolveResult(List<String> jars, List<PomError> errors) {}
+
+    /**
+     * @param projectRoot root of the Maven project (may contain a multi-module tree)
+     * @return classpath of jar + class dir paths aggregated from every pom in the tree,
+     *         plus a list of per-pom errors that were skipped rather than aborting.
+     */
+    public ResolveResult resolveDetailed(Path projectRoot) throws IOException {
         List<Path> poms = findPoms(projectRoot);
         if (poms.isEmpty()) {
             throw new IOException("No pom.xml found under " + projectRoot
@@ -77,27 +101,55 @@ public final class MavenClasspathResolver {
         // walks complete.
         Set<String> jars = ConcurrentHashMap.newKeySet();
         Set<String> seenPoms = ConcurrentHashMap.newKeySet();
+        List<PomError> errors = java.util.Collections.synchronizedList(new ArrayList<>());
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>(poms.size());
             for (Path pom : poms) {
                 futures.add(pool.submit(() -> {
                     try {
-                        walk(pom, jars, seenPoms, 0);
+                        walk(pom, jars, seenPoms, 0, errors);
                     } catch (IOException e) {
-                        // skip individual pom failures rather than aborting the whole resolution
+                        errors.add(new PomError(pom, "walk", e));
                     }
                 }));
             }
             for (Future<?> f : futures) {
                 try {
                     f.get();
-                } catch (ExecutionException | InterruptedException e) {
-                    // best-effort: a single bad walk shouldn't break the rest
+                } catch (ExecutionException e) {
+                    // walk() already records its own errors before re-throwing;
+                    // this branch fires only for executor-level failures.
+                    errors.add(new PomError(null, "executor",
+                            e.getCause() != null ? e.getCause() : e));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
             }
         }
 
-        return new ArrayList<>(jars);
+        return new ResolveResult(new ArrayList<>(jars), new ArrayList<>(errors));
+    }
+
+    /**
+     * Back-compat wrapper: returns just the jar list. Use {@link #resolveDetailed}
+     * if you need to know which poms failed.
+     */
+    public List<String> resolve(Path projectRoot) throws IOException {
+        return resolveDetailed(projectRoot).jars();
+    }
+
+    /**
+     * Pretty-print the resolution errors for inclusion in a log line or
+     * a tool error response. Returns {@code null} if there were no errors.
+     */
+    public static String formatErrors(List<PomError> errors) {
+        if (errors == null || errors.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        sb.append(errors.size()).append(" pom(s) failed to resolve:");
+        for (PomError e : errors) {
+            sb.append("\n  - ").append(e.message());
+        }
+        return sb.toString();
     }
 
     /** Every pom.xml under {@code projectRoot}, excluding target/ build outputs. */
@@ -137,7 +189,8 @@ public final class MavenClasspathResolver {
         return false;
     }
 
-    private void walk(Path pom, Set<String> out, Set<String> seenPoms, int depth) throws IOException {
+    private void walk(Path pom, Set<String> out, Set<String> seenPoms,
+                     int depth, List<PomError> errors) throws IOException {
         if (depth > MAX_POM_DEPTH) return;
         String key = pom.toAbsolutePath().toString();
         if (!seenPoms.add(key)) return;
@@ -146,7 +199,10 @@ public final class MavenClasspathResolver {
         try (InputStream in = new FileInputStream(pom.toFile())) {
             model = new MavenXpp3Reader().read(in);
         } catch (Exception e) {
-            // skip malformed poms rather than aborting the whole resolution
+            // Malformed pom — record and skip rather than aborting the
+            // whole resolution. The user can see this in the tool error
+            // response (McpServerTest / CliTest print it).
+            errors.add(new PomError(pom, "read", e));
             return;
         }
 
@@ -161,7 +217,7 @@ public final class MavenClasspathResolver {
                 Path jar = findJar(dep);
                 if (jar != null && out.add(jar.toString())) {
                     Path depPom = pomFor(dep);
-                    if (depPom != null) walk(depPom, out, seenPoms, depth + 1);
+                    if (depPom != null) walk(depPom, out, seenPoms, depth + 1, errors);
                 }
             }
         }

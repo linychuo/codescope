@@ -58,9 +58,35 @@ public final class JdtIndexer {
                               List<String> classpath,
                               List<String> sourcepath,
                               Path projectRoot) {
-        ProjectIndex index = new ProjectIndex();
+        return buildWithStats(sources, classpath, sourcepath, projectRoot).index();
+    }
 
-        if (sources.isEmpty()) return index;
+    /**
+     * Like {@link #build} but also returns per-run stats (timing + skip count).
+     * Stats are useful for diagnostics — a "trace_callers returned nothing"
+     * report becomes actionable when you know the indexer dropped 50/200 files
+     * because of classpath misses, vs. dropped 0 because the source set was
+     * just small. Stats are emitted to stderr at INFO level so they appear in
+     * server logs without polluting the tool response.
+     */
+    public record IndexStats(
+            ProjectIndex index,
+            long durationMs,
+            int filesIndexed,
+            int filesSkipped) {}
+
+    public IndexStats buildWithStats(List<Path> sources,
+                                     List<String> classpath,
+                                     List<String> sourcepath,
+                                     Path projectRoot) {
+        long t0 = System.nanoTime();
+        ProjectIndex index = new ProjectIndex();
+        int skippedBefore = index.skippedFiles().size();
+
+        if (sources.isEmpty()) {
+            long elapsed = (System.nanoTime() - t0) / 1_000_000;
+            return new IndexStats(index, elapsed, 0, 0);
+        }
 
         String[] cp = classpath.toArray(new String[0]);
         String[] sp = sourcepath.toArray(new String[0]);
@@ -103,7 +129,17 @@ public final class JdtIndexer {
                 }
             }
         }
-        return index;
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        int filesIndexed = sources.size();
+        int filesSkipped = index.skippedFiles().size() - skippedBefore;
+        // Emit a one-line summary to stderr so it shows up in MCP server
+        // logs and CI output without polluting the tool response. Use a
+        // logger rather than System.err.printf so it can be silenced
+        // (e.g. by callers that already captured the same data in stats).
+        java.util.logging.Logger.getLogger("com.codescope.JdtIndexer")
+                .info(String.format("indexed %d files (%d skipped) in %d ms",
+                        filesIndexed, filesSkipped, elapsedMs));
+        return new IndexStats(index, elapsedMs, filesIndexed, filesSkipped);
     }
 
     private void parseFile(Path src, String[] cp, String[] sp, String[] encodingNames,
