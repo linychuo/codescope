@@ -114,4 +114,60 @@ class ProjectLoaderTest {
         List<Path> sources = ProjectLoader.collectSources(root);
         assertEquals(2, sources.size(), "expected both modules' sources, got " + sources);
     }
+
+    @Test
+    void absoluteRelativePathIsRejected(@TempDir Path projectRoot) throws IOException {
+        // A hostile pom with <relativePath>/absolute/path/pom.xml</relativePath>
+        // would, without hardening, let discoverEffectiveRoot jump out of
+        // the project tree. Path.resolve() treats absolute paths as
+        // replacement, not append, so an attacker can point at any file
+        // on the filesystem. We seed a real decoy pom at a separate
+        // location so the Files.exists() gate doesn't trivially reject
+        // the attack — the absolute-path branch itself must be skipped.
+        //
+        // The pom is written with explicit line breaks because
+        // hasParentSection does a line-based substring check; a single-
+        // line XML would never trigger the parent resolution path at all.
+        Path decoy = Files.createTempDirectory("codescope-decoy-");
+        try {
+            Files.writeString(decoy.resolve("pom.xml"),
+                    "<?xml version=\"1.0\"?>\n"
+                            + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                            + "  <modelVersion>4.0.0</modelVersion>\n"
+                            + "  <groupId>decoy</groupId>\n"
+                            + "  <artifactId>decoy</artifactId>\n"
+                            + "  <version>1</version>\n"
+                            + "</project>\n");
+            String absDecoy = decoy.resolve("pom.xml").toAbsolutePath().toString();
+            Files.writeString(projectRoot.resolve("pom.xml"),
+                    "<?xml version=\"1.0\"?>\n"
+                            + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                            + "  <modelVersion>4.0.0</modelVersion>\n"
+                            + "  <groupId>x</groupId>\n"
+                            + "  <artifactId>evil</artifactId>\n"
+                            + "  <version>1</version>\n"
+                            + "  <parent>\n"
+                            + "    <groupId>x</groupId>\n"
+                            + "    <artifactId>parent</artifactId>\n"
+                            + "    <version>1</version>\n"
+                            + "    <relativePath>" + absDecoy + "</relativePath>\n"
+                            + "  </parent>\n"
+                            + "</project>\n");
+
+            Path effective = ProjectLoader.discoverEffectiveRoot(projectRoot);
+            Path normalized = effective.toAbsolutePath().normalize();
+            assertFalse(normalized.startsWith(decoy.toAbsolutePath().normalize()),
+                    "absolute <relativePath> must not pull discoverEffectiveRoot out of "
+                            + "the project, got effective=" + effective);
+            assertEquals(projectRoot.toAbsolutePath().normalize(), normalized,
+                    "effective root should stay at projectRoot when relativePath is rejected, "
+                            + "got: " + effective);
+        } finally {
+            try (var s = Files.walk(decoy)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (java.io.IOException ignored) {}
+                });
+            }
+        }
+    }
 }

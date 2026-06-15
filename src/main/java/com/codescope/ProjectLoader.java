@@ -232,9 +232,9 @@ public final class ProjectLoader {
      *
      * <p>Maven's {@code <parent><relativePath>} default is
      * {@code ../pom.xml}, so we look one directory up first. If a
-     * {@code relativePath} is specified, we follow it; if it's an
-     * absolute path or doesn't exist, we fall back to a sibling
-     * search (a pom in any ancestor directory).
+     * {@code relativePath} is specified, we follow it; if it points
+     * outside the project tree or doesn't exist, we fall back to a
+     * sibling search (a pom in any ancestor directory).
      */
     private static Path resolveParentDirectory(Path current, Path pom) {
         // Default Maven relativePath: ../pom.xml
@@ -250,9 +250,23 @@ public final class ProjectLoader {
             // directory). Maven treats values ending in "pom.xml" as
             // a file and others as a directory.
             Path resolved = current.resolve(rel).toAbsolutePath().normalize();
-            if (Files.exists(resolved)) {
-                Path dir = Files.isDirectory(resolved) ? resolved : resolved.getParent();
-                if (dir != null) return dir;
+            // Defense against a hostile or malformed <relativePath>:
+            //   - Absolute paths (e.g. "/etc/passwd") replace the
+            //     receiver in Path.resolve(), letting the walk escape
+            //     the project tree entirely.
+            //   - Resolved paths that don't contain `current` mean we
+            //     ended up sideways or below `current`, which a parent
+            //     pom shouldn't.
+            // Maven's documented contract is `relativePath` is relative
+            // to the child module's directory; in any well-formed
+            // project that means `current` is a descendant of the
+            // resolved directory. Ignore anything that fails this
+            // check and fall through to the sibling-search fallback.
+            Path dir = Files.isDirectory(resolved) ? resolved : resolved.getParent();
+            if (dir != null && current.toAbsolutePath().normalize().startsWith(dir)) {
+                if (Files.exists(resolved)) {
+                    return dir;
+                }
             }
         }
         // Last resort: walk up to the nearest directory that has a
