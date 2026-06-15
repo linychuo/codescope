@@ -99,6 +99,41 @@ class CliTest {
     }
 
     @Test
+    void nonNumericArityExitsTwo() {
+        // --arity used to throw NumberFormatException → "internal error" exit 1.
+        // Now it should be a usage error → exit 2 with a clear message.
+        int code = Cli.run(new String[]{
+                "trace-callers", "com.x.Foo", "bar",
+                "--project", "/some/path", "--arity", "abc"});
+        assertEquals(2, code, "stderr: " + err);
+        assertTrue(err.toString().contains("--arity requires an integer"),
+                "expected integer-required message, got: " + err);
+    }
+
+    @Test
+    void negativeArityExitsTwo() {
+        // Negative arity silently matches nothing downstream; surface it
+        // at the CLI layer so the user notices instead of getting an empty
+        // trace.
+        int code = Cli.run(new String[]{
+                "trace-callers", "com.x.Foo", "bar",
+                "--project", "/some/path", "--arity", "-1"});
+        assertEquals(2, code, "stderr: " + err);
+        assertTrue(err.toString().contains("--arity must be >= 0"),
+                "expected >=0 message, got: " + err);
+    }
+
+    @Test
+    void nonNumericLimitExitsTwo() {
+        int code = Cli.run(new String[]{
+                "find-symbols", "x",
+                "--project", "/some/path", "--limit", "lots"});
+        assertEquals(2, code, "stderr: " + err);
+        assertTrue(err.toString().contains("--limit requires an integer"),
+                "expected integer-required message, got: " + err);
+    }
+
+    @Test
     void badProjectPathExitsOne(@TempDir Path tmp) {
         // tmp exists but has no pom.xml — the service rejects it.
         int code = Cli.run(new String[]{

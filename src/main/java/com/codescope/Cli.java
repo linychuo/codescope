@@ -135,13 +135,14 @@ public final class Cli {
                 }
                 case "--arity" -> {
                     requireValue(args, i, "--arity");
-                    p.arity = Integer.parseInt(args[++i]);
+                    int n = parsePositiveInt(args[++i], "--arity");
+                    p.arity = n;
                     i++;
                 }
                 case "--param-types" -> {
                     requireValue(args, i, "--param-types");
                     String s = args[++i];
-                    p.paramTypes = s.isEmpty() ? List.of() : Arrays.asList(s.split(","));
+                    p.paramTypes = parseParamTypes(s);
                     i++;
                 }
                 case "--refresh" -> { p.refresh = true; i++; }
@@ -152,7 +153,7 @@ public final class Cli {
                 }
                 case "--limit" -> {
                     requireValue(args, i, "--limit");
-                    p.limit = Integer.parseInt(args[++i]);
+                    p.limit = parsePositiveInt(args[++i], "--limit");
                     i++;
                 }
                 default -> {
@@ -171,6 +172,40 @@ public final class Cli {
         if (i + 1 >= args.length) {
             throw new UsageException(opt + " requires a value");
         }
+    }
+
+    /**
+     * Parse a positive integer option value. Negative or zero values would
+     * silently match nothing downstream (e.g. {@code arity=-1} skips every
+     * candidate) and non-numeric values used to surface as an internal
+     * error from {@link Integer#parseInt}; both are now a clean usage error
+     * so the user knows the flag was wrong, not that the project is broken.
+     */
+    private static int parsePositiveInt(String s, String opt) {
+        int n;
+        try {
+            n = Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            throw new UsageException(opt + " requires an integer, got '" + s + "'");
+        }
+        if (n < 0) {
+            throw new UsageException(opt + " must be >= 0, got " + n);
+        }
+        return n;
+    }
+
+    /**
+     * Split a comma-separated {@code --param-types} value, dropping empty
+     * segments so {@code "a,,b"} becomes {@code ["a","b"]} and an entirely
+     * empty value becomes an empty list (which the services treat as
+     * "no filter"). Trims each entry so {@code "a, b "} is normalized.
+     */
+    private static List<String> parseParamTypes(String s) {
+        if (s.isEmpty()) return List.of();
+        return Arrays.stream(s.split(","))
+                .map(String::trim)
+                .filter(t -> !t.isEmpty())
+                .toList();
     }
 
     static String usage() {
