@@ -3,12 +3,10 @@ package com.codescope;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,41 +22,14 @@ import java.util.Map;
  */
 public final class FindCallSitesService {
 
-    private static final int MAX_CACHED_PROJECTS = 8;
+    private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 
     /**
-     * Package-private factory so tests can use the same mapper the
-     * service uses. Mirrors {@link TraceCallersService#newObjectMapper()}.
-     * {@code find_call_sites} produces a flat array, not a tree, so the
-     * 50_000 nesting cap is overkill — but we keep the same mapper to
-     * avoid surprising differences between the two tool envelopes.
+     * Shared LRU + index builder. Centralized in {@link ProjectIndexCache}
+     * so a single MCP session that uses {@code trace_callers} and
+     * {@code find_call_sites} against the same project indexes it once.
      */
-    static ObjectMapper newObjectMapper() {
-        ObjectMapper m = new ObjectMapper();
-        m.getFactory().setStreamWriteConstraints(
-                com.fasterxml.jackson.core.StreamWriteConstraints.builder()
-                        .maxNestingDepth(50_000)
-                        .build());
-        return m;
-    }
-
-    private final ObjectMapper json = newObjectMapper();
-
-    private final JdtIndexer indexer = new JdtIndexer();
-
-    /**
-     * Bounded LRU: bounds memory for long-running MCP sessions that may
-     * be pointed at many different project roots over time.
-     * Synchronized because the MCP host may dispatch concurrent tool
-     * calls on different threads. Mirrors {@link TraceCallersService}.
-     */
-    private final Map<Path, ProjectIndex> indexCache = Collections.synchronizedMap(
-            new LinkedHashMap<>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<Path, ProjectIndex> e) {
-                    return size() > MAX_CACHED_PROJECTS;
-                }
-            });
+    private final ProjectIndexCache indexCache = new ProjectIndexCache();
 
     public FindCallSitesService() {}
 
@@ -83,10 +54,7 @@ public final class FindCallSitesService {
 
         ProjectIndex index;
         try {
-            if (refresh) {
-                indexCache.remove(projectRoot);
-            }
-            index = indexCache.computeIfAbsent(projectRoot, this::buildIndex);
+            index = indexCache.loadOrRebuild(projectRoot, refresh);
         } catch (UncheckedIOException e) {
             throw new FindCallSitesException(e.getCause().getMessage());
         }
@@ -260,18 +228,6 @@ public final class FindCallSitesService {
             out.add(entry);
         }
         return out;
-    }
-
-    private ProjectIndex buildIndex(Path projectRoot) {
-        try {
-            ProjectLoader.LoadResult load = new ProjectLoader().load(projectRoot);
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), projectRoot);
-        } catch (IOException e) {
-            // Wrapped so the computeIfAbsent lambda can throw it. Failure
-            // is not cached, so a future call (e.g. after fixing the
-            // project) will retry.
-            throw new UncheckedIOException("Failed to load project at " + projectRoot, e);
-        }
     }
 
     /** Thrown by {@link #findCallSitesJson} for user-facing error conditions. */

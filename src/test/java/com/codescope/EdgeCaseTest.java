@@ -83,7 +83,7 @@ class EdgeCaseTest {
         envelope.put("target", tree);
         envelope.put("status", "ok");
         envelope.put("message", "test");
-        String json = TraceCallersService.newObjectMapper().writeValueAsString(envelope);
+        String json = ProjectIndexCache.newObjectMapper().writeValueAsString(envelope);
         assertTrue(json.contains("\"truncated\":true"),
                 "expected truncated marker in JSON output");
     }
