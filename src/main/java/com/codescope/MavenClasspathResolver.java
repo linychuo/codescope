@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -202,15 +203,11 @@ public final class MavenClasspathResolver {
                                 && !fn.endsWith("-javadoc.jar")
                                 && !fn.endsWith("-tests.jar");
                     })
-                    .min((a, b) -> {
-                        // Shorter filename first. If tied, fall back to
-                        // lexicographic order so the result is deterministic.
-                        int byLen = Integer.compare(
-                                a.getFileName().toString().length(),
-                                b.getFileName().toString().length());
-                        return byLen != 0 ? byLen
-                                : a.getFileName().toString().compareTo(b.getFileName().toString());
-                    })
+                    .min(Comparator
+                            .comparingInt((Path p) -> p.getFileName().toString().length())
+                            // Lexicographic tiebreaker keeps the result
+                            // deterministic across platforms / file systems.
+                            .thenComparing(p -> p.getFileName().toString()))
                     .orElse(null);
         } catch (IOException e) {
             return null;
