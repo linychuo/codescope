@@ -134,6 +134,34 @@ class WellKnownApiJarTest {
         return result;
     }
 
+    @Test
+    void bundledResourceIsExtractedOnlyOnce() throws Exception {
+        // Each call to extractBundledResource used to write a fresh
+        // temp file. Over a long-running MCP session that loaded many
+        // distinct projects (each load goes through wellKnownApiJars),
+        // the temp directory accumulated one javax.inject-1.jar per
+        // project. The fix caches the extraction so every call returns
+        // the same path. Asserting path-equality across two calls
+        // pins the cache contract; the existence check confirms the
+        // cached file is still on disk for JDT to read.
+        String first = invokeWellKnownApiJars(new java.util.ArrayList<>()).stream()
+                .filter(p -> p.endsWith("javax.inject-1.jar"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "first invocation did not include javax.inject-1.jar"));
+        String second = invokeWellKnownApiJars(new java.util.ArrayList<>()).stream()
+                .filter(p -> p.endsWith("javax.inject-1.jar"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "second invocation did not include javax.inject-1.jar"));
+        assertEquals(first, second,
+                "expected the same temp file path on repeat invocation "
+                        + "(each call should reuse the cached extraction), got "
+                        + first + " vs " + second);
+        assertTrue(java.nio.file.Files.isRegularFile(java.nio.file.Path.of(first)),
+                "cached bundled resource should still exist on disk: " + first);
+    }
+
     private static void writeJava(Path file, String content) throws IOException {
         Files.createDirectories(file.getParent());
         Files.writeString(file, content);

@@ -84,23 +84,37 @@ public final class ProjectLoader {
     }
 
     /**
+     * Cache of resource-name → extracted-on-disk path. Each well-known
+     * API jar is materialized exactly once per JVM, not once per
+     * {@link #load} call — a long-running MCP server that indexes many
+     * distinct projects would otherwise leave one temp file per project
+     * behind (since {@code load} runs on every cache miss and on
+     * explicit {@code refresh:true}). The file is held by this cache for
+     * the JVM's lifetime and is also marked delete-on-exit as a
+     * belt-and-braces measure.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Path> EXTRACTED_BUNDLED
+            = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * Copy a resource bundled inside {@code codescope.jar} out to a temp
      * file, returning the absolute path. JDT's classpath expects a real
      * file on disk (not a {@code jar:file:.../codescope.jar!/...} URL),
      * so we materialize the resource rather than passing the URL
-     * through. The temp file lives for the duration of the JVM and is
-     * cleaned up by the OS; codescope runs as a short-lived CLI so this
-     * is fine. Returns null if the resource can't be found or written.
+     * through. Each unique {@code resource} is extracted at most once per
+     * JVM (see {@link #EXTRACTED_BUNDLED}); repeat calls return the same
+     * path. Returns null if the resource can't be found or written.
      */
     private static Path extractBundledResource(String resource) {
+        return EXTRACTED_BUNDLED.computeIfAbsent(resource, ProjectLoader::extractFresh);
+    }
+
+    private static Path extractFresh(String resource) {
         ClassLoader cl = ProjectLoader.class.getClassLoader();
         try (java.io.InputStream in = cl.getResourceAsStream(resource)) {
             if (in == null) return null;
             Path tmp = Files.createTempFile("codescope-", "-" + resource);
             Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            // Don't reserve the file; JDT opens it for reading and the
-            // temp dir cleanup is OS-driven. Mark for delete-on-exit as
-            // a belt-and-braces measure for short-lived JVMs.
             tmp.toFile().deleteOnExit();
             return tmp;
         } catch (IOException e) {
