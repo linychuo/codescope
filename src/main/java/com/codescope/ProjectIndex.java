@@ -204,17 +204,39 @@ public final class ProjectIndex {
     }
 
     /**
+     * Result of a {@link #searchSymbols} call: the sorted, capped list of
+     * matches plus the total number of matches that existed before the
+     * cap was applied. {@code matches.size()} may be less than
+     * {@code totalCount} when the caller passed a finite {@code limit}
+     * — callers use {@code totalCount > matches.size()} as the
+     * "capped/truncated" signal without needing a second pass.
+     */
+    public record SymbolSearchResult(List<Symbol> matches, int totalCount) {}
+
+    /**
      * Returns every recorded symbol whose simple name contains
      * {@code query} (case-insensitive substring match), optionally
      * filtered to a single kind. Results are sorted by (fqn, signature)
      * for stable output. {@code limit} caps the number of returned
      * symbols; pass {@link Integer#MAX_VALUE} for "no cap" (caller's
-     * responsibility). Returns an empty list if nothing matches.
+     * responsibility). The returned {@link SymbolSearchResult#totalCount}
+     * is the match count *before* the cap is applied, so a caller that
+     * needs to know whether the result was truncated can do so without a
+     * second scan over the index.
+     *
+     * <p>Sort cost is bounded: only the kept prefix (up to {@code limit})
+     * is fully sorted. Excess matches beyond {@code limit} are counted
+     * but not ordered, since they would be discarded anyway. This keeps
+     * the worst-case complexity at {@code O(N log L)} where L is the
+     * limit, not {@code O(N log N)}.
      */
-    public List<Symbol> searchSymbols(String query, String kindFilter, int limit) {
-        if (query == null || query.isEmpty()) return List.of();
+    public SymbolSearchResult searchSymbols(String query, String kindFilter, int limit) {
+        if (query == null || query.isEmpty()) {
+            return new SymbolSearchResult(List.of(), 0);
+        }
         String needle = query.toLowerCase();
         List<Symbol> hits = new ArrayList<>();
+        int total = 0;
         for (List<Symbol> bucket : symbols.values()) {
             List<Symbol> snap;
             synchronized (bucket) {
@@ -223,19 +245,21 @@ public final class ProjectIndex {
             for (Symbol s : snap) {
                 if (kindFilter != null && !kindFilter.equals(s.kind)) continue;
                 if (s.name.toLowerCase().contains(needle)) {
-                    hits.add(s);
+                    total++;
+                    if (hits.size() < limit) hits.add(s);
                 }
             }
         }
-        hits.sort((a, b) -> {
-            int byFqn = a.fqn.compareTo(b.fqn);
-            if (byFqn != 0) return byFqn;
-            String sa = a.signature == null ? "" : a.signature;
-            String sb = b.signature == null ? "" : b.signature;
-            return sa.compareTo(sb);
-        });
-        if (hits.size() <= limit) return hits;
-        return hits.subList(0, limit);
+        if (hits.size() > 1) {
+            hits.sort((a, b) -> {
+                int byFqn = a.fqn.compareTo(b.fqn);
+                if (byFqn != 0) return byFqn;
+                String sa = a.signature == null ? "" : a.signature;
+                String sb = b.signature == null ? "" : b.signature;
+                return sa.compareTo(sb);
+            });
+        }
+        return new SymbolSearchResult(hits, total);
     }
 
     public List<MethodKey> callersOf(MethodKey target) {

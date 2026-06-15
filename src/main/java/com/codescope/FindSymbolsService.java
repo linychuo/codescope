@@ -79,9 +79,12 @@ public final class FindSymbolsService {
             throw new FindSymbolsException(e.getCause().getMessage());
         }
 
-        List<ProjectIndex.Symbol> matches = index.searchSymbols(query, kind, effectiveLimit);
-        boolean truncated = matches.size() >= effectiveLimit
-                && index.searchSymbols(query, kind, Integer.MAX_VALUE).size() > effectiveLimit;
+        ProjectIndex.SymbolSearchResult result = index.searchSymbols(query, kind, effectiveLimit);
+        List<ProjectIndex.Symbol> matches = result.matches();
+        // Total reflects every match that existed before the limit was
+        // applied; a strict greater-than check distinguishes "capped at
+        // limit" from "happens to equal limit" without a second scan.
+        boolean truncated = result.totalCount() > effectiveLimit;
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("query", query);
