@@ -77,6 +77,11 @@ public final class McpServer {
 
     public void run() throws IOException {
         InputStream in = stdin;
+        // Drain per chunk, not per byte: tryParseAndDispatch copies
+        // buf.toByteArray() on every call, so a 4KB chunk with N
+        // non-whitespace bytes would otherwise pay N arraycopies + a
+        // Jackson state-machine walk apiece to discover the buffer
+        // is still incomplete. One drain per chunk keeps that O(1).
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         byte[] chunk = new byte[STDIN_CHUNK_SIZE];
         int n;
@@ -90,10 +95,14 @@ public final class McpServer {
                 // spec-compliant hosts and never corrupts string values.
                 if (b == (byte) '\n' || b == (byte) '\r') continue;
                 buf.write(b);
-                // tryParseAndDispatch owns buf on success: it removes the
-                // consumed bytes (preserving any trailing data) or resets
-                // the whole buffer on parse error.
-                tryParseAndDispatch(buf);
+            }
+            // Drain every complete object the chunk contributed. The
+            // loop handles a chunk that contains more than one. On
+            // success tryParseAndDispatch removes the consumed bytes
+            // (preserving any trailing data); on parse error it resets
+            // the whole buffer.
+            while (tryParseAndDispatch(buf)) {
+                // keep going until the buffer holds no complete object
             }
         }
     }
@@ -328,7 +337,14 @@ public final class McpServer {
                     return;
                 }
             }
-            return;     // unknown response, ignore
+            // Log a stray response (id we didn't issue, or whose future
+            // already timed out and was removed from `pending`) so a
+            // misbehaving host is diagnosable. Stderr only, not JSON-RPC:
+            // there's no id we could reply to, so a -32600 reply would
+            // just be noise to the next legitimate caller.
+            System.err.println("[codescope] stray response with id=" + responseId
+                    + (msg.containsKey("error") ? " (error)" : "") + " — ignored");
+            return;
         }
 
         Object id = msg.get("id");
