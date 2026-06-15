@@ -3,8 +3,6 @@ package com.codescope;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -63,21 +61,10 @@ public final class FindSymbolsService {
             throw new FindSymbolsException("Unknown kind '" + kind
                     + "'. Valid: " + VALID_KINDS);
         }
-        if (!Files.isDirectory(projectRoot)) {
-            throw new FindSymbolsException("Project root is not a directory: " + projectRoot);
-        }
-        if (!Files.isRegularFile(projectRoot.resolve("pom.xml"))) {
-            throw new FindSymbolsException("No pom.xml at " + projectRoot
-                    + " — only Maven projects are supported in this version.");
-        }
         int effectiveLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
 
-        ProjectIndex index;
-        try {
-            index = indexCache.loadOrRebuild(projectRoot, refresh);
-        } catch (UncheckedIOException e) {
-            throw new FindSymbolsException(e.getCause().getMessage());
-        }
+        ProjectIndex index = ProjectIndexCache.validateAndLoad(
+                indexCache, projectRoot, refresh, FindSymbolsException::new);
 
         ProjectIndex.SymbolSearchResult result = index.searchSymbols(query, kind, effectiveLimit);
         List<ProjectIndex.Symbol> matches = result.matches();

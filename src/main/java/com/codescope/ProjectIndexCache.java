@@ -5,10 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Shared LRU cache of {@link ProjectIndex} keyed by project root, plus the
@@ -100,5 +103,46 @@ public final class ProjectIndexCache {
                         .maxNestingDepth(MAX_NESTING_DEPTH)
                         .build());
         return m;
+    }
+
+    /**
+     * Validate {@code projectRoot} as a Maven project root and load
+     * (or rebuild) its index. Validation and IO failures are surfaced
+     * through the caller's exception type via {@code exceptionFactory},
+     * so each service can keep its own {@code XxxException} without
+     * the helper knowing about every concrete error type.
+     *
+     * <p>Used by {@link TraceCallersService}, {@link FindCallSitesService},
+     * and {@link FindSymbolsService} to consolidate the directory +
+     * pom.xml + load-and-wrap dance that was previously duplicated in
+     * each service.
+     */
+    public static <E extends Exception> ProjectIndex validateAndLoad(
+            ProjectIndexCache cache, Path projectRoot, boolean refresh,
+            Function<String, E> exceptionFactory) throws E {
+        if (!Files.isDirectory(projectRoot)) {
+            throw exceptionFactory.apply("Project root is not a directory: " + projectRoot);
+        }
+        if (!Files.isRegularFile(projectRoot.resolve("pom.xml"))) {
+            throw exceptionFactory.apply("No pom.xml at " + projectRoot
+                    + " — only Maven projects are supported in this version.");
+        }
+        try {
+            return cache.loadOrRebuild(projectRoot, refresh);
+        } catch (UncheckedIOException e) {
+            throw exceptionFactory.apply(e.getCause().getMessage());
+        }
+    }
+
+    /**
+     * Append the {@code "(skipped N unparseable file(s))"} suffix to a
+     * user-facing message when the index has any skipped files.
+     * Returns {@code message} unchanged otherwise. Centralized so the
+     * wording stays consistent across services.
+     */
+    public static String withSkippedFilesSuffix(String message, ProjectIndex index) {
+        List<String> skipped = index.skippedFiles();
+        if (skipped.isEmpty()) return message;
+        return message + " (skipped " + skipped.size() + " unparseable file(s))";
     }
 }

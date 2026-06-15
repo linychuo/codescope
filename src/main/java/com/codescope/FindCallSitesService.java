@@ -3,8 +3,6 @@ package com.codescope;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,20 +42,8 @@ public final class FindCallSitesService {
     public String findCallSitesJson(String className, String methodName,
                                     Integer arity, List<String> paramTypes,
                                     Path projectRoot, boolean refresh) throws FindCallSitesException {
-        if (!Files.isDirectory(projectRoot)) {
-            throw new FindCallSitesException("Project root is not a directory: " + projectRoot);
-        }
-        if (!Files.isRegularFile(projectRoot.resolve("pom.xml"))) {
-            throw new FindCallSitesException("No pom.xml at " + projectRoot
-                    + " — only Maven projects are supported in this version.");
-        }
-
-        ProjectIndex index;
-        try {
-            index = indexCache.loadOrRebuild(projectRoot, refresh);
-        } catch (UncheckedIOException e) {
-            throw new FindCallSitesException(e.getCause().getMessage());
-        }
+        ProjectIndex index = ProjectIndexCache.validateAndLoad(
+                indexCache, projectRoot, refresh, FindCallSitesException::new);
 
         // Same library-target resolution as trace_callers: try
         // resolveTarget against project declarations, fall back to
@@ -105,10 +91,7 @@ public final class FindCallSitesService {
             message = message + " (combined call sites across "
                     + seeds.size() + " library overloads: " + overloads + ")";
         }
-        List<String> skipped = index.skippedFiles();
-        if (!skipped.isEmpty()) {
-            message = message + " (skipped " + skipped.size() + " unparseable file(s))";
-        }
+        message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
         Map<String, Object> out = new LinkedHashMap<>();
         MethodKey display = target != null ? target : new MethodKey(className, methodName,
