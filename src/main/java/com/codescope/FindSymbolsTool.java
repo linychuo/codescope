@@ -2,8 +2,6 @@ package com.codescope;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,16 +9,14 @@ import java.util.Map;
 /**
  * MCP adapter for {@code find_symbols}. Argument parsing + JSON
  * envelope live here; the actual indexing and search live in
- * {@link FindSymbolsService}. Mirrors {@link FindCallSitesTool}.
+ * {@link FindSymbolsService}. Argument-parsing helpers and the
+ * {@code project} resolution live in {@link AbstractMcpTool};
+ * {@link #optionalLimit} is local because it carries a domain-specific
+ * default and a {@code >=1} floor tied to {@link FindSymbolsService}.
  */
-public final class FindSymbolsTool implements Tool {
+public final class FindSymbolsTool extends AbstractMcpTool {
 
     private final FindSymbolsService service = new FindSymbolsService();
-
-    /** Supplied by the host via MCP `roots`; used when the tool call omits `project`. */
-    private volatile String hostDefaultProject;
-
-    public void setHostDefaultProject(String path) { this.hostDefaultProject = path; }
 
     @Override public String name() { return "find_symbols"; }
 
@@ -100,25 +96,6 @@ public final class FindSymbolsTool implements Tool {
         }
     }
 
-    private static String requiredString(Map<String, Object> args, String key) {
-        Object v = args.get(key);
-        if (v == null || !(v instanceof String s) || s.isBlank()) {
-            throw new IllegalArgumentException("Missing or non-string required argument: " + key);
-        }
-        return s;
-    }
-
-    private static String optionalString(Map<String, Object> args, String key) {
-        Object v = args.get(key);
-        if (v == null) return null;
-        if (!(v instanceof String s)) {
-            throw new IllegalArgumentException("Optional argument '" + key
-                    + "' must be a string; got: " + v);
-        }
-        if (s.isBlank()) return null;
-        return s;
-    }
-
     private static int optionalLimit(Map<String, Object> args) {
         Object v = args.get("limit");
         if (v == null) return FindSymbolsService.DEFAULT_LIMIT;
@@ -138,29 +115,5 @@ public final class FindSymbolsTool implements Tool {
             throw new IllegalArgumentException("Optional argument 'limit' must be >= 1; got: " + n);
         }
         return n;
-    }
-
-    private static boolean optionalBool(Map<String, Object> args, String key) {
-        Object v = args.get(key);
-        if (v == null) return false;
-        if (v instanceof Boolean b) return b;
-        throw new IllegalArgumentException("Optional argument '" + key
-                + "' must be a boolean; got: " + v);
-    }
-
-    private Path resolveProjectRoot(Map<String, Object> args) {
-        Object p = args.get("project");
-        if (p != null) return Paths.get(p.toString()).toAbsolutePath();
-        if (hostDefaultProject != null && !hostDefaultProject.isBlank()) {
-            return Paths.get(hostDefaultProject).toAbsolutePath();
-        }
-        // No `project` arg and no host-advertised root. We deliberately
-        // do NOT fall back to the server process's CWD — that CWD is set
-        // by the MCP host at launch time and is not necessarily the
-        // user's working directory. Guessing wrong is worse than asking.
-        throw new IllegalArgumentException(
-                "No `project` argument and no default project root advertised by the host. "
-                        + "Pass `project` with an absolute path to a Maven project root, or have "
-                        + "the host advertise the workspace root via MCP `roots`.");
     }
 }
