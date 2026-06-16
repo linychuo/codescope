@@ -193,6 +193,52 @@ class FindCallSitesServiceTest {
     }
 
     @Test
+    void crossesInterfaceBoundaryForCallSites() throws Exception {
+        // Regression for issue #3: when a caller invokes a method
+        // through an interface (e.g. `ifaceImpl.findById(id)` where
+        // `ifaceImpl`'s static type is the interface), JDT binds the
+        // call to the interface MethodKey. If the user targets the
+        // concrete implementation (IfaceRepositoryImpl#findById), the
+        // recorded call edge is under IfaceRepository#findById, not
+        // IfaceRepositoryImpl#findById — naive lookup misses it.
+        //
+        // The service must walk relatedMethods (overrides +
+        // implementors + self) and union the call-site maps so the
+        // interface-typed call site shows up under the impl-targeted
+        // query.
+        FindCallSitesService svc = new FindCallSitesService();
+        // Target the impl. IfaceDomainImpl#findById also receives a
+        // call through the IfaceRepository interface, so we expect
+        // 1 call site from IfaceDomainImpl.
+        String json = svc.findCallSitesJson(
+                "com.example.IfaceRepositoryImpl", "findById",
+                null, null, FIXTURE, false);
+        JsonNode tree = new ObjectMapper().readTree(json);
+
+        JsonNode sites = tree.path("call_sites");
+        assertTrue(sites.isArray());
+        // The impl's own callers (none in the fixture) plus the
+        // interface-typed caller IfaceDomainImpl#findById. The
+        // interface-typed call must surface.
+        boolean foundIfaceDomain = false;
+        for (JsonNode s : sites) {
+            if (s.path("caller").asText().contains("IfaceDomainImpl#findById")) {
+                foundIfaceDomain = true;
+                // call_site.file/line should point at the call inside
+                // IfaceDomainImpl#findById (line 8 of the impl body).
+                assertEquals("src/main/java/com/example/IfaceDomainImpl.java",
+                        s.path("call_site").path("file").asText());
+                assertEquals(8, s.path("call_site").path("line").asInt());
+                break;
+            }
+        }
+        assertTrue(foundIfaceDomain,
+                "expected IfaceDomainImpl to surface as a caller of "
+                        + "IfaceRepositoryImpl#findById via the interface; got: "
+                        + sites);
+    }
+
+    @Test
     void refreshAfterFileEditPicksUpNewCallSites() throws Exception {
         // Same shape as TraceCallersServiceTest.refreshAfterFileEdit:
         // edit a source file, query without refresh (cached, stale),

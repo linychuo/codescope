@@ -76,8 +76,31 @@ public final class FindCallSitesService {
                 union = unionCallSites(index, seeds);
             }
         } else {
-            seeds = List.of(target);
-            union = index.callSitesOf(target);
+            // Cross interface boundaries: callers that statically invoke
+            // an interface method (JDT binding resolves the MethodKey
+            // to the interface declaration) are stored under the
+            // interface MethodKey in `callSites`. When the user
+            // targets a concrete implementation (e.g. Impl#m), the
+            // resolved key won't match the recorded key directly —
+            // we need to expand to relatedMethods (overrides +
+            // implementors + self) and union the call-site maps across
+            // the group. See ProjectIndex.recordHierarchy /
+            // relatedMethods.
+            List<MethodKey> related = new ArrayList<>(index.relatedMethods(target));
+            if (related.size() == 1 && related.get(0).equals(target)) {
+                union = index.callSitesOf(target);
+                seeds = List.of(target);
+            } else {
+                // `target` first so the response ordering and overload
+                // hint favor the user's selector; related tail.
+                List<MethodKey> ordered = new ArrayList<>(related.size());
+                ordered.add(target);
+                for (MethodKey rk : related) {
+                    if (!rk.equals(target)) ordered.add(rk);
+                }
+                union = unionCallSites(index, ordered);
+                seeds = ordered;
+            }
         }
 
         String message = buildMessage(className, methodName, arity, target, union, seeds);
