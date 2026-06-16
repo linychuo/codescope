@@ -52,6 +52,17 @@ public final class ProjectIndex {
 
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
     private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
+    // Visibility / dispatchability of each declared method, recorded
+    // by JdtIndexer at the same visit time as the declaration.
+    // Currently consumed by the post-build reverse method-hierarchy
+    // repair pass so the pass can correctly skip private and static
+    // methods (private methods are lexically scoped and not virtual
+    // dispatch; static methods hide rather than override). Without
+    // this gate, the repair pass would link Parent#privateM to
+    // Child#privateM as if they were overrides, and a trace_callers
+    // on one would surface callers of the other. See
+    // JdtIndexer.repairMethodHierarchyViaTypeHierarchy.
+    private final Map<MethodKey, Integer> declarationModifiers = new ConcurrentHashMap<>();
     // Method-hierarchy index: for each MethodKey M, the set of other
     // MethodKeys in M's hierarchy group (the methods M overrides in a
     // supertype, plus the methods that implement M in subtypes). Both
@@ -146,6 +157,30 @@ public final class ProjectIndex {
 
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
+    }
+
+    /**
+     * Records the JDT modifier bitmask for a declared method. Used by
+     * {@link JdtIndexer} at the same visit that calls
+     * {@link #putDeclaration} so the reverse-hierarchy repair pass
+     * can correctly gate virtual-dispatch methods (skip private and
+     * static). Idempotent — a re-record for the same key is a no-op
+     * for callers that already saw the first value.
+     */
+    public void recordMethodDeclarationModifiers(MethodKey method, int modifiers) {
+        declarationModifiers.putIfAbsent(method, modifiers);
+    }
+
+    /**
+     * Returns the JDT modifier bitmask recorded for {@code method},
+     * or 0 if the indexer never set one (e.g. synthetic methods, or
+     * a method the caller didn't pass through the recordMethod… path).
+     * Callers should mask the returned value with
+     * {@link java.lang.reflect.Modifier#isPrivate(int)} etc.
+     */
+    public int modifiersOf(MethodKey method) {
+        Integer m = declarationModifiers.get(method);
+        return m == null ? 0 : m;
     }
 
     /**

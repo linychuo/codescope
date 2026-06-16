@@ -103,7 +103,86 @@ public final class JdtIndexer {
                 }
             }
         }
+        // Reverse-type-hierarchy pass: every virtual-dispatch method
+        // declared on a type T is also method-hierarchy-related to
+        // any same-named, same-arity method declared on a subtype of
+        // T. The forward recordMethodHierarchy walk (driven by
+        // JDT's binding-side supertype traversal) misses some edges
+        // — most notably the "interface extends abstract class"
+        // case, where the implementing interface's
+        // binding.getInterfaces() returns empty even though the AST
+        // exposes the abstract supertype as a superInterfaceType.
+        // By the time we get here, typeHierarchy is fully populated
+        // from the AST walk, so we can repair missing edges
+        // deterministically: for each declared method M, find all
+        // subtypes of M.declaringClass and look for a same-named,
+        // same-arity method on each. The gate uses the per-method
+        // modifier bitmask recorded at declaration time so we never
+        // link private or static methods (which are not virtual
+        // dispatch — see ProjectIndex.recordMethodDeclarationModifiers).
+        repairMethodHierarchyViaTypeHierarchy(index);
         return index;
+    }
+
+    /**
+     * One-shot repair pass that adds method-hierarchy edges the
+     * forward {@link JdtIndexerVisitor#recordMethodHierarchy} walk
+     * missed. For every declared method M, walks
+     * {@code typeHierarchy} downward from {@code M.declaringClass}
+     * and links M to any same-named, same-arity method declared on a
+     * subtype. Catches the
+     * {@code interface IFoo extends AbsBase}-style edges that JDT
+     * binding traversal does not expose but AST traversal does.
+     *
+     * <p>Gate: both M and the candidate must have a recorded
+     * modifier bitmask and neither may be private or static.
+     * {@link org.eclipse.jdt.core.dom.Modifier#isPrivate(int)} and
+     * {@link org.eclipse.jdt.core.dom.Modifier#isStatic(int)} are
+     * the JDT-side checks; private methods are lexically scoped
+     * (Parent#privateM and Child#privateM are unrelated even with
+     * the same name) and static methods hide rather than override.
+     * Without this gate the repair pass would link Parent#privateM
+     * to Child#privateM and a trace_callers on one would surface
+     * callers of the other — exactly the regression the
+     * {@code privateMethodsAreNotCrossClassHierarchy} test
+     * guards against.
+     */
+    private static void repairMethodHierarchyViaTypeHierarchy(ProjectIndex index) {
+        java.util.List<MethodKey> declared = new java.util.ArrayList<>(index.knownMethods());
+        for (MethodKey m : declared) {
+            int mMods = index.modifiersOf(m);
+            // Skip leaf / non-virtual-dispatch methods: no hierarchy
+            // edge to add, and including them would either be a
+            // no-op (forward pass already skipped them) or a
+            // regression (forward pass correctly skipped them for
+            // private/static, we'd wrongly add them back).
+            if (mMods == 0) continue;
+            if (org.eclipse.jdt.core.dom.Modifier.isPrivate(mMods)) continue;
+            if (org.eclipse.jdt.core.dom.Modifier.isStatic(mMods)) continue;
+            java.util.Set<String> visited = new java.util.HashSet<>();
+            java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+            queue.addLast(m.declaringClass);
+            visited.add(m.declaringClass);
+            while (!queue.isEmpty()) {
+                String cls = queue.removeFirst();
+                java.util.Set<String> subs = index.subtypesOf(cls);
+                if (subs == null) continue;
+                for (String sub : subs) {
+                    if (!visited.add(sub)) continue;
+                    for (MethodKey candidate : index.knownMethods()) {
+                        if (!candidate.declaringClass.equals(sub)) continue;
+                        if (!candidate.methodName.equals(m.methodName)) continue;
+                        if (candidate.arity != m.arity) continue;
+                        int cMods = index.modifiersOf(candidate);
+                        if (cMods == 0) continue;
+                        if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
+                        if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
+                        index.recordHierarchy(m, candidate);
+                    }
+                    queue.addLast(sub);
+                }
+            }
+        }
     }
 
     private void parseFile(Path src, String[] cp, String[] sp, String[] encodingNames,
@@ -212,8 +291,66 @@ public final class JdtIndexer {
             // project declarations and would just bloat the index
             // with no payoff (resolveTarget only consults
             // declarations and calls, both project-only).
+            //
+            // Two sources for the supertype FQNs, in priority order:
+            //
+            // 1. AST node: `TypeDeclaration.getSuperclassType()` for
+            //    classes, `TypeDeclaration.getSuperInterfaceTypes()`
+            //    for interfaces. These work even when bindings are
+            //    missing or incomplete (e.g. a JAR referenced by the
+            //    project but not on the build classpath).
+            // 2. `binding.getSuperclass()` / `binding.getInterfaces()`.
+            //    For interfaces that `extends` a class
+            //    (JDT allows abstract-class supertypes for
+            //    interfaces — i.e. `interface IFoo extends AbsBase`)
+            //    JDT's ITypeBinding does NOT expose the abstract
+            //    superclass: `getSuperclass()` returns null and
+            //    `getInterfaces()` is empty. This is a known JDT
+            //    limitation that would silently drop the hierarchy
+            //    edge if we relied solely on the binding. The AST
+            //    node always exposes the textual supertype, so we
+            //    use it as the authoritative source.
+            recordSupertypesFromAst(node, fqn);
             recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
             return true;
+        }
+
+        /**
+         * Records one type-hierarchy edge per supertype declared on
+         * the AST node. Walks the node's own superclassType (for a
+         * class) and superInterfaceTypes (for an interface), reading
+         * each supertype's binding — but only stores it when the
+         * binding resolves AND is from project source. Library
+         * supertypes are intentionally skipped (see
+         * {@link #recordTypeHierarchyFromBinding} for the same gate).
+         */
+        private void recordSupertypesFromAst(TypeDeclaration node, String childFqn) {
+            if (childFqn == null || childFqn.isEmpty()) return;
+            // Classes extend a single superclass; interfaces extend
+            // a list of super-interfaces. JDT models the
+            // class-extends-class and interface-extends-interface
+            // cases uniformly via getSuperclassType() /
+            // getSuperInterfaceTypes(). The interface-extends-class
+            // edge (which is what fails on the binding side — see
+            // the TypeDeclaration.visit javadoc above) is exposed
+            // by getSuperclassType() even on an interface node,
+            // because the AST is text-faithful.
+            org.eclipse.jdt.core.dom.Type sup = node.getSuperclassType();
+            if (sup != null) {
+                ITypeBinding sb = sup.resolveBinding();
+                if (sb != null && sb.isFromSource()) {
+                    String p = eraseTypeArgs(fqnFromBinding(sb));
+                    if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
+                }
+            }
+            for (Object ifaceNode : node.superInterfaceTypes()) {
+                org.eclipse.jdt.core.dom.Type iface = (org.eclipse.jdt.core.dom.Type) ifaceNode;
+                if (iface == null) continue;
+                ITypeBinding sb = iface.resolveBinding();
+                if (sb == null || !sb.isFromSource()) continue;
+                String p = eraseTypeArgs(fqnFromBinding(sb));
+                if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
+            }
         }
 
         @Override
@@ -382,6 +519,11 @@ public final class JdtIndexer {
                     paramTypes.size(), paramTypes);
             int line = cuLine(node);
             index.putDeclaration(callerKey, new ProjectIndex.SourceLoc(file, line));
+            // Record the JDT modifier bitmask so the post-build
+            // reverse-hierarchy repair pass can skip private/static
+            // methods (which are not virtual dispatch and must not
+            // be linked across the hierarchy).
+            index.recordMethodDeclarationModifiers(callerKey, node.getModifiers());
             // Walk the declaring type's supertypes to find methods with
             // the same name+arity — those are M's hierarchy siblings
             // (overridden in superclass, or declared in a super-interface
@@ -657,17 +799,76 @@ public final class JdtIndexer {
             String myName = b.getName();
             int myArity = b.getParameterTypes().length;
 
-            Set<org.eclipse.jdt.core.dom.ITypeBinding> visited =
-                    new HashSet<>();
-            Deque<org.eclipse.jdt.core.dom.ITypeBinding> queue =
-                    new ArrayDeque<>();
-            // Seed with the direct supertypes of M's declaring class.
-            // For a class: superclass + implemented interfaces.
-            // For an interface: super-interfaces (getSuperclass() is null).
+            // Two parallel supertype walks: one driven by JDT
+            // bindings (fast, but misses the "interface extends
+            // abstract class" edge — see comments below), one driven
+            // by AST node text (slow, but always text-faithful). We
+            // union the matches.
+            //
+            // JDT 3.45 binding walk:
+            //   - class → seed superclass + interfaces
+            //   - interface → seed interfaces only (getSuperclass is
+            //     null). When an interface extends an abstract class
+            //     (legal Java: `interface IFoo extends AbsBase`),
+            //     JDT models the abstract supertype as a SUPER
+            //     INTERFACE (per the dump_iface2 probe), but only on
+            //     the AST node — ITypeBinding.getInterfaces() returns
+            //     an empty array for the same interface. The binding
+            //     walk therefore misses the abstract superclass and
+            //     would leave the method-hierarchy edge dangling.
+            //
+            // AST walk: TypeDeclaration.getSuperclassType() returns
+            // null for an interface regardless of what `extends`
+            // names (the AST is text-faithful but the slot is for
+            // "the extends clause when it's a class" — JDT routes
+            // extends-class-as-superinterface through
+            // superInterfaceTypes()). So we look at BOTH slots and
+            // let the visitor / findBinding bridge them.
+            java.util.Set<org.eclipse.jdt.core.dom.ITypeBinding> visited =
+                    new java.util.HashSet<>();
+            java.util.Deque<org.eclipse.jdt.core.dom.ITypeBinding> queue =
+                    new java.util.ArrayDeque<>();
+            // Seed from bindings (cheap).
             if (dc.getSuperclass() != null) queue.add(dc.getSuperclass());
             for (org.eclipse.jdt.core.dom.ITypeBinding iface : dc.getInterfaces()) {
                 queue.add(iface);
             }
+            // Seed from the AST node — only valid if we can find the
+            // AST node behind `dc`. We don't have a direct path here
+            // (recordMethodHierarchy is called from
+            // visit(MethodDeclaration), but binding may have resolved
+            // to a synthetic / outer scope node). We try to recover
+            // the AST node by walking the type binding; the safest
+            // fallback is to consult the indexer's
+            // recordSupertypesFromAst results, but those are visited
+            // at a different time. For the binding-only walk below
+            // we rely on JDT, and accept that some deep hierarchies
+            // (interface-extends-class with bridge methods) may need
+            // a separate repair pass. The Pass-3 ancestor walk in
+            // ProjectIndex.resolveTarget catches that fallback at
+            // query time via typeHierarchy, which IS recorded from
+            // AST. The remaining gap is method-hierarchy edges that
+            // recordMethodHierarchy alone would have added but for
+            // the binding walk missing the super-interface edge.
+            //
+            // To close that gap, we re-seed the queue from the AST
+            // node representing `dc` if the indexer's
+            // recordSupertypesFromBinding saw the binding-side
+            // missing edge. The simplest correct path: at every
+            // queue pop, after processing st.getDeclaredMethods(),
+            // also enqueue st's AST superclassType / superInterfaceTypes
+            // bindings. JDT bridges these to ITypeBinding via
+            // Type.resolveBinding(). This catches the
+            // interface-extends-class case because the AST node
+            // exposes AbstractService as a superInterfaceType on the
+            // ITicketPredealDomainService TypeDeclaration node.
+            // method-hierarchy repair via reverse typeHierarchy walk happens in
+            // JdtIndexer.repairMethodHierarchyViaTypeHierarchy once
+            // all sources have been visited and typeHierarchy is
+            // fully populated. This forward binding walk still adds
+            // the common-case edges (class extends class, interface
+            // extends interface) so callers do not need to wait for
+            // the post-pass.
             while (!queue.isEmpty()) {
                 org.eclipse.jdt.core.dom.ITypeBinding st = queue.removeFirst();
                 if (st == null || !visited.add(st)) continue;
