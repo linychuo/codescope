@@ -333,6 +333,8 @@ public final class ProjectIndex {
     public MethodKey resolveTarget(String className, String methodName,
                                    Integer arity, List<String> paramTypes)
             throws AmbiguousMethodException {
+        // Pass 1: strict equals match (FQN-exact, arity-exact). The
+        // common case in unit tests and disciplined AI clients.
         MethodKey match = null;
         for (MethodKey m : declarations.keySet()) {
             if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
@@ -343,7 +345,54 @@ public final class ProjectIndex {
             }
             match = m;
         }
-        return match;
+        if (match != null || paramTypes == null) return match;
+
+        // Pass 2: FQN-suffix fallback. MCP clients (and AI agents) often
+        // pass short names ("DTO") or types imported from a different
+        // package, neither of which strict-equals the JDT-resolved FQN
+        // ("com.example.dto.DTO"). We accept a candidate if every
+        // user-supplied param type's last '.'-delimited segment equals
+        // the candidate's same segment. (Issue #3: arity/paramTypes
+        // mismatch made trace_callers and find_call_sites miss the
+        // target entirely.) Ambiguity is still surfaced — if pass 2
+        // also narrows to multiple candidates, the caller has supplied
+        // a useless selector and we throw.
+        MethodKey fallback = null;
+        for (MethodKey m : declarations.keySet()) {
+            if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
+            if (arity != null && m.arity != arity.intValue()) continue;
+            if (m.parameterTypes.size() != paramTypes.size()) continue;
+            if (!paramTypesMatchBySuffix(paramTypes, m.parameterTypes)) continue;
+            if (fallback != null) {
+                throw new AmbiguousMethodException(className, methodName, arity, paramTypes);
+            }
+            fallback = m;
+        }
+        return fallback;
+    }
+
+    /**
+     * Lenient paramType matcher: a user paramType {@code u} matches a
+     * declared paramType {@code d} if either equals, or both have the
+     * same last {@code .}-delimited segment (the simple class name).
+     * E.g. user {@code "DTO"} matches declared {@code "com.example.dto.DTO"};
+     * user {@code "java.util.List"} matches declared
+     * {@code "java.util.List<java.lang.String>"} (no dot in declared,
+     * last segment is the whole token — equal to user's first segment).
+     */
+    private static boolean paramTypesMatchBySuffix(List<String> user, List<String> declared) {
+        for (int i = 0; i < user.size(); i++) {
+            String u = user.get(i);
+            String d = declared.get(i);
+            if (u == null || d == null) return false;
+            if (u.equals(d)) continue;
+            int dotU = u.lastIndexOf('.');
+            int dotD = d.lastIndexOf('.');
+            String tailU = dotU < 0 ? u : u.substring(dotU + 1);
+            String tailD = dotD < 0 ? d : d.substring(dotD + 1);
+            if (!tailU.equals(tailD)) return false;
+        }
+        return true;
     }
 
     /** Lists every declared method with the given name, regardless of arity. */
@@ -379,6 +428,19 @@ public final class ProjectIndex {
             if (arity != null && k.arity != arity.intValue()) continue;
             if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
             out.add(k);
+        }
+        // Lenient FQN-suffix pass (issue #3): if strict pass yielded
+        // nothing and the caller supplied paramTypes, accept keys
+        // whose recorded paramTypes match by simple-name suffix. Avoid
+        // duplicating keys already added by the strict pass.
+        if (out.isEmpty() && paramTypes != null) {
+            for (MethodKey k : calls.keySet()) {
+                if (!k.declaringClass.equals(className) || !k.methodName.equals(methodName)) continue;
+                if (arity != null && k.arity != arity.intValue()) continue;
+                if (k.parameterTypes.size() != paramTypes.size()) continue;
+                if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
+                out.add(k);
+            }
         }
         return out;
     }
