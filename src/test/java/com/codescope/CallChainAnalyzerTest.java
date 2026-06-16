@@ -279,17 +279,39 @@ class CallChainAnalyzerTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> callers = (List<Map<String, Object>>) r.root().toJson().get("callers");
         assertNotNull(callers);
-        assertEquals(1, callers.size(), "IfaceRepositoryImpl is the only direct caller of IfaceDao");
-        assertEquals("com.example.IfaceRepositoryImpl", callers.get(0).get("class"));
-        assertEquals("findById", callers.get(0).get("method"));
+        assertEquals(2, callers.size(),
+                "IfaceDao#findById has two callers: IfaceRepositoryImpl (existing fixture) "
+                        + "and SubInterfaceCaller (added with the sub-interface regression "
+                        + "fixture for issue #3). If this assertion fails after removing one "
+                        + "of those callers, adjust the expected count.");
+        // The new SubInterfaceCaller exercises the sub-interface
+        // inheritance path (its field is typed as IfaceDaoSub, which
+        // inherits findById from IfaceDao). IfaceRepositoryImpl was
+        // the original direct caller. Both must appear in the chain.
+        java.util.Set<String> callerClasses = new java.util.HashSet<>();
+        for (Map<String, Object> c : callers) {
+            callerClasses.add((String) c.get("class"));
+        }
+        assertTrue(callerClasses.contains("com.example.IfaceRepositoryImpl"),
+                "IfaceRepositoryImpl must remain a direct caller of IfaceDao#findById");
+        assertTrue(callerClasses.contains("com.example.SubInterfaceCaller"),
+                "SubInterfaceCaller must appear as a caller via sub-interface inheritance");
 
         // The chain must cross the interface boundary here: IfaceRepositoryImpl
         // implements IfaceRepository, and IfaceDomainImpl calls through the
         // interface. The fix should make IfaceDomainImpl appear as a caller of
         // IfaceRepositoryImpl#findById (via the interface).
+        Map<String, Object> implEntry = null;
+        for (Map<String, Object> c : callers) {
+            if ("com.example.IfaceRepositoryImpl".equals(c.get("class"))) {
+                implEntry = c;
+                break;
+            }
+        }
+        assertNotNull(implEntry, "IfaceRepositoryImpl must be one of the direct callers");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> implCallers =
-                (List<Map<String, Object>>) callers.get(0).get("callers");
+                (List<Map<String, Object>>) implEntry.get("callers");
         assertNotNull(implCallers,
                 "expected BFS to cross the interface boundary and find IfaceDomainImpl");
         assertEquals(1, implCallers.size());

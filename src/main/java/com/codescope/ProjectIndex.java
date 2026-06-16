@@ -62,6 +62,20 @@ public final class ProjectIndex {
     // references an interface method is reachable when the BFS reaches
     // a concrete implementation (or vice versa).
     private final Map<MethodKey, Set<MethodKey>> hierarchy = new ConcurrentHashMap<>();
+    // Type-hierarchy index: for each type FQN P, the set of type FQNs
+    // that directly extend or implement P (class extends class, class
+    // implements interface, interface extends interface). Stored
+    // bidirectionally — recordTypeHierarchy writes both sides, so
+    // subtypesOf(P) walks it directly. Used by resolveTarget /
+    // findInvokedKeys as a fallback when the user queries a class or
+    // interface that does not declare the target method itself but
+    // inherits it (e.g. `ISub extends IBase` — ISub has no
+    // `InvFundTicketPrint` declaration but its parent IBase does, and
+    // calls through an ISub-typed field bind to IBase#m in JDT).
+    // Populated eagerly by JdtIndexer during visit(TypeDeclaration)
+    // and visit(EnumDeclaration) / visit(RecordDeclaration) /
+    // visit(AnnotationTypeDeclaration) — see recordTypeHierarchy there.
+    private final Map<String, Set<String>> typeHierarchy = new ConcurrentHashMap<>();
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
     // Parallel to `calls` but per (callee, caller) edge carries a list of
     // call-site positions. Populated eagerly at index time so that
@@ -153,6 +167,46 @@ public final class ProjectIndex {
         if (child == null || parent == null || child.equals(parent)) return;
         hierarchy.computeIfAbsent(child, k -> ConcurrentHashMap.newKeySet()).add(parent);
         hierarchy.computeIfAbsent(parent, k -> ConcurrentHashMap.newKeySet()).add(child);
+    }
+
+    /**
+     * Records that {@code childType} is a direct subtype of
+     * {@code parentType} (a class extending another class, a class
+     * implementing an interface, or an interface extending another
+     * interface). Stored bidirectionally so {@link #subtypesOf} can
+     * answer "which declared types in this project extend P" in O(1)
+     * per lookup, without re-walking declarations.
+     *
+     * <p>Self-pairs (a type listed as its own supertype) and nulls are
+     * silently skipped. Both FQNs must be non-empty — a top-level type
+     * with no package gets the empty-string parent from JDT in some
+     * edge cases (e.g. unpackaged test sources), and an empty-string
+     * edge would just pollute every other top-level type's subtype set.
+     */
+    public void recordTypeHierarchy(String childType, String parentType) {
+        if (childType == null || parentType == null) return;
+        if (childType.isEmpty() || parentType.isEmpty()) return;
+        if (childType.equals(parentType)) return;
+        typeHierarchy.computeIfAbsent(parentType, k -> ConcurrentHashMap.newKeySet()).add(childType);
+        typeHierarchy.computeIfAbsent(childType, k -> ConcurrentHashMap.newKeySet()).add(parentType);
+    }
+
+    /**
+     * Returns the set of type FQNs that extend or implement
+     * {@code parentType} directly. The result includes only types that
+     * were recorded by the indexer — if no project source declares a
+     * subtype, this returns an empty set (not null).
+     *
+     * <p>The returned set is the live index set (not a defensive
+     * snapshot) — callers must not mutate it. {@link Set#contains} and
+     * iteration are safe under the indexer's concurrent writes because
+     * the underlying map is a {@link ConcurrentHashMap}.
+     */
+    public Set<String> subtypesOf(String parentType) {
+        if (parentType == null || parentType.isEmpty()) return Set.of();
+        Set<String> direct = typeHierarchy.get(parentType);
+        if (direct == null || direct.isEmpty()) return Set.of();
+        return direct;
     }
 
     /**
@@ -345,7 +399,7 @@ public final class ProjectIndex {
             }
             match = m;
         }
-        if (match != null || paramTypes == null) return match;
+        if (match != null) return match;
 
         // Pass 2: FQN-suffix fallback. MCP clients (and AI agents) often
         // pass short names ("DTO") or types imported from a different
@@ -357,6 +411,13 @@ public final class ProjectIndex {
         // target entirely.) Ambiguity is still surfaced — if pass 2
         // also narrows to multiple candidates, the caller has supplied
         // a useless selector and we throw.
+        //
+        // Skipped entirely when the user did not pass paramTypes: the
+        // suffix matcher has nothing to align against. The ancestor
+        // walk below still runs in that case (with strict matching
+        // only) so a sub-interface query can still find an inherited
+        // method on its parent.
+        if (paramTypes != null) {
         MethodKey fallback = null;
         for (MethodKey m : declarations.keySet()) {
             if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
@@ -368,7 +429,86 @@ public final class ProjectIndex {
             }
             fallback = m;
         }
-        return fallback;
+        if (fallback != null) return fallback;
+        }
+
+        // Pass 3: ancestor-walk fallback. The user passed a class or
+        // interface that does NOT itself declare the target method —
+        // it inherits the method from a supertype (e.g. ISub extends
+        // IBase; ISub has no `InvFundTicketPrint` declaration, only
+        // IBase does). Calls through an ISub-typed field bind to
+        // IBase#m in JDT, so the calls map and declarations both
+        // reference IBase. We walk up the type hierarchy from
+        // `className` (via typeHierarchy, which is recorded
+        // bidirectionally), and for each ancestor try the strict +
+        // FQN-suffix match. First match wins; multiple distinct
+        // ancestors declaring the same name+arity is still a real
+        // diamond (a class implementing two interfaces that both
+        // declare m) — we return the first to keep the BFS coherent
+        // and surface any ambiguity via AmbiguousMethodException if
+        // two candidates collide on the same ancestor walk.
+        return resolveTargetViaAncestors(className, methodName, arity, paramTypes);
+    }
+
+    /**
+     * Walks the type hierarchy upward from {@code startClass} (each step
+     * consults {@link #typeHierarchy} for the next ancestor set) and tries
+     * to resolve {@code methodName} against each ancestor's declarations.
+     * Returns the first match — strict match preferred, FQN-suffix match
+     * used only when strict fails for that ancestor. Ambiguity is
+     * surfaced the same way {@link #resolveTarget(String, String, Integer, java.util.List)}
+     * does: if two declarations on the same ancestor both match, throw.
+     *
+     * <p>Bounded by the size of the type hierarchy plus a visited-set
+     * guard against cycles (a misconfigured index could create them). In
+     * practice type hierarchies are shallow (1–5 levels) and diamond-free
+     * for project source, so the walk is a few iterations.
+     */
+    private MethodKey resolveTargetViaAncestors(String startClass, String methodName,
+                                                 Integer arity, List<String> paramTypes)
+            throws AmbiguousMethodException {
+        java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        queue.addLast(startClass);
+        visited.add(startClass);
+        while (!queue.isEmpty()) {
+            String cls = queue.removeFirst();
+            // Strict match first (cheap).
+            MethodKey strict = null;
+            for (MethodKey m : declarations.keySet()) {
+                if (!m.declaringClass.equals(cls) || !m.methodName.equals(methodName)) continue;
+                if (arity != null && m.arity != arity.intValue()) continue;
+                if (paramTypes != null && !paramTypes.equals(m.parameterTypes)) continue;
+                if (strict != null) {
+                    throw new AmbiguousMethodException(startClass, methodName, arity, paramTypes);
+                }
+                strict = m;
+            }
+            if (strict != null) return strict;
+            // FQN-suffix match for this ancestor.
+            if (paramTypes != null) {
+                MethodKey suffix = null;
+                for (MethodKey m : declarations.keySet()) {
+                    if (!m.declaringClass.equals(cls) || !m.methodName.equals(methodName)) continue;
+                    if (arity != null && m.arity != arity.intValue()) continue;
+                    if (m.parameterTypes.size() != paramTypes.size()) continue;
+                    if (!paramTypesMatchBySuffix(paramTypes, m.parameterTypes)) continue;
+                    if (suffix != null) {
+                        throw new AmbiguousMethodException(startClass, methodName, arity, paramTypes);
+                    }
+                    suffix = m;
+                }
+                if (suffix != null) return suffix;
+            }
+            // Walk one level up.
+            Set<String> parents = typeHierarchy.get(cls);
+            if (parents != null) {
+                for (String p : parents) {
+                    if (visited.add(p)) queue.addLast(p);
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -440,6 +580,44 @@ public final class ProjectIndex {
                 if (k.parameterTypes.size() != paramTypes.size()) continue;
                 if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
                 out.add(k);
+            }
+        }
+        // Ancestor-walk pass (issue #3 sub-interface scenario): the
+        // user's className is a sub-interface (e.g. ISub) that
+        // inherits the method from a supertype (e.g. IBase), so no
+        // call edge was ever recorded under ISub. JDT binds the call
+        // to IBase#m and the calls map stores it under IBase#m. Walk
+        // the type hierarchy upward from `className` and gather every
+        // matching key. Each ancestor can contribute multiple keys
+        // (different overloads / parameterizations) — union them all.
+        if (out.isEmpty()) {
+            java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+            java.util.Set<String> visited = new java.util.HashSet<>();
+            queue.addLast(className);
+            visited.add(className);
+            while (!queue.isEmpty()) {
+                String cls = queue.removeFirst();
+                for (MethodKey k : calls.keySet()) {
+                    if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
+                    if (arity != null && k.arity != arity.intValue()) continue;
+                    if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
+                    out.add(k);
+                }
+                if (out.isEmpty() && paramTypes != null) {
+                    for (MethodKey k : calls.keySet()) {
+                        if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
+                        if (arity != null && k.arity != arity.intValue()) continue;
+                        if (k.parameterTypes.size() != paramTypes.size()) continue;
+                        if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
+                        out.add(k);
+                    }
+                }
+                Set<String> parents = typeHierarchy.get(cls);
+                if (parents != null) {
+                    for (String p : parents) {
+                        if (visited.add(p)) queue.addLast(p);
+                    }
+                }
             }
         }
         return out;

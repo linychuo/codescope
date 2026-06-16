@@ -202,6 +202,17 @@ public final class JdtIndexer {
             String fqn = fqnOfType(nameOf(node));
             typeStack.push(fqn);
             recordTypeSymbol(node, fqn, node.isInterface() ? "interface" : "class");
+            // Record type-hierarchy edges (child FQN → each direct
+            // supertype). Used by ProjectIndex.resolveTarget /
+            // findInvokedKeys to fall back to inherited methods when
+            // the user queries a class or interface that does not
+            // declare the target method itself (issue #3:
+            // sub-interface inheritance). binding.isFromSource()
+            // gates library types — those have no FQN that matches
+            // project declarations and would just bloat the index
+            // with no payoff (resolveTarget only consults
+            // declarations and calls, both project-only).
+            recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
             return true;
         }
 
@@ -215,6 +226,7 @@ public final class JdtIndexer {
             String fqn = fqnOfType(nameOf(node));
             typeStack.push(fqn);
             recordTypeSymbol(node, fqn, "enum");
+            recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
             // Enum constants are NOT FieldDeclaration nodes in JDT — they
             // have their own EnumConstantDeclaration. Record each as a
             // "field" so find_symbols can find them by name.
@@ -241,6 +253,7 @@ public final class JdtIndexer {
             String fqn = fqnOfType(nameOf(node));
             typeStack.push(fqn);
             recordTypeSymbol(node, fqn, "record");
+            recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
             // Record components (e.g. `int x, int y` in `record Point(int x, int y)`)
             // are NOT FieldDeclaration nodes — JDT models them as the
             // canonical constructor's parameters. Record each as a "field"
@@ -270,6 +283,7 @@ public final class JdtIndexer {
             String fqn = fqnOfType(nameOf(node));
             typeStack.push(fqn);
             recordTypeSymbol(node, fqn, "annotation");
+            recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
             return true;
         }
 
@@ -579,6 +593,50 @@ public final class JdtIndexer {
          * would otherwise pollute the index with non-user-facing
          * entries.
          */
+        private void recordTypeHierarchyFromBinding(String childFqn, ITypeBinding binding) {
+            if (binding == null || childFqn == null || childFqn.isEmpty()) return;
+            // Only project types contribute to the hierarchy — library
+            // types' supertypes are never project declarations, so
+            // storing them would just create dead edges. Same gate
+            // recordMethodHierarchy uses transitively.
+            if (!binding.isFromSource()) return;
+            // Strip type arguments from both the child FQN and the
+            // supertype FQNs so they match the non-generic FQNs used
+            // by declarations (which are always type-erased — see
+            // methodKeyOf's use of getMethodDeclaration()).
+            // Otherwise a generic supertype like IBase<TicketDTO>
+            // would be written under a different key from the IBase
+            // declaration, breaking resolveTargetViaAncestors'
+            // upward walk.
+            String childKey = eraseTypeArgs(fqnFromBinding(binding));
+            if (childKey == null || childKey.isEmpty()) return;
+            ITypeBinding superclass = binding.getSuperclass();
+            if (superclass != null && superclass.isFromSource()) {
+                String p = eraseTypeArgs(fqnFromBinding(superclass));
+                if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
+            }
+            for (ITypeBinding iface : binding.getInterfaces()) {
+                if (iface == null || !iface.isFromSource()) continue;
+                String p = eraseTypeArgs(fqnFromBinding(iface));
+                if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
+            }
+        }
+
+        /**
+         * Strips any type-argument suffix from a type FQN
+         * ({@code com.example.IBase<com.example.TicketDTO>} →
+         * {@code com.example.IBase}). Declarations are indexed under
+         * the erased form, so the type hierarchy must use the same
+         * form for the upward walk in
+         * {@link ProjectIndex#resolveTargetViaAncestors} to land on
+         * a real declaration entry.
+         */
+        private static String eraseTypeArgs(String fqn) {
+            if (fqn == null) return null;
+            int lt = fqn.indexOf('<');
+            return lt < 0 ? fqn : fqn.substring(0, lt);
+        }
+
         private void recordMethodHierarchy(IMethodBinding b) {
             if (b == null) return;
             ITypeBinding dc = b.getDeclaringClass();
