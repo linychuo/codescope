@@ -298,6 +298,30 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void interfaceSeedExpandsToImplementorCallers() throws Exception {
+        // The reverse-direction companion to crossesInterfaceBoundaryToFindDomainCaller.
+        // Issue #3 also covers: target an *interface* method directly
+        // (IfaceRepository#findById). The BFS should expand via
+        // relatedMethods (self + IfaceRepositoryImpl#findById) and pick
+        // up the call site recorded under the interface key —
+        // IfaceDomainImpl#findById calls through the interface type.
+        MethodKey iface = mustResolve(index, "com.example.IfaceRepository", "findById");
+        assertNotNull(iface);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, iface);
+        assertTrue(r.found(), "interface seed should resolve to a caller chain");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers =
+                (List<Map<String, Object>>) r.root().toJson().get("callers");
+        assertNotNull(callers);
+        assertEquals(1, callers.size(),
+                "IfaceDomainImpl#findById is the only caller of IfaceRepository#findById");
+        assertEquals("com.example.IfaceDomainImpl", callers.get(0).get("class"));
+        assertEquals("findById", callers.get(0).get("method"));
+    }
+
+    @Test
     void constructorsChainThroughSuper() {
         // `super()` in CtorChild#CtorChild is recorded as a real call edge
         // to CtorParent#CtorParent (via SuperConstructorInvocation), not a
