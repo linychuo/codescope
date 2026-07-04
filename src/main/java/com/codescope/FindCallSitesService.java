@@ -43,7 +43,7 @@ public final class FindCallSitesService {
                                     Integer arity, List<String> paramTypes,
                                     Path projectRoot, boolean refresh) throws FindCallSitesException {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, FindCallSitesException::new);
+                indexCache, projectRoot, refresh, false, FindCallSitesException::new);
 
         // Same library-target resolution as trace_callers: try
         // resolveTarget against project declarations, fall back to

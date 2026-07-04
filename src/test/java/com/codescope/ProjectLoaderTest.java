@@ -39,7 +39,7 @@ class ProjectLoaderTest {
         writeJava(root.resolve("src/main/java/com/x/A.java"), "com.x", "A");
         writeJava(root.resolve("src/main/java/com/x/B.java"), "com.x", "B");
 
-        List<Path> sources = ProjectLoader.collectSources(root);
+        List<Path> sources = ProjectLoader.collectSources(root, false);
         // both files collected
         assertEquals(2, sources.size(), "expected both src/main/java files, got " + sources);
     }
@@ -54,7 +54,7 @@ class ProjectLoaderTest {
         writeJava(root.resolve("target/generated-sources/main/java/com/x/EntityImpl.java"),
                 "com.x", "EntityImpl");
 
-        List<Path> sources = ProjectLoader.collectSources(root);
+        List<Path> sources = ProjectLoader.collectSources(root, false);
         assertTrue(sources.stream().anyMatch(p -> p.toString().endsWith("EntityImpl.java")),
                 "expected EntityImpl.java (target/generated-sources) to be indexed, got: "
                         + sources);
@@ -70,7 +70,7 @@ class ProjectLoaderTest {
         writeJava(root.resolve("target/generated-sources/annotations/main/java/com/x/EntityMapperImpl.java"),
                 "com.x", "EntityMapperImpl");
 
-        List<Path> sources = ProjectLoader.collectSources(root);
+        List<Path> sources = ProjectLoader.collectSources(root, false);
         assertTrue(sources.stream().anyMatch(p -> p.toString().endsWith("EntityMapperImpl.java")),
                 "expected EntityMapperImpl.java (target/generated-sources/annotations/main/java) "
                         + "to be indexed, got: " + sources);
@@ -86,7 +86,7 @@ class ProjectLoaderTest {
         writeJava(root.resolve("target/classes/com/x/A.java"), "com.x", "AClassShadow");
         writeJava(root.resolve("build/classes/com/x/A.java"), "com.x", "ABuildShadow");
 
-        List<Path> sources = ProjectLoader.collectSources(root);
+        List<Path> sources = ProjectLoader.collectSources(root, false);
         for (Path p : sources) {
             String s = p.toString();
             assertFalse(s.contains("/target/classes/"),
@@ -111,7 +111,7 @@ class ProjectLoaderTest {
         writeJava(root.resolve("app/src/main/java/com/x/app/Entry.java"),
                 "com.x.app", "Entry");
 
-        List<Path> sources = ProjectLoader.collectSources(root);
+        List<Path> sources = ProjectLoader.collectSources(root, false);
         assertEquals(2, sources.size(), "expected both modules' sources, got " + sources);
     }
 

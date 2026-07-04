@@ -23,7 +23,7 @@ class MultiModuleTest {
     @Test
     void indexerResolvesBindingsAcrossModules() throws IOException {
         Path root = Path.of("src/test/resources/multi-module-fixture");
-        ProjectLoader.LoadResult load = new ProjectLoader().load(root);
+        ProjectLoader.LoadResult load = new ProjectLoader().load(root, false);
         // sources from both modules
         if (load.sources().size() < 2) {
             throw new AssertionError("expected sources from both modules; got "
@@ -61,7 +61,7 @@ class MultiModuleTest {
         // cross-module call edge (Helper.coreMethod ← Entry.run) is
         // missing from the chain.
         Path subModule = Path.of("src/test/resources/multi-module-fixture/app");
-        ProjectLoader.LoadResult load = new ProjectLoader().load(subModule);
+        ProjectLoader.LoadResult load = new ProjectLoader().load(subModule, false);
         // Sources from BOTH modules must be reachable
         boolean hasAppSource = load.sources().stream()
                 .anyMatch(p -> p.toString().contains("/app/src/main/java"));

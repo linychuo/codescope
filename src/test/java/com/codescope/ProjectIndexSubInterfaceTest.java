@@ -33,7 +33,7 @@ class ProjectIndexSubInterfaceTest {
     @BeforeEach
     void setUp() throws IOException {
         Path fixture = Path.of("src/test/resources/fixture-project");
-        ProjectLoader.LoadResult load = new ProjectLoader().load(fixture);
+        ProjectLoader.LoadResult load = new ProjectLoader().load(fixture, false);
         index = new JdtIndexer().build(load.sources(), load.classpath(), load.sourcepath(), fixture);
     }
 

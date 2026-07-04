@@ -41,7 +41,7 @@ public final class TraceCallersService {
                                    Integer arity, List<String> paramTypes,
                                    Path projectRoot, boolean refresh) throws TraceCallersException {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, TraceCallersException::new);
+                indexCache, projectRoot, refresh, false, TraceCallersException::new);
 
         // Resolve against project declarations. This is the right path for
         // project methods: it gives a precise MethodKey (with parameter

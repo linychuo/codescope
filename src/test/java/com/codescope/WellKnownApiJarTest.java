@@ -53,7 +53,7 @@ class WellKnownApiJarTest {
                         + " public Controller(DomainService svc) { this.svc = svc; }"
                         + " public void run() { svc.process(); } }");
 
-        ProjectLoader.LoadResult load = new ProjectLoader().load(root);
+        ProjectLoader.LoadResult load = new ProjectLoader().load(root, false);
         // The bundled fallback must have added javax.inject to the classpath.
         boolean hasInject = load.classpath().stream()
                 .anyMatch(p -> p.endsWith("javax.inject-1.jar"));

@@ -37,11 +37,21 @@ public final class ProjectIndexCache {
     /** Max number of projects kept in the LRU at once. */
     static final int MAX_CACHED_PROJECTS = 8;
 
+    /**
+     * Cache key. A project is indexed separately for each
+     * {@code (projectRoot, includeTests)} pair so that a session which
+     * first indexes without tests and then asks for the test-inclusive
+     * view doesn't get the test-less entry back, and vice versa. The LRU
+     * cap on entries still applies, so flipping back and forth between
+     * many such pairs in a single session will eventually evict.
+     */
+    record IndexCacheKey(Path projectRoot, boolean includeTests) {}
+
     private final JdtIndexer indexer;
-    private final Map<Path, ProjectIndex> entries = Collections.synchronizedMap(
+    private final Map<IndexCacheKey, ProjectIndex> entries = Collections.synchronizedMap(
             new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<Path, ProjectIndex> e) {
+                protected boolean removeEldestEntry(Map.Entry<IndexCacheKey, ProjectIndex> e) {
                     return size() > MAX_CACHED_PROJECTS;
                 }
             });
@@ -65,19 +75,20 @@ public final class ProjectIndexCache {
      * call (e.g. after the user fixes the project) will retry rather
      * than serve a poisoned entry.
      */
-    public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh) {
+    public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh, boolean includeTests) {
+        IndexCacheKey key = new IndexCacheKey(projectRoot, includeTests);
         if (refresh) {
-            entries.remove(projectRoot);
+            entries.remove(key);
         }
-        return entries.computeIfAbsent(projectRoot, this::buildIndex);
+        return entries.computeIfAbsent(key, this::buildIndex);
     }
 
-    private ProjectIndex buildIndex(Path projectRoot) {
+    private ProjectIndex buildIndex(IndexCacheKey key) {
         try {
-            ProjectLoader.LoadResult load = new ProjectLoader().load(projectRoot);
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), projectRoot);
+            ProjectLoader.LoadResult load = new ProjectLoader().load(key.projectRoot(), key.includeTests());
+            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), key.projectRoot());
         } catch (IOException e) {
-            throw new UncheckedIOException("Failed to load project at " + projectRoot, e);
+            throw new UncheckedIOException("Failed to load project at " + key.projectRoot(), e);
         }
     }
 
@@ -119,6 +130,7 @@ public final class ProjectIndexCache {
      */
     public static <E extends Exception> ProjectIndex validateAndLoad(
             ProjectIndexCache cache, Path projectRoot, boolean refresh,
+            boolean includeTests,
             Function<String, E> exceptionFactory) throws E {
         if (!Files.isDirectory(projectRoot)) {
             throw exceptionFactory.apply("Project root is not a directory: " + projectRoot);
@@ -128,7 +140,7 @@ public final class ProjectIndexCache {
                     + " — only Maven projects are supported in this version.");
         }
         try {
-            return cache.loadOrRebuild(projectRoot, refresh);
+            return cache.loadOrRebuild(projectRoot, refresh, includeTests);
         } catch (UncheckedIOException e) {
             throw exceptionFactory.apply(e.getCause().getMessage());
         }

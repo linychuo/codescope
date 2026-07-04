@@ -64,7 +64,7 @@ public final class FindSymbolsService {
         int effectiveLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
 
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, FindSymbolsException::new);
+                indexCache, projectRoot, refresh, false, FindSymbolsException::new);
 
         ProjectIndex.SymbolSearchResult result = index.searchSymbols(query, kind, effectiveLimit);
         List<ProjectIndex.Symbol> matches = result.matches();
