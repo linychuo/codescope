@@ -924,6 +924,68 @@ class EdgeCaseTest {
                 "enum constant arg calls should attribute to <clinit>/0, got: " + callers);
     }
 
+    @Test
+    void mixedMainAndInitCallsFoundTogether(@TempDir Path tmp) throws IOException {
+        // F6 mixed integration: one class with all four init contexts in one
+        // body — static field init, instance field init, static block, instance
+        // block — plus an explicit method as the regular (non-synthetic)
+        // baseline. Verifies that <clinit> and <class-init> are distinct keys
+        // and that calls in each context attribute to the right synthetic.
+        // Enum constant args (the fifth F6 context) are exercised separately
+        // in enumConstantArgCallersFound — keeping Mixed a class, not an enum,
+        // per the brief.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Mixed.java"),
+                "package com.example;\n"
+                + "public class Mixed {\n"
+                + "    static int s = staticHelper();\n"          // → <clinit>
+                + "    int i = instanceHelper();\n"               // → <class-init>
+                + "    static { staticHelper(); }\n"               // → <clinit>
+                + "    { instanceHelper(); }\n"                    // → <class-init>
+                + "    public void explicit() { explicitHelper(); }\n"  // → explicit (regular method)
+                + "    private static int staticHelper() { return 1; }\n"
+                + "    private int instanceHelper() { return 2; }\n"
+                + "    private void explicitHelper() {}\n"
+                + "}\n");
+        // sourcepath must be the source root (.../src/main/java), not the
+        // package dir. srcDir is .../src/main/java/com/example, so two
+        // getParent() hops land on the source root.
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Mixed.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey staticHelper = new MethodKey("com.example.Mixed", "staticHelper", 0, List.of());
+        MethodKey instanceHelper = new MethodKey("com.example.Mixed", "instanceHelper", 0, List.of());
+        MethodKey explicitHelper = new MethodKey("com.example.Mixed", "explicitHelper", 0, List.of());
+        MethodKey clinit = new MethodKey("com.example.Mixed", "<clinit>", 0, List.of());
+        MethodKey classInit = new MethodKey("com.example.Mixed", "<class-init>", 0, List.of());
+        MethodKey explicit = new MethodKey("com.example.Mixed", "explicit", 0, List.of());
+
+        // callersOf returns a List (defensive copy of an underlying
+        // LinkedHashSet, so the same caller MethodKey from multiple call
+        // sites — e.g. staticHelper called twice from <clinit> via field
+        // init + static block — is deduped to one entry). Wrap in HashSet
+        // for Set-vs-Set comparison; assertEquals on a List vs a Set always
+        // fails because the collection types differ even with equal elements.
+        List<MethodKey> staticHelperCallers = index.callersOf(staticHelper);
+        List<MethodKey> instanceHelperCallers = index.callersOf(instanceHelper);
+        List<MethodKey> explicitHelperCallers = index.callersOf(explicitHelper);
+
+        assertEquals(new HashSet<>(List.of(clinit)), new HashSet<>(staticHelperCallers),
+                "staticHelper should only be called by <clinit>, got: " + staticHelperCallers);
+        assertEquals(new HashSet<>(List.of(classInit)), new HashSet<>(instanceHelperCallers),
+                "instanceHelper should only be called by <class-init>, got: " + instanceHelperCallers);
+        assertEquals(new HashSet<>(List.of(explicit)), new HashSet<>(explicitHelperCallers),
+                "explicitHelper should only be called by explicit, got: " + explicitHelperCallers);
+
+        // <clinit> and <class-init> must be distinct keys — a collision would
+        // silently merge static-init and instance-init call graphs.
+        assertNotEquals(clinit, classInit,
+                "<clinit> and <class-init> must be distinct MethodKeys");
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
