@@ -590,7 +590,7 @@ public final class JdtIndexer {
                 index.putDeclaration(key, new ProjectIndex.SourceLoc(file, line));
                 index.recordSymbol(new ProjectIndex.Symbol(
                         name, "synthetic",
-                        cls + "." + name, cls, file, line, null));
+                        cls + "." + name + "/0", cls, file, line, null));
             }
             methodStack.push(new MethodContext(key));
             return true;

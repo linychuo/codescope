@@ -640,6 +640,80 @@ class EdgeCaseTest {
     }
 
     @Test
+    void privateMethodCallersFoundThroughInterfaceHierarchyIntegration(@TempDir Path tmp) throws IOException {
+        // Integration test with real JdtIndexer: private method `helper` in
+        // `ServiceImpl` is called by public `doB`/`doC` which implement
+        // interface `Service`. External `Client` holds a `Service` ref and
+        // calls through the interface. traceCallers(helper) must find Client.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Service.java"),
+                "package com.example;\n"
+                + "public interface Service {\n"
+                + "    void doB();\n"
+                + "    void doC();\n"
+                + "}\n");
+        Files.writeString(srcDir.resolve("ServiceImpl.java"),
+                "package com.example;\n"
+                + "public class ServiceImpl implements Service {\n"
+                + "    @Override public void doB() { helper(); }\n"
+                + "    @Override public void doC() { helper(); }\n"
+                + "    private void helper() {}\n"
+                + "}\n");
+        Files.writeString(srcDir.resolve("Client.java"),
+                "package com.example;\n"
+                + "import javax.inject.Inject;\n"
+                + "public class Client {\n"
+                + "    @Inject\n"
+                + "    private Service service;\n"
+                + "    public void run() {\n"
+                + "        service.doB();\n"
+                + "        service.doC();\n"
+                + "    }\n"
+                + "}\n");
+
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Service.java"),
+                        srcDir.resolve("ServiceImpl.java"),
+                        srcDir.resolve("Client.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),  // source root = .../main/java (package com.example)
+                tmp);
+
+        // Verify hierarchy edges exist
+        MethodKey ifaceDoB = new MethodKey("com.example.Service", "doB", 0, List.of());
+        MethodKey implDoB  = new MethodKey("com.example.ServiceImpl", "doB", 0, List.of());
+        Set<MethodKey> relatedB = index.relatedMethods(implDoB);
+        assertTrue(relatedB.contains(ifaceDoB),
+                "implDoB should relate to ifaceDoB, got: " + relatedB);
+
+        // Verify Client -> ifaceDoB call edge exists
+        List<MethodKey> callersOfIfaceB = index.callersOf(ifaceDoB);
+        assertFalse(callersOfIfaceB.isEmpty(),
+                "expected Client calling ifaceDoB, got none; allCalls=" + index.allCalls());
+
+        // Now trace callers of the private helper
+        MethodKey helper = new MethodKey("com.example.ServiceImpl", "helper", 0, List.of());
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, helper);
+
+        assertTrue(r.found());
+        CallNode root = r.root();
+        // Direct callers: implDoB, implDoC
+        assertEquals(2, root.callers.size());
+
+        // One of the direct callers should transitively find Client
+        boolean foundClient = false;
+        for (CallNode direct : root.callers) {
+            for (CallNode transitive : direct.callers) {
+                if (transitive.signature.equals("com.example.Client#run/0")) {
+                    foundClient = true;
+                }
+            }
+        }
+        assertTrue(foundClient,
+                "Client calling through interface should be found as transitive caller of private helper");
+    }
+
+    @Test
     void staticBlockCallersFound(@TempDir Path tmp) throws IOException {
         // F6: a `static {}` block calls foo(). Pre-Task-2, recordCall drops
         // the edge because methodStack is empty when JDT visits the
@@ -707,5 +781,38 @@ class EdgeCaseTest {
             d++;
         }
         return d;
+    }
+
+    @Test
+    void syntheticMethodsInFindSymbols(@TempDir Path tmp) throws IOException {
+        // A class with a static block should produce a <clinit>/0 synthetic
+        // symbol findable via find_symbols kind=synthetic, with fqn shape
+        // "pkg.Cls.<clinit>/0" (matching the spec).
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    static { System.out.println(\"init\"); }\n"
+                + "}\n");
+
+        // Build the index directly (bypasses the service cache for a unit-style test)
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Target.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        // find_symbols searches via ProjectIndex.searchSymbols — verify the synthetic is there.
+        // searchSymbols returns a SymbolSearchResult record (matches + totalCount).
+        ProjectIndex.SymbolSearchResult result = index.searchSymbols(
+                "clinit", "synthetic", 100);
+        java.util.List<ProjectIndex.Symbol> matches = result.matches();
+        assertFalse(matches.isEmpty(),
+                "find_symbols kind=synthetic should return <clinit>, got: " + matches);
+        ProjectIndex.Symbol synth = matches.get(0);
+        assertEquals("com.example.Target.<clinit>/0", synth.fqn(),
+                "synthetic fqn should include /0 arity suffix");
+        assertEquals("synthetic", synth.kind());
+        assertEquals("<clinit>", synth.name());
     }
 }
