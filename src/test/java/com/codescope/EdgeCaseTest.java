@@ -714,6 +714,66 @@ class EdgeCaseTest {
     }
 
     @Test
+    void privateMethodCallersFoundThroughInterfaceHierarchy() {
+        // Scenario: private method `helper` in `ServiceImpl` is called by
+        // public methods `doB` and `doC` in the same class. Both `doB` and
+        // `doC` implement interface `Service`. External class `Client`
+        // holds a `Service` reference and calls `doB`/`doC` through it.
+        // traceCallers(ServiceImpl#helper/0) must find Client.
+
+        ProjectIndex index = new ProjectIndex();
+
+        // Interface Service
+        MethodKey ifaceDoB = new MethodKey("com.example.Service", "doB", 0);
+        MethodKey ifaceDoC = new MethodKey("com.example.Service", "doC", 0);
+        index.putDeclaration(ifaceDoB, new ProjectIndex.SourceLoc("Service.java", 3));
+        index.putDeclaration(ifaceDoC, new ProjectIndex.SourceLoc("Service.java", 4));
+
+        // ServiceImpl implements Service
+        MethodKey implDoB = new MethodKey("com.example.ServiceImpl", "doB", 0);
+        MethodKey implDoC = new MethodKey("com.example.ServiceImpl", "doC", 0);
+        MethodKey helper  = new MethodKey("com.example.ServiceImpl", "helper", 0);
+        index.putDeclaration(implDoB, new ProjectIndex.SourceLoc("ServiceImpl.java", 10));
+        index.putDeclaration(implDoC, new ProjectIndex.SourceLoc("ServiceImpl.java", 15));
+        index.putDeclaration(helper,  new ProjectIndex.SourceLoc("ServiceImpl.java", 20));
+
+        // ServiceImpl.doB overrides Service.doB
+        index.recordHierarchy(implDoB, ifaceDoB);
+        // ServiceImpl.doC overrides Service.doC
+        index.recordHierarchy(implDoC, ifaceDoC);
+
+        // ServiceImpl.doB and .doC both call the private helper
+        index.recordInvocation(implDoB, helper);
+        index.recordInvocation(implDoC, helper);
+
+        // Client holds a Service reference and calls through the interface
+        MethodKey clientMethod = new MethodKey("com.example.Client", "run", 0);
+        index.putDeclaration(clientMethod, new ProjectIndex.SourceLoc("Client.java", 5));
+        // Client calls Service#doB and Service#doC (through the interface-typed ref)
+        index.recordInvocation(clientMethod, ifaceDoB);
+        index.recordInvocation(clientMethod, ifaceDoC);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, helper);
+
+        assertTrue(r.found());
+        CallNode root = r.root();
+        // Direct callers: implDoB and implDoC
+        assertEquals(2, root.callers.size());
+
+        // One of them (implDoB) should transitively find Client
+        boolean foundClient = false;
+        for (CallNode direct : root.callers) {
+            for (CallNode transitive : direct.callers) {
+                if (transitive.signature.equals("com.example.Client#run/0")) {
+                    foundClient = true;
+                }
+            }
+        }
+        assertTrue(foundClient,
+                "Client calling through interface should be found as transitive caller of private helper");
+    }
+
+    @Test
     void staticBlockCallersFound(@TempDir Path tmp) throws IOException {
         // F6: a `static {}` block calls foo(). Pre-Task-2, recordCall drops
         // the edge because methodStack is empty when JDT visits the
