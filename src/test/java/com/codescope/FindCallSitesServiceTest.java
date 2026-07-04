@@ -30,7 +30,7 @@ class FindCallSitesServiceTest {
         // position.
         FindCallSitesService svc = new FindCallSitesService();
         String json = svc.findCallSitesJson("com.example.Target", "leaf",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
 
         JsonNode target = tree.path("target");
@@ -78,7 +78,7 @@ class FindCallSitesServiceTest {
             FindCallSitesService svc = new FindCallSitesService();
             // refresh=true so the indexer sees the new file.
             String json = svc.findCallSitesJson("com.example.Target", "leaf",
-                    null, null, tmp, true);
+                    null, null, tmp, true, false);
             JsonNode tree = new ObjectMapper().readTree(json);
             JsonNode sites = tree.path("call_sites");
             assertEquals(4, sites.size(),
@@ -117,7 +117,7 @@ class FindCallSitesServiceTest {
         // binding, and the service unions them).
         FindCallSitesService svc = new FindCallSitesService();
         String json = svc.findCallSitesJson("java.io.PrintStream", "println",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
         JsonNode sites = tree.path("call_sites");
         assertTrue(sites.isArray() && sites.size() > 0,
@@ -147,7 +147,7 @@ class FindCallSitesServiceTest {
         // diagnostic reason.
         FindCallSitesService svc = new FindCallSitesService();
         String json = svc.findCallSitesJson("com.example.Mid", "unrelated",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
         assertEquals("ok", tree.path("status").asText());
         JsonNode sites = tree.path("call_sites");
@@ -166,7 +166,7 @@ class FindCallSitesServiceTest {
         // shape as trace_callers' unknown target.
         FindCallSitesService svc = new FindCallSitesService();
         String json = svc.findCallSitesJson("com.example.NoSuch", "missing",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
         assertEquals("ok", tree.path("status").asText());
         assertEquals(0, tree.path("call_sites").size());
@@ -185,7 +185,7 @@ class FindCallSitesServiceTest {
         FindCallSitesService.FindCallSitesException ex = assertThrows(
                 FindCallSitesService.FindCallSitesException.class,
                 () -> svc.findCallSitesJson("com.example.Target", "process",
-                        null, null, FIXTURE, false));
+                        null, null, FIXTURE, false, false));
         String msg = ex.getMessage();
         assertTrue(msg.contains("process"), "should name the method: " + msg);
         assertTrue(msg.contains("overloads") || msg.contains("paramTypes"),
@@ -212,7 +212,7 @@ class FindCallSitesServiceTest {
         // 1 call site from IfaceDomainImpl.
         String json = svc.findCallSitesJson(
                 "com.example.IfaceRepositoryImpl", "findById",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
 
         JsonNode sites = tree.path("call_sites");
@@ -251,7 +251,7 @@ class FindCallSitesServiceTest {
 
             // 1) Initial: Target#leaf has 1 call site (from Mid).
             String first = svc.findCallSitesJson("com.example.Target", "leaf",
-                    null, null, tmp, false);
+                    null, null, tmp, false, false);
             JsonNode t1 = new ObjectMapper().readTree(first);
             assertEquals(1, t1.path("call_sites").size(),
                     "expected 1 call site initially, got: " + t1);
@@ -271,14 +271,14 @@ class FindCallSitesServiceTest {
             // 3) Without refresh, the cached index does NOT see the new
             //    caller. Stale result.
             String stale = svc.findCallSitesJson("com.example.Target", "leaf",
-                    null, null, tmp, false);
+                    null, null, tmp, false, false);
             JsonNode t2 = new ObjectMapper().readTree(stale);
             assertEquals(1, t2.path("call_sites").size(),
                     "cached result must NOT pick up the new file, got: " + t2);
 
             // 4) With refresh=true, the new caller shows up.
             String fresh = svc.findCallSitesJson("com.example.Target", "leaf",
-                    null, null, tmp, true);
+                    null, null, tmp, true, false);
             JsonNode t3 = new ObjectMapper().readTree(fresh);
             assertEquals(3, t3.path("call_sites").size(),
                     "refresh should pick up the 2 new sites, got: " + t3);

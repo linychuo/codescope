@@ -1099,4 +1099,80 @@ class EdgeCaseTest {
         assertEquals("testGo", caller.path("method").asText(),
                 "caller method should be testGo, got: " + caller);
     }
+
+    @Test
+    void includeTestsTrueFindsTestCallSites(@TempDir Path tmp) throws Exception {
+        // Task 8: find_call_sites should accept an include_tests flag that,
+        // when true, indexes src/test/java in addition to src/main/java.
+        // Default (false) excludes test sources — test code does NOT show up
+        // as call sites. When true, test methods appear as caller entries.
+        Path mainDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Path testDir = Files.createDirectories(tmp.resolve("src/test/java/com/example"));
+        Files.writeString(mainDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    public void go() {}\n"
+                + "}\n");
+        Files.writeString(testDir.resolve("TargetTest.java"),
+                "package com.example;\n"
+                + "public class TargetTest {\n"
+                + "    public void testGo() {\n"
+                + "        new Target().go();\n"
+                + "    }\n"
+                + "}\n");
+        // Service layer requires a Maven project root (pom.xml present).
+        Files.writeString(tmp.resolve("pom.xml"),
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>include-tests-fixture</artifactId>
+                    <version>1.0.0</version>
+                    <packaging>jar</packaging>
+                    <properties>
+                        <maven.compiler.source>17</maven.compiler.source>
+                        <maven.compiler.target>17</maven.compiler.target>
+                    </properties>
+                </project>
+                """);
+
+        FindCallSitesService svc = new FindCallSitesService();
+
+        // With include_tests=false (default), test call sites are NOT found.
+        // The call_sites array should be empty and the test class FQN should
+        // never appear anywhere in the envelope.
+        String jsonMain = svc.findCallSitesJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, false);
+        JsonNode treeMain = new ObjectMapper().readTree(jsonMain);
+        assertEquals("ok", treeMain.path("status").asText(),
+                "default call should succeed, got: " + jsonMain);
+        JsonNode mainSites = treeMain.path("call_sites");
+        assertTrue(mainSites.isArray() && mainSites.size() == 0,
+                "test code should NOT appear with include_tests=false, got: " + jsonMain);
+        assertFalse(jsonMain.contains("com.example.TargetTest"),
+                "TargetTest must not appear in the envelope with include_tests=false, got: " + jsonMain);
+
+        // With include_tests=true, test call sites ARE found. The single
+        // call site is TargetTest#testGo calling Target#go at line 4 of
+        // TargetTest.java.
+        String jsonTest = svc.findCallSitesJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, true);
+        JsonNode treeTest = new ObjectMapper().readTree(jsonTest);
+        assertEquals("ok", treeTest.path("status").asText(),
+                "include_tests=true call should succeed, got: " + jsonTest);
+        JsonNode testSites = treeTest.path("call_sites");
+        assertTrue(testSites.isArray() && testSites.size() == 1,
+                "expected exactly 1 call site (TargetTest#testGo) with include_tests=true, got: " + jsonTest);
+        JsonNode site = testSites.get(0);
+        assertEquals("com.example.TargetTest#testGo/0", site.path("caller").asText(),
+                "caller should be the test method, got: " + site);
+        assertEquals("src/test/java/com/example/TargetTest.java",
+                site.path("call_site").path("file").asText(),
+                "call_site.file should point at the test source, got: " + site);
+        assertEquals(4, site.path("call_site").path("line").asInt(),
+                "call_site.line should be the call expression line, got: " + site);
+    }
 }

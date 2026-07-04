@@ -35,15 +35,22 @@ public final class FindCallSitesService {
      * @param refresh if true, evict the cached index for {@code projectRoot}
      *                and rebuild it. Same contract as
      *                {@link TraceCallersService#traceCallersJson}.
+     * @param includeTests if true, index {@code src/test/java} in addition
+     *                to {@code src/main/java}. Default {@code false}:
+     *                test sources are excluded (test code does not
+     *                participate in the call-site index by default). When
+     *                {@code true}, test methods appear as callers in
+     *                find_call_sites results.
      * @return JSON envelope containing the flat call-site list, status,
      *         and message
      * @throws FindCallSitesException with a user-facing error message
      */
     public String findCallSitesJson(String className, String methodName,
                                     Integer arity, List<String> paramTypes,
-                                    Path projectRoot, boolean refresh) throws FindCallSitesException {
+                                    Path projectRoot, boolean refresh,
+                                    boolean includeTests) throws FindCallSitesException {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, false, FindCallSitesException::new);
+                indexCache, projectRoot, refresh, includeTests, FindCallSitesException::new);
 
         // Same library-target resolution as trace_callers: try
         // resolveTarget against project declarations, fall back to
