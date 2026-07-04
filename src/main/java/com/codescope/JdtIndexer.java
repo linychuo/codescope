@@ -622,7 +622,32 @@ public final class JdtIndexer {
                         line,
                         null));
             }
-            return false;  // don't descend into the fragments (no nested methods/classes to find)
+            // Push a synthetic MethodContext so calls inside initializer
+            // expressions (e.g. `private Logger log = LoggerFactory.get();`)
+            // are attributed instead of dropped by recordCall's
+            // methodStack.isEmpty() early-return. Static fields → <clinit>,
+            // instance fields → <class-init>. The synthetic fqn carries the
+            // `/0` arity suffix to match the spec's attribution table
+            // (docs/superpowers/specs/2026-07-04-coverage-gaps-design.md:44)
+            // and the shape used by visit(Initializer) above. First-wins:
+            // if a class has multiple field initializers, the declaration
+            // points at the first one encountered (same rule as init blocks).
+            boolean isStatic = Modifier.isStatic(node.getModifiers());
+            String synthName = isStatic ? "<clinit>" : "<class-init>";
+            MethodKey synthKey = new MethodKey(callerClass, synthName, 0, List.of());
+            if (index.declarationOf(synthKey) == null) {
+                index.putDeclaration(synthKey, new ProjectIndex.SourceLoc(file, line));
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        synthName, "synthetic",
+                        callerClass + "." + synthName + "/0", callerClass, file, line, null));
+            }
+            methodStack.push(new MethodContext(synthKey));
+            return true;  // descend into fragments so initializer calls get visited
+        }
+
+        @Override
+        public void endVisit(FieldDeclaration node) {
+            methodStack.pop();
         }
 
         @Override

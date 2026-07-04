@@ -834,6 +834,60 @@ class EdgeCaseTest {
                 "instance block calls should attribute to <class-init>/0, got: " + callers);
     }
 
+    @Test
+    void staticFieldInitializerCallersFound(@TempDir Path tmp) throws IOException {
+        // F6: `static int x = compute();` — the field initializer calls
+        // compute(). Pre-Task-3, visit(FieldDeclaration) returned false, so
+        // JDT never descended into the fragments' initializer expressions
+        // and the call edge was silently dropped. Task 3 changes
+        // visit(FieldDeclaration) to return true and push a synthetic
+        // <clinit>/0 MethodContext so the call attributes correctly.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    static int x = compute();\n"
+                + "    private static int compute() { return 42; }\n"
+                + "}\n");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Target.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey compute = new MethodKey("com.example.Target", "compute", 0, List.of());
+        MethodKey clinit = new MethodKey("com.example.Target", "<clinit>", 0, List.of());
+        List<MethodKey> callers = index.callersOf(compute);
+        assertTrue(callers.contains(clinit),
+                "static field initializer calls should attribute to <clinit>/0, got: " + callers);
+    }
+
+    @Test
+    void instanceFieldInitializerCallersFound(@TempDir Path tmp) throws IOException {
+        // F6: instance field `int x = compute();` — same drop as the static
+        // case. Task 3 pushes a synthetic <class-init>/0 MethodContext for
+        // instance field initializers (NOT <init> — see the comment at
+        // visit(Initializer) for why <class-init> is the chosen name).
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    int x = compute();\n"
+                + "    private int compute() { return 42; }\n"
+                + "}\n");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Target.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey compute = new MethodKey("com.example.Target", "compute", 0, List.of());
+        MethodKey classInit = new MethodKey("com.example.Target", "<class-init>", 0, List.of());
+        List<MethodKey> callers = index.callersOf(compute);
+        assertTrue(callers.contains(classInit),
+                "instance field initializer calls should attribute to <class-init>/0, got: " + callers);
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
