@@ -16,6 +16,7 @@ import org.eclipse.jdt.core.dom.FieldDeclaration;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.ImplicitTypeDeclaration;
+import org.eclipse.jdt.core.dom.Initializer;
 import org.eclipse.jdt.core.dom.CreationReference;
 import org.eclipse.jdt.core.dom.ExpressionMethodReference;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
@@ -547,6 +548,56 @@ public final class JdtIndexer {
 
         @Override
         public void endVisit(MethodDeclaration node) {
+            methodStack.pop();
+        }
+
+        @Override
+        public boolean visit(Initializer node) {
+            // Static {} and instance {} blocks: JDT visits the calls inside
+            // but methodStack is empty here (we're not inside a
+            // MethodDeclaration), so recordCall would silently drop them
+            // (recordCall's `methodStack.isEmpty()` early-return).
+            // Push a synthetic MethodContext keyed by <clinit> (static) or
+            // <class-init> (instance) so calls inside the block attribute
+            // to that key instead.
+            //
+            // <clinit> mirrors the JVM-level identifier for static
+            // initializers (JLS §2.9). <class-init> is intentionally NOT
+            // <init>: <init> is the JVM identifier for constructors, but
+            // JDT uses the class simple name for MethodDeclaration
+            // constructors (see comment at visit(MethodDeclaration) above),
+            // so a synthetic key named <init> would not collide — however
+            // field initializers are inlined into EVERY constructor at
+            // runtime (no single static caller), so the design (F6 spec)
+            // uses <class-init> to keep instance-block attribution
+            // distinct from any explicit constructor attribution. Both
+            // names start with `<`, which no source method name can
+            // start with (Java identifiers may not contain `<`), so they
+            // cannot collide with user-facing methods.
+            String cls = currentClass();
+            boolean isStatic = Modifier.isStatic(node.getModifiers());
+            String name = isStatic ? "<clinit>" : "<class-init>";
+            MethodKey key = new MethodKey(cls, name, 0, List.of());
+            int line = cuLine(node);
+            // First-wins: if a class has multiple init blocks, the
+            // declaration points at the first one encountered. Subsequent
+            // pushes don't overwrite the recorded declaration — the index
+            // uses putDeclaration's "first writer wins" semantics so later
+            // blocks inherit the first block's source location. The
+            // symbol entry follows the same rule via recordSymbol's dedup
+            // by FQN (Container#name/arity).
+            if (index.declarationOf(key) == null) {
+                index.putDeclaration(key, new ProjectIndex.SourceLoc(file, line));
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        name, "synthetic",
+                        cls + "." + name, cls, file, line, null));
+            }
+            methodStack.push(new MethodContext(key));
+            return true;
+        }
+
+        @Override
+        public void endVisit(Initializer node) {
             methodStack.pop();
         }
 

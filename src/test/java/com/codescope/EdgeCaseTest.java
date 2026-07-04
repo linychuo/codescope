@@ -639,6 +639,67 @@ class EdgeCaseTest {
         assertEquals("Other.java", otherSites.get(0).file());
     }
 
+    @Test
+    void staticBlockCallersFound(@TempDir Path tmp) throws IOException {
+        // F6: a `static {}` block calls foo(). Pre-Task-2, recordCall drops
+        // the edge because methodStack is empty when JDT visits the
+        // MethodInvocation inside the Initializer node (we're not inside a
+        // MethodDeclaration). Task 2 pushes a synthetic <clinit>/0
+        // MethodContext in visit(Initializer) so the call attributes.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    static { foo(); }\n"
+                + "    private static void foo() {}\n"
+                + "}\n");
+        Files.writeString(srcDir.resolve("Caller.java"),
+                "package com.example;\n"
+                + "public class Caller {\n"
+                + "    public void run() { Target.foo(); }\n"  // not the path under test
+                + "}\n");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Target.java"), srcDir.resolve("Caller.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey foo = new MethodKey("com.example.Target", "foo", 0, List.of());
+        MethodKey clinit = new MethodKey("com.example.Target", "<clinit>", 0, List.of());
+        List<MethodKey> callers = index.callersOf(foo);
+        assertTrue(callers.contains(clinit),
+                "static block calls should attribute to <clinit>/0, got: " + callers);
+    }
+
+    @Test
+    void instanceBlockCallersFound(@TempDir Path tmp) throws IOException {
+        // F6: an instance `{}` block calls foo(). Same drop as the static
+        // case — methodStack is empty during the Initializer visit. Task 2
+        // pushes a synthetic <class-init>/0 MethodContext for instance
+        // blocks. Note the key is deliberately NOT <init> — that would
+        // collide with JDT's constructor MethodDeclaration name (the class
+        // simple name, see JdtIndexer.java:540-541). <class-init> cannot
+        // collide with any source method name.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    { foo(); }\n"
+                + "    private void foo() {}\n"
+                + "}\n");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Target.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey foo = new MethodKey("com.example.Target", "foo", 0, List.of());
+        MethodKey classInit = new MethodKey("com.example.Target", "<class-init>", 0, List.of());
+        List<MethodKey> callers = index.callersOf(foo);
+        assertTrue(callers.contains(classInit),
+                "instance block calls should attribute to <class-init>/0, got: " + callers);
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {
