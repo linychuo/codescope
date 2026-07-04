@@ -47,12 +47,19 @@ public final class FindSymbolsService {
      * @param kind       optional; one of {@link #VALID_KINDS} or null
      * @param projectRoot absolute path to a Maven project root
      * @param refresh    if true, evict the cached index and rebuild
+     * @param includeTests if true, index {@code src/test/java} in addition
+     *                to {@code src/main/java}. Default {@code false}:
+     *                test sources are excluded (test code does not appear
+     *                in symbol search results by default). When {@code true},
+     *                test classes/methods surface as symbols in
+     *                find_symbols results.
      * @param limit      max symbols to return; clamped to {@value #MAX_LIMIT}
      * @return JSON envelope: status, message, and the symbol array
      * @throws FindSymbolsException with a user-facing error message
      */
     public String findSymbolsJson(String query, String kind,
-                                  Path projectRoot, boolean refresh, int limit)
+                                  Path projectRoot, boolean refresh,
+                                  boolean includeTests, int limit)
             throws FindSymbolsException {
         if (query == null || query.isBlank()) {
             throw new FindSymbolsException("Missing or blank required argument: query");
@@ -64,7 +71,7 @@ public final class FindSymbolsService {
         int effectiveLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
 
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, false, FindSymbolsException::new);
+                indexCache, projectRoot, refresh, includeTests, FindSymbolsException::new);
 
         ProjectIndex.SymbolSearchResult result = index.searchSymbols(query, kind, effectiveLimit);
         List<ProjectIndex.Symbol> matches = result.matches();

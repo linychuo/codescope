@@ -60,8 +60,8 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                 "type", "string",
                 "description", "Absolute path to the Maven/Gradle project root. "
                         + "Required unless the MCP host advertises a workspace root via `roots`. "
-                        + "Only main source roots (src/<...>/main/java) are indexed; test "
-                        + "sources are excluded."));
+                        + "By default only main source roots (src/<...>/main/java) are indexed; "
+                        + "pass `include_tests=true` to also index src/test/java."));
         props.put("refresh", Map.of(
                 "type", "boolean",
                 "default", false,
@@ -69,6 +69,13 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + "it. The index cache is process-lifetime and does not detect file "
                         + "changes, so set this after editing source files. Has no effect on "
                         + "the first call for a given project (the cache is empty)."));
+        props.put("include_tests", Map.of(
+                "type", "boolean",
+                "default", false,
+                "description", "If true, index src/test/java in addition to src/main/java. "
+                        + "Default false: test sources are excluded (test code does not appear "
+                        + "in symbol search results by default). When true, test classes and "
+                        + "their methods surface as symbols in find_symbols results."));
         props.put("limit", Map.of(
                 "type", "integer",
                 "minimum", 1,
@@ -88,10 +95,12 @@ public final class FindSymbolsTool extends AbstractMcpTool {
         String kind = optionalString(args, "kind");
         Path projectRoot = resolveProjectRoot(args);
         boolean refresh = optionalBool(args, "refresh");
+        boolean includeTests = optionalBool(args, "include_tests");
         int limit = optionalLimit(args);
 
         try {
-            String json = service.findSymbolsJson(query, kind, projectRoot, refresh, limit);
+            String json = service.findSymbolsJson(
+                    query, kind, projectRoot, refresh, includeTests, limit);
             return ToolResult.text(json);
         } catch (FindSymbolsService.FindSymbolsException e) {
             return ToolResult.error(e.getMessage());

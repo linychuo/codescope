@@ -1175,4 +1175,70 @@ class EdgeCaseTest {
         assertEquals(4, site.path("call_site").path("line").asInt(),
                 "call_site.line should be the call expression line, got: " + site);
     }
+
+    @Test
+    void includeTestsTrueReturnsTestSymbols(@TempDir Path tmp) throws Exception {
+        // Task 9: find_symbols should accept an include_tests flag that, when
+        // true, indexes src/test/java in addition to src/main/java. Default
+        // (false) excludes test sources — test code does NOT appear in symbol
+        // search results. When true, test classes/methods are searchable.
+        Path mainDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Path testDir = Files.createDirectories(tmp.resolve("src/test/java/com/example"));
+        Files.writeString(mainDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {}\n");
+        Files.writeString(testDir.resolve("TargetTest.java"),
+                "package com.example;\n"
+                + "public class TargetTest {}\n");
+        // Service layer requires a Maven project root (pom.xml present).
+        Files.writeString(tmp.resolve("pom.xml"),
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>include-tests-fixture</artifactId>
+                    <version>1.0.0</version>
+                    <packaging>jar</packaging>
+                    <properties>
+                        <maven.compiler.source>17</maven.compiler.source>
+                        <maven.compiler.target>17</maven.compiler.target>
+                    </properties>
+                </project>
+                """);
+
+        FindSymbolsService svc = new FindSymbolsService();
+
+        // With include_tests=false (default), test symbols are NOT found.
+        // Querying "Target" matches the main class only; TargetTest must
+        // not appear anywhere in the envelope.
+        String jsonMain = svc.findSymbolsJson(
+                "Target", null, tmp, false, false, FindSymbolsService.DEFAULT_LIMIT);
+        JsonNode treeMain = new ObjectMapper().readTree(jsonMain);
+        assertEquals("ok", treeMain.path("status").asText(),
+                "default call should succeed, got: " + jsonMain);
+        JsonNode mainSyms = treeMain.path("symbols");
+        assertTrue(mainSyms.isArray() && mainSyms.size() == 1,
+                "expected only the main Target with include_tests=false, got: " + jsonMain);
+        assertEquals("com.example.Target", mainSyms.get(0).path("fqn").asText(),
+                "the single hit should be the main class, got: " + mainSyms);
+        assertFalse(jsonMain.contains("TargetTest"),
+                "TargetTest must not appear in the envelope with include_tests=false, got: " + jsonMain);
+
+        // With include_tests=true, test symbols ARE found. Querying "Target"
+        // now matches both Target (main) and TargetTest (test).
+        String jsonTest = svc.findSymbolsJson(
+                "Target", null, tmp, false, true, FindSymbolsService.DEFAULT_LIMIT);
+        JsonNode treeTest = new ObjectMapper().readTree(jsonTest);
+        assertEquals("ok", treeTest.path("status").asText(),
+                "include_tests=true call should succeed, got: " + jsonTest);
+        JsonNode testSyms = treeTest.path("symbols");
+        assertTrue(testSyms.isArray() && testSyms.size() == 2,
+                "expected both Target and TargetTest with include_tests=true, got: " + jsonTest);
+        List<String> fqns = new ArrayList<>();
+        for (JsonNode s : testSyms) fqns.add(s.path("fqn").asText());
+        Collections.sort(fqns);
+        assertEquals(List.of("com.example.Target", "com.example.TargetTest"), fqns,
+                "FQNs should match main + test classes, got: " + fqns);
+    }
 }

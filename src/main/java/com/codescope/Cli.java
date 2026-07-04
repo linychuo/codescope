@@ -103,7 +103,7 @@ public final class Cli {
             case "find-symbols" -> {
                 String q = p.requirePos(0, "query");
                 yield new FindSymbolsService().findSymbolsJson(
-                        q, p.kind, p.project, p.refresh, p.limit);
+                        q, p.kind, p.project, p.refresh, false, p.limit);
             }
             default -> throw new UsageException("Unknown command: " + command
                     + ". Use trace-callers, find-call-sites, or find-symbols.");

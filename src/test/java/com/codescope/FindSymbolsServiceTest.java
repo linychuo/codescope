@@ -30,7 +30,7 @@ class FindSymbolsServiceTest {
         // envelope shape and that container is null for a top-level type.
         FindSymbolsService svc = new FindSymbolsService();
         String json = svc.findSymbolsJson("Target", "class", FIXTURE, false,
-                FindSymbolsService.DEFAULT_LIMIT);
+                false, FindSymbolsService.DEFAULT_LIMIT);
         JsonNode tree = new ObjectMapper().readTree(json);
 
         assertEquals("Target", tree.path("query").asText());
@@ -59,7 +59,7 @@ class FindSymbolsServiceTest {
         // "TARGET" should match the class Target just like "Target" does.
         FindSymbolsService svc = new FindSymbolsService();
         String json = svc.findSymbolsJson("TARGET", "class", FIXTURE, false,
-                FindSymbolsService.DEFAULT_LIMIT);
+                false, FindSymbolsService.DEFAULT_LIMIT);
         JsonNode syms = new ObjectMapper().readTree(json).path("symbols");
         assertEquals(1, syms.size(), "case-insensitive substring failed: " + syms);
         assertEquals("com.example.Target", syms.get(0).path("fqn").asText());
@@ -73,7 +73,7 @@ class FindSymbolsServiceTest {
         // the two Target methods we know about.
         FindSymbolsService svc = new FindSymbolsService();
         String json = svc.findSymbolsJson("leaf", null, FIXTURE, false,
-                FindSymbolsService.DEFAULT_LIMIT);
+                false, FindSymbolsService.DEFAULT_LIMIT);
         JsonNode syms = new ObjectMapper().readTree(json).path("symbols");
         List<String> fqns = new ArrayList<>();
         for (JsonNode s : syms) fqns.add(s.path("fqn").asText());
@@ -91,18 +91,18 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         JsonNode all = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Target", null, FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         assertTrue(all.size() >= 2, "expected class+field, got: " + all);
 
         JsonNode classes = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Target", "class", FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         assertEquals(1, classes.size(), "kind=class should narrow to 1: " + classes);
         assertEquals("class", classes.get(0).path("kind").asText());
 
         JsonNode fields = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Target", "field", FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         assertEquals(1, fields.size(), "kind=field should narrow to 1: " + fields);
         assertEquals("field", fields.get(0).path("kind").asText());
         assertEquals("com.example.Mid.target", fields.get(0).path("fqn").asText());
@@ -119,7 +119,7 @@ class FindSymbolsServiceTest {
         // Cycle.self — query "self" matches only this field
         JsonNode self = new ObjectMapper().readTree(
                 svc.findSymbolsJson("self", "field", FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         List<String> selfFqns = toFqns(self);
         assertTrue(selfFqns.contains("com.example.Cycle.self"),
                 "expected Cycle.self, got: " + selfFqns);
@@ -127,7 +127,7 @@ class FindSymbolsServiceTest {
         // Top.mid — query "mid" matches this field by name
         JsonNode mid = new ObjectMapper().readTree(
                 svc.findSymbolsJson("mid", "field", FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         List<String> midFqns = toFqns(mid);
         assertTrue(midFqns.contains("com.example.Top.mid"),
                 "expected Top.mid, got: " + midFqns);
@@ -141,7 +141,7 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         JsonNode syms = new ObjectMapper().readTree(
                 svc.findSymbolsJson("ALPHA", null, FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         List<String> fqns = toFqns(syms);
         assertTrue(fqns.contains("com.example.Kind.ALPHA"),
                 "expected Kind.ALPHA, got: " + fqns);
@@ -164,14 +164,14 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         JsonNode k = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Kind", null, FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         assertTrue(toFqns(k).contains("com.example.Kind"),
                 "expected Kind in matches, got: " + k);
         assertEquals("enum", k.get(0).path("kind").asText());
 
         JsonNode m = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Marker", null, FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         boolean foundAnnotation = false;
         for (JsonNode s : m) {
             if ("com.example.Marker".equals(s.path("fqn").asText())
@@ -205,7 +205,7 @@ class FindSymbolsServiceTest {
             FindSymbolsService svc = new FindSymbolsService();
             JsonNode syms = new ObjectMapper().readTree(
                     svc.findSymbolsJson("WithCtor", "constructor", tmp, true,
-                            FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                            false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
             List<String> fqns = toFqns(syms);
             // JDT gives the constructor MethodDeclaration the class
             // simple name (not "<init>"). WithCtor has 2 explicit
@@ -227,7 +227,7 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         JsonNode syms = new ObjectMapper().readTree(
                 svc.findSymbolsJson("leaf", "method", FIXTURE, false,
-                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+                        false, FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
         JsonNode leaf = null;
         for (JsonNode s : syms) {
             if ("com.example.Target#leaf/0".equals(s.path("fqn").asText())) {
@@ -245,7 +245,7 @@ class FindSymbolsServiceTest {
     void noMatchReturnsEmptyArrayWithDiagnostic() throws Exception {
         FindSymbolsService svc = new FindSymbolsService();
         String json = svc.findSymbolsJson("nonexistent_xyzzy", null, FIXTURE, false,
-                FindSymbolsService.DEFAULT_LIMIT);
+                false, FindSymbolsService.DEFAULT_LIMIT);
         JsonNode tree = new ObjectMapper().readTree(json);
         assertEquals("ok", tree.path("status").asText());
         assertEquals(0, tree.path("symbols").size());
@@ -259,7 +259,7 @@ class FindSymbolsServiceTest {
         // Common-name query that matches many symbols. limit=2 should
         // return at most 2.
         FindSymbolsService svc = new FindSymbolsService();
-        String json = svc.findSymbolsJson("a", null, FIXTURE, false, 2);
+        String json = svc.findSymbolsJson("a", null, FIXTURE, false, false, 2);
         JsonNode syms = new ObjectMapper().readTree(json).path("symbols");
         assertTrue(syms.size() <= 2, "limit=2 should cap, got: " + syms.size());
         if (syms.size() == 2) {
@@ -275,7 +275,7 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         FindSymbolsService.FindSymbolsException ex = assertThrows(
                 FindSymbolsService.FindSymbolsException.class,
-                () -> svc.findSymbolsJson("", null, FIXTURE, false, 100));
+                () -> svc.findSymbolsJson("", null, FIXTURE, false, false, 100));
         assertTrue(ex.getMessage().contains("query"),
                 "should mention query, got: " + ex.getMessage());
     }
@@ -285,7 +285,7 @@ class FindSymbolsServiceTest {
         FindSymbolsService svc = new FindSymbolsService();
         FindSymbolsService.FindSymbolsException ex = assertThrows(
                 FindSymbolsService.FindSymbolsException.class,
-                () -> svc.findSymbolsJson("anything", "garbage", FIXTURE, false, 100));
+                () -> svc.findSymbolsJson("anything", "garbage", FIXTURE, false, false, 100));
         assertTrue(ex.getMessage().contains("garbage"),
                 "should name the bad kind, got: " + ex.getMessage());
     }
@@ -298,7 +298,7 @@ class FindSymbolsServiceTest {
             FindSymbolsService svc = new FindSymbolsService();
             FindSymbolsService.FindSymbolsException ex = assertThrows(
                     FindSymbolsService.FindSymbolsException.class,
-                    () -> svc.findSymbolsJson("anything", null, tmp, false, 100));
+                    () -> svc.findSymbolsJson("anything", null, tmp, false, false, 100));
             assertTrue(ex.getMessage().contains("pom.xml"),
                     "should mention pom.xml, got: " + ex.getMessage());
         } finally {
@@ -317,7 +317,7 @@ class FindSymbolsServiceTest {
             FindSymbolsService svc = new FindSymbolsService();
 
             // 1) Initial: "Zylqx" matches nothing.
-            String first = svc.findSymbolsJson("Zylqx", null, tmp, false, 100);
+            String first = svc.findSymbolsJson("Zylqx", null, tmp, false, false, 100);
             assertEquals(0, new ObjectMapper().readTree(first).path("symbols").size());
 
             // 2) Add a new class.
@@ -330,12 +330,12 @@ class FindSymbolsServiceTest {
             Files.writeString(tmp.resolve("src/main/java/com/example/Zylqx.java"), newSrc);
 
             // 3) Without refresh, the cached index does NOT see the new file.
-            String stale = svc.findSymbolsJson("Zylqx", null, tmp, false, 100);
+            String stale = svc.findSymbolsJson("Zylqx", null, tmp, false, false, 100);
             assertEquals(0, new ObjectMapper().readTree(stale).path("symbols").size(),
                     "cached result must not pick up the new file");
 
             // 4) With refresh=true, both the new class and its method show up.
-            String fresh = svc.findSymbolsJson("Zylqx", null, tmp, true, 100);
+            String fresh = svc.findSymbolsJson("Zylqx", null, tmp, true, false, 100);
             JsonNode syms = new ObjectMapper().readTree(fresh).path("symbols");
             assertTrue(syms.size() >= 2,
                     "refresh should find the new class+method, got: " + syms);
@@ -351,7 +351,7 @@ class FindSymbolsServiceTest {
         // Tasks 2-4 add the recording.
         FindSymbolsService svc = new FindSymbolsService();
         String json = svc.findSymbolsJson("clinit", "synthetic", FIXTURE, false,
-                FindSymbolsService.DEFAULT_LIMIT);
+                false, FindSymbolsService.DEFAULT_LIMIT);
         // status should be "ok" — not an error response
         assertTrue(json.contains("\"status\":\"ok\""),
                 "kind=synthetic should be accepted, got: " + json);
