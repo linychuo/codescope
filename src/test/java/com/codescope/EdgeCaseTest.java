@@ -888,6 +888,42 @@ class EdgeCaseTest {
                 "instance field initializer calls should attribute to <class-init>/0, got: " + callers);
     }
 
+    @Test
+    void enumConstantArgCallersFound(@TempDir Path tmp) throws IOException {
+        // F6: `enum E { A(foo()) }` — the args (foo()) are evaluated during
+        // the enum class's static init, conceptually equivalent to
+        // `public static final E A = new E(foo());`. Task 4 pushes a
+        // synthetic <clinit>/0 MethodContext in visit(EnumConstantDeclaration)
+        // so calls inside the args attribute to <clinit>/0. Pre-Task-4, JDT
+        // visits the args inside the EnumConstantDeclaration but methodStack
+        // is empty (we're inside visit(EnumDeclaration), not inside a
+        // MethodDeclaration), so recordCall drops the edge.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("MyEnum.java"),
+                "package com.example;\n"
+                + "public enum MyEnum {\n"
+                + "    A(compute());\n"
+                + "    private MyEnum(int x) {}\n"
+                + "    private static int compute() { return 1; }\n"
+                + "}\n");
+        Files.writeString(srcDir.resolve("Helper.java"),
+                "package com.example;\n"
+                + "public class Helper {\n"
+                + "    public int compute() { return 2; }\n"  // not the path under test
+                + "}\n");
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("MyEnum.java"), srcDir.resolve("Helper.java")),
+                List.of(),
+                List.of(srcDir.getParent().getParent().toString()),
+                tmp);
+
+        MethodKey compute = new MethodKey("com.example.MyEnum", "compute", 0, List.of());
+        MethodKey clinit = new MethodKey("com.example.MyEnum", "<clinit>", 0, List.of());
+        List<MethodKey> callers = index.callersOf(compute);
+        assertTrue(callers.contains(clinit),
+                "enum constant arg calls should attribute to <clinit>/0, got: " + callers);
+    }
+
     private static int depthOf(CallNode n) {
         int d = 0;
         while (!n.callers.isEmpty()) {

@@ -387,6 +387,40 @@ public final class JdtIndexer {
         }
 
         @Override
+        public boolean visit(EnumConstantDeclaration node) {
+            // `enum E { A(foo()) }` — the args (foo()) are evaluated during
+            // the enum class's static init, conceptually equivalent to
+            // `public static final E A = new E(foo());`. Attribute calls in
+            // the args to <clinit>/0. Pre-Task-4, JDT visited the args inside
+            // EnumConstantDeclaration but methodStack was empty (we're inside
+            // visit(EnumDeclaration), not inside a MethodDeclaration), so
+            // recordCall dropped the edge. Push a synthetic <clinit>/0
+            // MethodContext keyed to the enclosing enum so the calls attribute.
+            // The synthetic fqn carries the `/0` arity suffix to match the
+            // spec's attribution table (docs/superpowers/specs/2026-07-04-
+            // coverage-gaps-design.md:44) and the shape used by
+            // visit(Initializer) and visit(FieldDeclaration) above.
+            // First-wins: if a class has multiple init sites, the declaration
+            // points at the first one encountered.
+            String cls = currentClass();
+            MethodKey key = new MethodKey(cls, "<clinit>", 0, List.of());
+            int line = cuLine(node);
+            if (index.declarationOf(key) == null) {
+                index.putDeclaration(key, new ProjectIndex.SourceLoc(file, line));
+                index.recordSymbol(new ProjectIndex.Symbol(
+                        "<clinit>", "synthetic",
+                        cls + ".<clinit>" + "/0", cls, file, line, null));
+            }
+            methodStack.push(new MethodContext(key));
+            return true;  // descend so arg expressions get visited
+        }
+
+        @Override
+        public void endVisit(EnumConstantDeclaration node) {
+            methodStack.pop();
+        }
+
+        @Override
         public boolean visit(RecordDeclaration node) {
             String fqn = fqnOfType(nameOf(node));
             typeStack.push(fqn);
