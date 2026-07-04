@@ -61,6 +61,13 @@ public final class TraceCallersTool extends AbstractMcpTool {
                         + "The index cache is process-lifetime and does not detect file changes, "
                         + "so set this after editing source files. Has no effect on the first call "
                         + "for a given project (the cache is empty)."));
+        props.put("include_tests", Map.of(
+                "type", "boolean",
+                "default", false,
+                "description", "If true, index src/test/java in addition to src/main/java. "
+                        + "Default false: test sources are excluded (test code does not "
+                        + "participate in the call chain by default). When true, test "
+                        + "methods appear as callers in trace_callers results."));
         schema.put("properties", props);
         return schema;
     }
@@ -73,9 +80,12 @@ public final class TraceCallersTool extends AbstractMcpTool {
         List<String> paramTypes = optionalStringList(args, "paramTypes");
         Path projectRoot = resolveProjectRoot(args);
         boolean refresh = optionalBool(args, "refresh");
+        boolean includeTests = optionalBool(args, "include_tests");
 
         try {
-            String json = service.traceCallersJson(className, methodName, arity, paramTypes, projectRoot, refresh);
+            String json = service.traceCallersJson(
+                    className, methodName, arity, paramTypes,
+                    projectRoot, refresh, includeTests);
             return ToolResult.text(json);
         } catch (TraceCallersService.TraceCallersException e) {
             return ToolResult.error(e.getMessage());

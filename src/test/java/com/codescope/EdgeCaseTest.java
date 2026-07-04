@@ -1,5 +1,7 @@
 package com.codescope;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -1026,5 +1028,75 @@ class EdgeCaseTest {
                 "synthetic fqn should include /0 arity suffix");
         assertEquals("synthetic", synth.kind());
         assertEquals("<clinit>", synth.name());
+    }
+
+    @Test
+    void includeTestsTrueIncludesTestCallers(@TempDir Path tmp) throws Exception {
+        // Task 7: trace_callers should accept an includeTests flag that, when
+        // true, indexes src/test/java in addition to src/main/java. Default
+        // (false) excludes test sources — test code does NOT participate in
+        // the call chain. When true, test methods appear as callers.
+        Path mainDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Path testDir = Files.createDirectories(tmp.resolve("src/test/java/com/example"));
+        Files.writeString(mainDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    public void go() {}\n"
+                + "}\n");
+        Files.writeString(testDir.resolve("TargetTest.java"),
+                "package com.example;\n"
+                + "public class TargetTest {\n"
+                + "    public void testGo() {\n"
+                + "        new Target().go();\n"
+                + "    }\n"
+                + "}\n");
+        // Service layer requires a Maven project root (pom.xml present).
+        Files.writeString(tmp.resolve("pom.xml"),
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>include-tests-fixture</artifactId>
+                    <version>1.0.0</version>
+                    <packaging>jar</packaging>
+                    <properties>
+                        <maven.compiler.source>17</maven.compiler.source>
+                        <maven.compiler.target>17</maven.compiler.target>
+                    </properties>
+                </project>
+                """);
+
+        TraceCallersService svc = new TraceCallersService();
+
+        // With include_tests=false (default), test callers are NOT found.
+        // The "callers" array is absent from the JSON when the target has
+        // no callers, so we check both the parsed shape and that the test
+        // class FQN never appears anywhere in the envelope.
+        String jsonMain = svc.traceCallersJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, false);
+        JsonNode treeMain = new ObjectMapper().readTree(jsonMain);
+        assertEquals("ok", treeMain.path("status").asText(),
+                "default call should succeed, got: " + jsonMain);
+        JsonNode mainCallers = treeMain.path("target").path("callers");
+        assertTrue(mainCallers.isMissingNode() || mainCallers.size() == 0,
+                "test code should NOT appear with include_tests=false, got: " + jsonMain);
+        assertFalse(jsonMain.contains("com.example.TargetTest"),
+                "TargetTest must not appear in the envelope with include_tests=false, got: " + jsonMain);
+
+        // With include_tests=true, test callers ARE found.
+        String jsonTest = svc.traceCallersJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, true);
+        JsonNode treeTest = new ObjectMapper().readTree(jsonTest);
+        JsonNode testCallers = treeTest.path("target").path("callers");
+        assertTrue(testCallers.isArray() && testCallers.size() == 1,
+                "expected exactly 1 caller (TargetTest#testGo) with include_tests=true, got: " + jsonTest);
+        JsonNode caller = testCallers.get(0);
+        assertEquals("com.example.TargetTest", caller.path("class").asText(),
+                "caller should be the test class, got: " + caller);
+        assertEquals("testGo", caller.path("method").asText(),
+                "caller method should be testGo, got: " + caller);
     }
 }

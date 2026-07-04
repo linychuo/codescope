@@ -92,7 +92,7 @@ public final class Cli {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
                 yield new TraceCallersService().traceCallersJson(
-                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh);
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, false);
             }
             case "find-call-sites" -> {
                 String cls = p.requirePos(0, "class");

@@ -34,14 +34,21 @@ public final class TraceCallersService {
      *                and rebuild it. Use this after the user has edited
      *                files — the cache is process-lifetime and never
      *                invalidates on its own.
+     * @param includeTests if true, index {@code src/test/java} in addition
+     *                to {@code src/main/java}. Default {@code false}:
+     *                test sources are excluded (test code does not
+     *                participate in the call chain by default). When
+     *                {@code true}, test methods appear as callers in
+     *                trace_callers results.
      * @return JSON envelope containing the trace tree, status, and message
      * @throws TraceCallersException with a user-facing error message
      */
     public String traceCallersJson(String className, String methodName,
                                    Integer arity, List<String> paramTypes,
-                                   Path projectRoot, boolean refresh) throws TraceCallersException {
+                                   Path projectRoot, boolean refresh,
+                                   boolean includeTests) throws TraceCallersException {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
-                indexCache, projectRoot, refresh, false, TraceCallersException::new);
+                indexCache, projectRoot, refresh, includeTests, TraceCallersException::new);
 
         // Resolve against project declarations. This is the right path for
         // project methods: it gives a precise MethodKey (with parameter

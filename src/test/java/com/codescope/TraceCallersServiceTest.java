@@ -23,20 +23,20 @@ class TraceCallersServiceTest {
 
         // Warm the cache
         String first = svc.traceCallersJson("com.example.Target", "leaf",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         assertTrue(first.contains("\"signature\":\"com.example.Target#leaf/0\""),
                 "first call should hit a real index, got: " + first);
 
         // Same call should be served from cache (no rebuild). We assert the
         // public surface: the result is consistent and the method doesn't throw.
         String second = svc.traceCallersJson("com.example.Target", "leaf",
-                null, null, FIXTURE, false);
+                null, null, FIXTURE, false, false);
         assertEquals(first, second);
 
         // refresh=true should still return a valid result (the file is the same,
         // so the tree is identical, but the rebuild path was taken).
         String refreshed = svc.traceCallersJson("com.example.Target", "leaf",
-                null, null, FIXTURE, true);
+                null, null, FIXTURE, true, false);
         assertEquals(first, refreshed);
     }
 
@@ -51,7 +51,7 @@ class TraceCallersServiceTest {
 
             // 1) First call: Target.leaf is called by Mid.callsLeaf only
             JsonNode tree1 = new ObjectMapper().readTree(svc.traceCallersJson(
-                    "com.example.Target", "leaf", null, null, tmp, false));
+                    "com.example.Target", "leaf", null, null, tmp, false, false));
             JsonNode callers1 = tree1.path("target").path("callers");
             assertEquals(1, callers1.size(), "expected 1 caller initially, got: " + callers1);
 
@@ -69,13 +69,13 @@ class TraceCallersServiceTest {
 
             // 3) Without refresh, the cached index does NOT see the new caller.
             JsonNode tree2 = new ObjectMapper().readTree(svc.traceCallersJson(
-                    "com.example.Target", "leaf", null, null, tmp, false));
+                    "com.example.Target", "leaf", null, null, tmp, false, false));
             assertEquals(1, tree2.path("target").path("callers").size(),
                     "cached result must NOT pick up the new file, got: " + tree2);
 
             // 4) With refresh=true, the new caller shows up.
             JsonNode tree3 = new ObjectMapper().readTree(svc.traceCallersJson(
-                    "com.example.Target", "leaf", null, null, tmp, true));
+                    "com.example.Target", "leaf", null, null, tmp, true, false));
             JsonNode callers3 = tree3.path("target").path("callers");
             assertEquals(2, callers3.size(),
                     "refresh should pick up the new caller, got: " + callers3);
@@ -109,11 +109,11 @@ class TraceCallersServiceTest {
             // Warm: 8 distinct roots, with the first one being project[0].
             for (int i = 0; i < 8; i++) {
                 svc.traceCallersJson("com.example.Target", "leaf",
-                        null, null, projects[i], false);
+                        null, null, projects[i], false, false);
             }
             // Touch a 9th distinct root — evicts project[0].
             svc.traceCallersJson("com.example.Target", "leaf",
-                    null, null, projects[8], false);
+                    null, null, projects[8], false, false);
 
             // Mutate project[0]'s sources and call again WITHOUT refresh.
             // If project[0] is still cached, the result won't see the new
@@ -128,7 +128,7 @@ class TraceCallersServiceTest {
                     "src/main/java/com/example/NewCaller.java"), newCaller);
 
             JsonNode tree = new ObjectMapper().readTree(svc.traceCallersJson(
-                    "com.example.Target", "leaf", null, null, projects[0], false));
+                    "com.example.Target", "leaf", null, null, projects[0], false, false));
             // We expect 2 callers now (Mid.callsLeaf + NewCaller.go) — the
             // rebuild path was taken, which only happens when the entry
             // was evicted.
@@ -155,7 +155,7 @@ class TraceCallersServiceTest {
         String json = svc.traceCallersJson(
                 "java.io.PrintStream", "println",
                 null, null,
-                FIXTURE, false);
+                FIXTURE, false, false);
         JsonNode tree = new ObjectMapper().readTree(json);
         JsonNode callers = tree.path("target").path("callers");
         assertTrue(callers.isArray() && callers.size() > 0,
