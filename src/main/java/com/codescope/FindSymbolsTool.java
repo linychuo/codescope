@@ -49,11 +49,13 @@ public final class FindSymbolsTool extends AbstractMcpTool {
         props.put("kind", Map.of(
                 "type", "string",
                 "enum", List.of("class", "interface", "enum", "record", "annotation",
-                        "method", "constructor", "field"),
+                        "method", "constructor", "field", "synthetic"),
                 "description", "Optional filter. If set, only symbols of this kind are returned. "
                         + "Useful for distinguishing a class named `equals` from the "
                         + "Object#equals method, or finding only fields when many classes share "
-                        + "a helper method name."));
+                        + "a helper method name. `synthetic` covers <clinit> and <class-init> "
+                        + "synthetic methods recorded by JdtIndexer for static/instance init "
+                        + "blocks, field initializers, and enum constant args."));
         props.put("project", Map.of(
                 "type", "string",
                 "description", "Absolute path to the Maven/Gradle project root. "

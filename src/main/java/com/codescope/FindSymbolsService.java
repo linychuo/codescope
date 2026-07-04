@@ -29,7 +29,7 @@ public final class FindSymbolsService {
     /** Recognized kind values for the optional `kind` argument. */
     static final Set<String> VALID_KINDS = Set.of(
             "class", "interface", "enum", "record", "annotation",
-            "method", "constructor", "field");
+            "method", "constructor", "field", "synthetic");
 
     private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 

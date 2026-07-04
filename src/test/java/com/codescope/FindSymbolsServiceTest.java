@@ -344,6 +344,19 @@ class FindSymbolsServiceTest {
         }
     }
 
+    @Test
+    void syntheticKindIsAcceptedNotRejected() throws Exception {
+        // kind="synthetic" should be accepted (not rejected as unknown).
+        // Initially returns empty since no synthetics are recorded yet;
+        // Tasks 2-4 add the recording.
+        FindSymbolsService svc = new FindSymbolsService();
+        String json = svc.findSymbolsJson("clinit", "synthetic", FIXTURE, false,
+                FindSymbolsService.DEFAULT_LIMIT);
+        // status should be "ok" — not an error response
+        assertTrue(json.contains("\"status\":\"ok\""),
+                "kind=synthetic should be accepted, got: " + json);
+    }
+
     // --- helpers (mirror FindCallSitesServiceTest) ---
 
     private static List<String> toFqns(JsonNode syms) {
