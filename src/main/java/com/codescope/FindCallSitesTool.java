@@ -56,7 +56,8 @@ public final class FindCallSitesTool extends AbstractMcpTool {
                 "type", "string",
                 "description", "Absolute path to the Maven/Gradle project root. "
                         + "Required unless the MCP host advertises a workspace root via `roots`. "
-                        + "Only main source roots (src/<...>/main/java) are indexed; test sources are excluded."));
+                        + "By default only main source roots (src/<...>/main/java) are indexed; "
+                        + "pass `include_tests=true` to also index src/test/java."));
         props.put("refresh", Map.of(
                 "type", "boolean",
                 "default", false,
