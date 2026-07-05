@@ -1241,4 +1241,99 @@ class EdgeCaseTest {
         assertEquals(List.of("com.example.Target", "com.example.TargetTest"), fqns,
                 "FQNs should match main + test classes, got: " + fqns);
     }
+
+    @Test
+    void cacheKeyDistinguishesIncludeTests(@TempDir Path tmp) throws Exception {
+        // Task 10: toggling include_tests must trigger a cache miss + rebuild
+        // (not a stale read), and the false entry must NOT be evicted by the
+        // true entry (separate cache slots). This pins down the
+        // (projectRoot, includeTests) IndexCacheKey introduced in Task 6:
+        // if the cache were still keyed by projectRoot alone, the second
+        // call (include_tests=true) would return the main-only entry built
+        // by the first call, and the third call (include_tests=false again)
+        // would return the test-inclusive entry built by the second call.
+        Path mainDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Path testDir = Files.createDirectories(tmp.resolve("src/test/java/com/example"));
+        Files.writeString(mainDir.resolve("Target.java"),
+                "package com.example;\n"
+                + "public class Target {\n"
+                + "    public void go() {}\n"
+                + "}\n");
+        Files.writeString(testDir.resolve("TargetTest.java"),
+                "package com.example;\n"
+                + "public class TargetTest {\n"
+                + "    public void testGo() {\n"
+                + "        new Target().go();\n"
+                + "    }\n"
+                + "}\n");
+        // Service layer requires a Maven project root (pom.xml present).
+        Files.writeString(tmp.resolve("pom.xml"),
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>cache-key-fixture</artifactId>
+                    <version>1.0.0</version>
+                    <packaging>jar</packaging>
+                    <properties>
+                        <maven.compiler.source>17</maven.compiler.source>
+                        <maven.compiler.target>17</maven.compiler.target>
+                    </properties>
+                </project>
+                """);
+
+        TraceCallersService svc = new TraceCallersService();
+
+        // First call: include_tests=false — builds cache entry A (main-only).
+        String json1 = svc.traceCallersJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, false);
+        JsonNode tree1 = new ObjectMapper().readTree(json1);
+        assertEquals("ok", tree1.path("status").asText(),
+                "first call (include_tests=false) should succeed, got: " + json1);
+        JsonNode callers1 = tree1.path("target").path("callers");
+        assertTrue(callers1.isMissingNode() || callers1.size() == 0,
+                "include_tests=false should see no callers, got: " + json1);
+        assertFalse(json1.contains("TargetTest"),
+                "include_tests=false should not see test code, got: " + json1);
+
+        // Second call: include_tests=true — must be a cache MISS (different
+        // key) → rebuild with test sources. If the cache served the entry
+        // from call 1, TargetTest would be absent here.
+        String json2 = svc.traceCallersJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, true);
+        JsonNode tree2 = new ObjectMapper().readTree(json2);
+        assertEquals("ok", tree2.path("status").asText(),
+                "second call (include_tests=true) should succeed, got: " + json2);
+        JsonNode callers2 = tree2.path("target").path("callers");
+        assertTrue(callers2.isArray() && callers2.size() == 1,
+                "include_tests=true should see exactly 1 test caller (cache miss + rebuild), got: " + json2);
+        JsonNode caller2 = callers2.get(0);
+        assertEquals("com.example.TargetTest", caller2.path("class").asText(),
+                "caller should be the test class, got: " + caller2);
+        assertEquals("testGo", caller2.path("method").asText(),
+                "caller method should be testGo, got: " + caller2);
+
+        // Third call: include_tests=false again — must be a cache HIT
+        // (entry A still in cache, NOT evicted by step 2's entry B).
+        // If the false entry had been evicted, this call would rebuild
+        // a main-only index — which would still be correct! So this
+        // assertion is a weaker check: it verifies the *result* is still
+        // main-only (no TargetTest leak). The cache-key correctness is
+        // really proven by step 2: if the key ignored includeTests, step 2
+        // would have served the false entry and missed TargetTest.
+        String json3 = svc.traceCallersJson(
+                "com.example.Target", "go", null, null,
+                tmp, false, false);
+        JsonNode tree3 = new ObjectMapper().readTree(json3);
+        assertEquals("ok", tree3.path("status").asText(),
+                "third call (include_tests=false again) should succeed, got: " + json3);
+        JsonNode callers3 = tree3.path("target").path("callers");
+        assertTrue(callers3.isMissingNode() || callers3.size() == 0,
+                "include_tests=false (2nd time) should still see no callers, got: " + json3);
+        assertFalse(json3.contains("TargetTest"),
+                "include_tests=false (2nd time) should still not see test code, got: " + json3);
+    }
 }
