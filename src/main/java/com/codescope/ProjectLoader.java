@@ -62,7 +62,7 @@ public final class ProjectLoader {
      * code is the common case: {@code @Inject Provider<X>} is everywhere in
      * JSR-330 / Jakarta EE codebases, and {@code javax.inject} frequently
      * arrives as a transitive runtime dep that the user-facing module's pom
-     * doesn't list, so {@link MavenClasspathResolver} never sees it.
+     * doesn't list, so the dependency resolver never sees it.
      *
      * <p>Each entry is loaded from a classpath resource bundled inside
      * {@code codescope.jar} (no network, no system jars) and added only

@@ -87,7 +87,8 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `CallChainAnalyzer.MAX_NODES = 50_000` | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `TraceCallersService.indexCache` | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;缓存命中省得每次都重做 pom 解析和文件扫描 |
-| `MavenClasspathResolver` | 只看 `~/.m2/repository` 不联网 | 离线工作;transitive 依赖靠本地的 `.pom` 递归走 |
+| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树 | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择 |
+| `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
 | `ProjectLoader.collectSourceRoots0` | 只匹配 `src/<...>/main/java`,**排除 test** | 测试代码不参与调用链;`src/test` 是另一棵子树 |
 
 ## 改哪儿 — 常见场景
@@ -100,7 +101,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | 改 JSON-RPC 协议层行为(分帧、错误码、cancellation) | `McpServer.java` 一处,改动会反映在 `McpServerTest` |
 | 改 JDT 解析(支持新的 AST 节点类型) | `JdtIndexer.CallSiteVisitor` 里的 `visit(Xxx)` 方法 |
 | 改 BFS/cycle 算法 | `CallChainAnalyzer.bfs`,`EdgeCaseTest` 是它的回归网 |
-| 改 Maven 依赖解析(支持 settings.xml 镜像、Gradle 等) | `MavenClasspathResolver` + `MavenSettings`,测试在 `MavenClasspathResolverTest` / `MavenSettingsTest` |
+| 改依赖解析(支持 Gradle、自定义 settings.xml 等) | `DependencyResolver`(接口) + `MvnCliDependencyResolver`(Maven CLI 实现) + `DependencyResolverFactory`(自动检测),测试在 `MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest` |
 | 修并发 bug | `ProjectIndex`(`ConcurrentHashMap` 外层 + `synchronized(set)` 保护 `LinkedHashSet`),`EdgeCaseTest.projectIndexIsThreadSafe*` 是直接覆盖 |
 
 ## 测试怎么组织的
@@ -109,7 +110,8 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 - **`EdgeCaseTest`** — 边界:深链(>2000 层不爆栈)、钻石 vs 环、library target、50 000 节点截断、并发写、坏源文件
 - **`McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
 - **`McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
-- **`MavenClasspathResolverTest` / `MavenSettingsTest` / `MultiModuleTest`** — pom 解析各自的边界
+- **`MavenClasspathResolverTest` / `MavenSettingsTest` / `MultiModuleTest`** — pom 解析各自的边界(旧实现,保留作 offline fallback)
+- **`MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest`** — 依赖解析抽象层:解析 `mvn dependency:build-classpath` 输出、错误处理、构建工具自动检测
 - **`CliTest`** — CLI 前端(`java -jar codescope.jar <command>`)的协议测试:`Cli.run` 直驱(不触发 `System.exit`),覆盖子命令分发、必填 `--project`、缺位置参数、未知 option / kind、退出码 0/1/2、三个子命令在 codescope 自身上的 happy path。`Cli.dispatch` 改完直接看红绿
 - **`FindCallSitesServiceTest`** — `find_call_sites` 服务层:单/多调用点、library target 多 overload union、no-callers / unknown target / ambiguity 诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点
 - **`FindSymbolsServiceTest`** — `find_symbols` 服务层:大小写不敏感子串、kind 过滤、各类声明的索引路径(类/方法/构造器/普通字段/enum 常量/record 组件)、no-match 诊断、limit 截断提示、blank query / unknown kind / 缺 `pom.xml` 报错、缓存 + `refresh` 在新文件加入后能拾到新符号
