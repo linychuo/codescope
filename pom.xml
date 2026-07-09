@@ -14,7 +14,7 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jdt.version>3.45.0</jdt.version>
+        <jdt.version>3.46.0</jdt.version>
         <jackson.version>2.17.2</jackson.version>
         <maven.model.version>3.9.9</maven.model.version>
     </properties>
