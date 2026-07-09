@@ -3,7 +3,7 @@
 一个基于 Eclipse JDT 的 MCP (Model Context Protocol) 工具,给定一个 Java 类+方法名,
 返回**所有调用这个方法的方法**的嵌套树,沿调用链一直向上,直到没有更多调用方为止。
 
-底层用的是 Eclipse JDT 3.45 (`org.eclipse.jdt.core` 的 ASTParser 带 binding resolution),
+底层用的是 Eclipse JDT 3.46 (`org.eclipse.jdt.core` 的 ASTParser 带 binding resolution),
 也就是 [Eclipse JDT Language Server (jdtls)](https://projects.eclipse.org/projects/eclipse.jdt.ls)
 跑的那套解析引擎。
 
@@ -27,6 +27,7 @@ schema(`class` / `method` / `arity` / `paramTypes` / `project` / `refresh`),`fin
 | `paramTypes` | 否 | 参数类型的完全限定名数组,例如 `["int", "java.lang.String"]`;和 `arity` 一起用来挑出唯一重载 |
 | `project` | 否 | Maven 项目根目录的绝对路径。优先级:本参数 > MCP host 声明的 `roots` > 当前工作目录 |
 | `refresh` | 否 | `boolean`,默认 `false`。为 `true` 时清掉该 project 的索引缓存并重建 —— 缓存是进程级的,改完源码后调一次 `refresh: true` 才能看到新调用方 |
+| `include_tests` | 否 | `boolean`,默认 `false`。为 `true` 时把 `src/test/java` 也纳入索引 |
 
 不传 `arity`/`paramTypes` 而同名方法有多个重载,会报
 `AmbiguousMethodException` 并列出所有候选重载,让你在下次调用里补上。
@@ -146,6 +147,7 @@ enum / record / annotation / method / constructor / field,回答"X 在哪儿定�
 | `kind` | 否 | 过滤,可选值 `class` / `interface` / `enum` / `record` / `annotation` / `method` / `constructor` / `field`。不传则所有 kind 一起返回(同名 class `equals` 和 `Object#equals` 方法会同时出现) |
 | `project` | 否 | 同上 |
 | `refresh` | 否 | 同上 |
+| `include_tests` | 否 | `boolean`,默认 `false`。同上 |
 | `limit` | 否 | 返回上限,默认 `100`,最大 `1000`。命中上限时 `message` 含 "capped" 提示,让你收紧 `query` 或加 `kind` 过滤 |
 
 **输出**: 扁平 JSON 数组,按 `(fqn, signature)` 稳定排序。
@@ -193,10 +195,12 @@ enum / record / annotation / method / constructor / field,回答"X 在哪儿定�
 
 ## 限制
 
-- 只支持 Maven 项目(读 `pom.xml` 找依赖)。**多模块项目**也支持 —— 顺着 `pom.xml` 树把所有
-  模块的源根都收进来,只要每个子模块有自己的 `pom.xml`
-- 本地 Maven 仓库优先用 `~/.m2/settings.xml` 里的 `<localRepository>`,否则才是 `~/.m2/repository`
-- 只看项目 `src/main/java` 下的源码 —— `src/test/java` 排除掉(测试代码不参与调用链)
+- 支持 Maven 项目(自动识别 `pom.xml`),调用 `mvn dependency:build-classpath` 获取真实依赖树。
+  **多模块项目**也支持 —— 顺着 `pom.xml` 树把所有模块的源根都收进来。
+  Gradle 支持后续加入。
+- 可通过 `CODESCOPE_MVN_ARGS` 环境变量传递额外 Maven 参数,例如私服 settings.xml:
+  `export CODESCOPE_MVN_ARGS="-gs /path/to/company-settings.xml"`
+- 只看项目 `src/main/java` 下的源码(默认) —— `include_tests=true` 时也会索引 `src/test/java`
 - 两个工具(`trace_callers` / `find_call_sites`)的 target 都可以是**库里的方法**(只声明在 jar 里、没在项目源码里),
   只要项目里有谁调用了它 —— 这种情况工具能找到项目的调用方/调用点并返回;
   如果项目里压根没人调用这个库方法,`trace_callers` 返回一棵空树(message 含
@@ -270,7 +274,7 @@ stdio 上跑的是 JSON-RPC 2.0,服务端每条响应一行 JSON,客户端不强
 mvn test
 ```
 
-125 个测试,12 组:
+178 个测试,14 组:
 
 - `CallChainAnalyzerTest` —— 在 fixture 项目上跑 `JdtIndexer` + `CallChainAnalyzer`,
   验证:传递调用、重载消歧、未被调用、不存在的方法、循环、排除测试源码、
@@ -288,6 +292,8 @@ mvn test
   `result: null` 这类畸形响应不影响后续调用)。
 - `MavenClasspathResolverTest` / `MavenSettingsTest` —— pom 解析、
   classifier 排除、XXE 防御的边界。
+- `MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest` —— 依赖解析抽象层:
+  解析 `mvn dependency:build-classpath` 输出、错误处理、构建工具自动检测。
 - `FindCallSitesServiceTest` —— `find_call_sites` 的服务层:单/多调用点、
   library target 多 overload union、no-callers / unknown target / ambiguity
   诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点。
