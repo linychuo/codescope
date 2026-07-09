@@ -46,7 +46,7 @@ public final class ProjectLoader {
         // See discoverEffectiveRoot.
         Path effective = discoverEffectiveRoot(projectRoot);
         List<Path> sources = collectSources(effective, includeTests);
-        List<String> classpath = new MavenClasspathResolver().resolve(effective);
+        List<String> classpath = new ArrayList<>(DependencyResolverFactory.create(effective).resolve(effective));
         classpath.addAll(jreClasspath());
         classpath.addAll(wellKnownApiJars(classpath));
         List<String> sourcepath = collectSourceRoots(effective, includeTests);
