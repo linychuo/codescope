@@ -12,6 +12,7 @@ import java.util.Locale;
 public final class MvnCliDependencyResolver implements DependencyResolver {
 
     private static final String ENV_MVN_ARGS = "CODESCOPE_MVN_ARGS";
+    private static final String PROP_MVN_ARGS = "codescope.mvn.args";
     private static final boolean IS_WINDOWS = System.getProperty("os.name")
             .toLowerCase(Locale.ROOT).contains("win");
 
@@ -102,8 +103,15 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         cmd.add(projectRoot.resolve("pom.xml").toString());
         // User-provided extra args (from CLI / factory)
         cmd.addAll(extraArgs);
-        // Env var fallback
+        // System property fallback: -Dcodescope.mvn.args=...
         if (extraArgs.isEmpty()) {
+            String propArgs = System.getProperty(PROP_MVN_ARGS);
+            if (propArgs != null && !propArgs.isBlank()) {
+                cmd.addAll(Arrays.asList(propArgs.split("\\s+")));
+            }
+        }
+        // Env var fallback: CODESCOPE_MVN_ARGS
+        if (extraArgs.isEmpty() && System.getProperty(PROP_MVN_ARGS) == null) {
             String envArgs = System.getenv(ENV_MVN_ARGS);
             if (envArgs != null && !envArgs.isBlank()) {
                 cmd.addAll(Arrays.asList(envArgs.split("\\s+")));

@@ -50,10 +50,18 @@ java -jar target/codescope.jar
 
 ## 配置
 
-通过 `CODESCOPE_MVN_ARGS` 环境变量传入 Maven 额外参数，例如公司私服：
+支持以下方式传递 Maven 额外参数（优先级从高到低）：
+
+1. 程序调用 `DependencyResolverFactory.setMavenExtraArgs(...)`
+2. JVM 系统属性: `-Dcodescope.mvn.args="-gs /path/to/settings.xml"`
+3. 环境变量: `CODESCOPE_MVN_ARGS`
 
 ```bash
-export CODESCOPE_MVN_ARGS="-gs /path/to/company-settings.xml"
+# JVM 系统属性（java -jar 时用）
+java -Dcodescope.mvn.args="-gs /path/to/settings.xml" -jar codescope.jar
+
+# 环境变量
+export CODESCOPE_MVN_ARGS="-gs /path/to/settings.xml"
 ```
 
 自动检测 Maven Wrapper（`mvnw` / `mvnw.cmd`）和 `MAVEN_HOME`。
