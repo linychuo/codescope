@@ -48,6 +48,46 @@ class MvnCliDependencyResolverTest {
     }
 
     @Test
+    void resolveMvnCommandDefaultsToMvn(@TempDir Path tmp) throws Exception {
+        // No wrapper, no MAVEN_HOME -> returns "mvn" (or "mvn.cmd" on Windows)
+        String cmd = MvnCliDependencyResolver.resolveMvnCommand(tmp);
+        if (System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")) {
+            assertEquals("mvn.cmd", cmd);
+        } else {
+            assertEquals("mvn", cmd);
+        }
+    }
+
+    @Test
+    void resolveMvnCommandFindsMvnwWrapper(@TempDir Path tmp) throws Exception {
+        // Create a fake mvnw wrapper in the project root
+        Path wrapper = tmp.resolve("mvnw");
+        Files.writeString(wrapper, "#!/bin/bash\necho fake mvnw");
+        wrapper.toFile().setExecutable(true);
+
+        String cmd = MvnCliDependencyResolver.resolveMvnCommand(tmp);
+        assertTrue(cmd.endsWith("mvnw"), "expected mvnw wrapper, got: " + cmd);
+    }
+
+    @Test
+    void resolveMvnCommandFindsMvnwCmdOnWindows(@TempDir Path tmp) throws Exception {
+        // Both mvnw and mvnw.cmd exist in the project root.
+        Files.writeString(tmp.resolve("mvnw"), "#!/bin/bash");
+        tmp.resolve("mvnw").toFile().setExecutable(true);
+        Files.writeString(tmp.resolve("mvnw.cmd"), "@echo fake");
+
+        String cmd = MvnCliDependencyResolver.resolveMvnCommand(tmp);
+        // On Linux: should prefer mvnw over mvnw.cmd
+        // On Windows: should prefer mvnw.cmd over mvnw
+        boolean isWin = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win");
+        if (isWin) {
+            assertTrue(cmd.endsWith("mvnw.cmd"), "expected mvnw.cmd on Windows, got: " + cmd);
+        } else {
+            assertTrue(cmd.endsWith("mvnw"), "expected mvnw on Linux, got: " + cmd);
+        }
+    }
+
+    @Test
     void resolvesInFixtureProject() throws Exception {
         // Integration test: run against the fixture project (no deps, just
         // verify the mvn command succeeds and returns something).

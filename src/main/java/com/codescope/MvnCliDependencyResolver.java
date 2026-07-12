@@ -7,10 +7,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 public final class MvnCliDependencyResolver implements DependencyResolver {
 
     private static final String ENV_MVN_ARGS = "CODESCOPE_MVN_ARGS";
+    private static final boolean IS_WINDOWS = System.getProperty("os.name")
+            .toLowerCase(Locale.ROOT).contains("win");
 
     private final List<String> extraArgs;
 
@@ -70,9 +73,31 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
                 .toList();
     }
 
+    /** Resolve the mvn executable path, with Maven wrapper and Windows support. */
+    static String resolveMvnCommand(Path projectRoot) {
+        // 1. Maven wrapper: mvnw (Linux/macOS) or mvnw.cmd (Windows)
+        if (IS_WINDOWS) {
+            Path wrapper = projectRoot.resolve("mvnw.cmd");
+            if (Files.isRegularFile(wrapper)) return wrapper.toAbsolutePath().toString();
+        } else {
+            Path wrapper = projectRoot.resolve("mvnw");
+            if (Files.isRegularFile(wrapper)) return wrapper.toAbsolutePath().toString();
+        }
+
+        // 2. MAVEN_HOME environment variable
+        String mavenHome = System.getenv("MAVEN_HOME");
+        if (mavenHome != null && !mavenHome.isBlank()) {
+            Path mvn = Path.of(mavenHome, "bin", IS_WINDOWS ? "mvn.cmd" : "mvn");
+            if (Files.isRegularFile(mvn)) return mvn.toAbsolutePath().toString();
+        }
+
+        // 3. Fallback: rely on PATH — on Windows, use mvn.cmd so ProcessBuilder resolves it
+        return IS_WINDOWS ? "mvn.cmd" : "mvn";
+    }
+
     private List<String> buildCommand(Path projectRoot, Path outputFile) {
         List<String> cmd = new ArrayList<>();
-        cmd.add("mvn");
+        cmd.add(resolveMvnCommand(projectRoot));
         cmd.add("-f");
         cmd.add(projectRoot.resolve("pom.xml").toString());
         // User-provided extra args (from CLI / factory)
