@@ -17,19 +17,22 @@ public final class CallNode {
     public final int line;           // declaration line, 0 if unknown
     public final boolean cycle;      // true if this is a back-edge marker
     public final boolean truncated;  // true if this branch was cut at MAX_DEPTH
+    public final boolean fanoutTruncated;  // true if this branch was cut at MAX_CALLERS_PER_FRAME
+    public final int hiddenCallerCount;    // number of callers omitted due to fan-out cap
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
-        this(className, methodName, arity, file, line, false, false);
+        this(className, methodName, arity, file, line, false, false, false, 0);
     }
 
     public CallNode(String className, String methodName, int arity,
                     String file, int line, boolean cycle) {
-        this(className, methodName, arity, file, line, cycle, false);
+        this(className, methodName, arity, file, line, cycle, false, false, 0);
     }
 
     private CallNode(String className, String methodName, int arity,
-                     String file, int line, boolean cycle, boolean truncated) {
+                     String file, int line, boolean cycle, boolean truncated,
+                     boolean fanoutTruncated, int hiddenCallerCount) {
         this.className = className;
         this.methodName = methodName;
         this.arity = arity;
@@ -38,6 +41,8 @@ public final class CallNode {
         this.line = line;
         this.cycle = cycle;
         this.truncated = truncated;
+        this.fanoutTruncated = fanoutTruncated;
+        this.hiddenCallerCount = hiddenCallerCount;
     }
 
     /**
@@ -46,7 +51,7 @@ public final class CallNode {
      * source location, so the tree stays compact when cycles are present.
      */
     public static CallNode cycleMarker(String className, String methodName, int arity) {
-        return new CallNode(className, methodName, arity, null, 0, true, false);
+        return new CallNode(className, methodName, arity, null, 0, true, false, false, 0);
     }
 
     /**
@@ -56,7 +61,22 @@ public final class CallNode {
      * serialize safely".
      */
     public static CallNode depthMarker(String className, String methodName, int arity) {
-        return new CallNode(className, methodName, arity, null, 0, false, true);
+        return new CallNode(className, methodName, arity, null, 0, false, true, false, 0);
+    }
+
+    /**
+     * Builds a fan-out cap marker for a method whose caller set was
+     * truncated at {@code MAX_CALLERS_PER_FRAME}. Distinct from
+     * {@link #depthMarker} so callers can tell "we stopped at the
+     * depth limit" from "we stopped because this method has too many
+     * direct callers to enumerate in full".
+     *
+     * @param hiddenCount number of callers that were discovered but
+     *                    omitted from the tree
+     */
+    public static CallNode fanoutMarker(String className, String methodName,
+                                        int arity, int hiddenCount) {
+        return new CallNode(className, methodName, arity, null, 0, false, false, true, hiddenCount);
     }
 
     public CallNode addChild(CallNode child) {
@@ -86,6 +106,7 @@ public final class CallNode {
             f.map.put("signature", f.node.signature);
             if (f.node.cycle) f.map.put("cycle", true);
             if (f.node.truncated) f.map.put("truncated", true);
+            if (f.node.fanoutTruncated) f.map.put("truncatedCallers", f.node.hiddenCallerCount);
             if (f.node.callers.isEmpty()) continue;
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
