@@ -62,10 +62,11 @@ int line = node instanceof AbstractTypeDeclaration atd && atd.getName() != null
 - 当 `collected > MAX_CALLERS_PER_FRAME`（默认 **500**）时停止收集，给当前节点添加一个 `truncation` 标记子节点，标注被截断的调用者数
 - 超过的调用者不进入子节点队列，不再展开
 
-**新字段**：
-- `CallNode` 增加 `int hiddenCallerCount` 字段（默认 0）
-- `CallNode` 增加构造器或 factory 用来创建带截断标记的节点
-- `toJson()` 序列化时输出 `truncatedCallers: N`
+**新字段**（与现有 `cycle`、`truncated` 并列）：
+- `CallNode` 增加 `boolean fanoutTruncated` 字段（默认 false），与现有 `truncated`（深度截断）区分
+- `CallNode` 增加 `int hiddenCallerCount` 字段（默认 0），对 fanout 截断有效
+- 新增 factory `CallNode.fanoutMarker(className, methodName, arity, hiddenCount)` 仿照现有 `cycleMarker` / `depthMarker` 模式
+- `toJson()` 序列化时：当 `fanoutTruncated` 为 true 时输出 `truncatedCallers: N`
 
 **配置**：`MAX_CALLERS_PER_FRAME` 作为 `CallChainAnalyzer` 的 static final 常量，默认 500。
 
