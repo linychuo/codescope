@@ -552,7 +552,7 @@ public final class JdtIndexer {
             MethodKey callerKey = new MethodKey(
                     callerClass, methodName,
                     paramTypes.size(), paramTypes);
-            int line = cuLine(node);
+            int line = cuLine(node.getName());
             index.putDeclaration(callerKey, new ProjectIndex.SourceLoc(file, line));
             // Record the JDT modifier bitmask so the post-build
             // reverse-hierarchy repair pass can skip private/static
