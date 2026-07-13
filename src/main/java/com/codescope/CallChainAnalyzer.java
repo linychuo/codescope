@@ -3,6 +3,7 @@ package com.codescope;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -89,8 +90,17 @@ public final class CallChainAnalyzer {
             // tree node — diamond convergence across unrelated paths
             // (different parents reaching the same C) is still preserved
             // by the per-path ancestor check above.
+            // Per-frame fan-out: collect into a single ordered set so the
+            // visible children are stable and the cap is enforced on the
+            // union, not per relatedKey.
+            LinkedHashSet<MethodKey> collected = new LinkedHashSet<>();
+            int hidden = 0;
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
-                for (MethodKey caller : index.callersOf(relatedKey)) {
+                for (MethodKey caller : index.callersOfSet(relatedKey)) {
+                    if (collected.size() >= MAX_CALLERS_PER_FRAME) {
+                        hidden++;
+                        continue;
+                    }
                     if (f.ancestors.contains(caller)) {
                         // True back-edge on the current path -> cycle marker.
                         f.node.addChild(CallNode.cycleMarker(
@@ -107,6 +117,7 @@ public final class CallChainAnalyzer {
                     // relatedMethods) doesn't show up twice as a child
                     // of this frame.
                     if (!f.localCallersSeen.add(caller)) continue;
+                    if (!collected.add(caller)) continue;
 
                     ProjectIndex.SourceLoc loc = index.declarationOf(caller);
                     CallNode child = new CallNode(
@@ -129,6 +140,10 @@ public final class CallChainAnalyzer {
                                         + "There may be a deeply-recursive or hot method in the chain.");
                     }
                 }
+            }
+            if (hidden > 0) {
+                f.node.addChild(CallNode.fanoutMarker(
+                        f.key.declaringClass, f.key.methodName, f.key.arity, hidden));
             }
         }
         if (callerCount == 0) {
@@ -162,4 +177,15 @@ public final class CallChainAnalyzer {
      * under what any realistic caller-chain project would produce.
      */
     private static final int MAX_DEPTH = 500;
+
+    /**
+     * Safety cap on the number of direct callers expanded per BFS frame.
+     * For methods on widely-implemented interfaces, {@code relatedMethods}
+     * can return 100+ keys and each can have 1000+ callers, giving
+     * 10^5-10^6 iterations per frame — multiply by MAX_NODES frames and
+     * the search takes 10+ minutes. Capping at 500 keeps a single frame
+     * bounded and the total BFS in seconds; the dropped callers are
+     * reported via a {@code fanoutMarker} child carrying the count.
+     */
+    private static final int MAX_CALLERS_PER_FRAME = 500;
 }

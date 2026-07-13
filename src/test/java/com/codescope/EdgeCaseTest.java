@@ -174,20 +174,27 @@ class EdgeCaseTest {
 
     @Test
     void truncatedAtMaxNodesStopsRunawayExpansion() {
-        // Build a fan-out: one target with many distinct callers. The
-        // 50_000-node cap should kick in.
+        // Build a binary tree of depth 16 (2^16 = 65,536 nodes, just
+        // over MAX_NODES=50_000). Each frame has 2 callers, so the
+        // per-frame fan-out cap (500) doesn't fire; depth 16 is well
+        // under MAX_DEPTH=500. This isolates the MAX_NODES cap as the
+        // one being exercised.
         ProjectIndex index = new ProjectIndex();
-        MethodKey target = new MethodKey("com.example.Target", "leaf", 0);
-        index.putDeclaration(target, new ProjectIndex.SourceLoc("Target.java", 1));
-        // Add MAX_NODES + 1 distinct callers so traversal must truncate.
-        // Use a representative count, not 100k, to keep this test fast.
-        int n = 51_000;
-        for (int i = 0; i < n; i++) {
-            MethodKey caller = new MethodKey("com.example.C" + i, "call", 0);
-            index.putDeclaration(caller, new ProjectIndex.SourceLoc("C.java", 1));
-            index.recordInvocation(caller, target);
+        MethodKey root = new MethodKey("com.example.Target", "leaf", 0);
+        index.putDeclaration(root, new ProjectIndex.SourceLoc("Target.java", 1));
+        int nextId = 0;
+        java.util.ArrayDeque<MethodKey> frontier = new java.util.ArrayDeque<>();
+        frontier.addLast(root);
+        while (frontier.size() < 65_536) {
+            MethodKey parent = frontier.removeFirst();
+            for (int k = 0; k < 2; k++) {
+                MethodKey child = new MethodKey("com.example.N" + nextId++, "m", 0);
+                index.putDeclaration(child, new ProjectIndex.SourceLoc("N.java", 1));
+                index.recordInvocation(child, parent);
+                frontier.addLast(child);
+            }
         }
-        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, target);
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, root);
         assertTrue(r.found());
         assertTrue(r.message().contains("Truncated"),
                 "expected truncation message, got: " + r.message());
