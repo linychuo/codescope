@@ -360,6 +360,24 @@ public final class ProjectIndex {
     }
 
     /**
+     * Returns the raw set of callers for {@code target} without copying.
+     *
+     * <p>Intended for single-threaded BFS in {@link CallChainAnalyzer}
+     * after indexing is complete — the returned set is the live index
+     * entry, not a defensive copy. NOT a substitute for
+     * {@link #callersOf} in concurrent contexts: callers that mutate
+     * the returned set will corrupt the index. The BFS path is safe
+     * because {@code recordInvocation} only runs during
+     * {@link JdtIndexer#parseFile} on virtual threads, and the BFS
+     * entry point in {@code TraceCallersService.traceCallersJson}
+     * runs serially after indexing finishes.
+     */
+    public Set<MethodKey> callersOfSet(MethodKey target) {
+        Set<MethodKey> set = calls.get(target);
+        return set == null ? Set.of() : set;
+    }
+
+    /**
      * Returns a defensive snapshot of call sites for {@code target}, keyed
      * by the caller MethodKey. Each value is the ordered list of call
      * sites within that caller's body (one entry per AST node that
