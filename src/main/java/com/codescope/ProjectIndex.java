@@ -87,6 +87,20 @@ public final class ProjectIndex {
     // and visit(EnumDeclaration) / visit(RecordDeclaration) /
     // visit(AnnotationTypeDeclaration) — see recordTypeHierarchy there.
     private final Map<String, Set<String>> typeHierarchy = new ConcurrentHashMap<>();
+    // Signature index: for each (methodName, arity) pair, the set of
+    // declared MethodKeys in the project with that signature. Lets the
+    // post-build reverse-hierarchy repair pass find same-named,
+    // same-arity candidates in O(1) per signature lookup instead of an
+    // O(N) full-scan of {@link #knownMethods()} per subtype, which was
+    // the build-phase bottleneck for large projects (issue #6).
+    // Populated write-through at {@link #putDeclaration}.
+    private final Map<NameArity, Set<MethodKey>> bySignature = new ConcurrentHashMap<>();
+
+    // Composite key for {@link #bySignature}. Package-private so the
+    // test suite can construct it directly if ever needed; not part of
+    // the public API.
+    record NameArity(String name, int arity) {}
+
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
     // Parallel to `calls` but per (callee, caller) edge carries a list of
     // call-site positions. Populated eagerly at index time so that
@@ -157,6 +171,10 @@ public final class ProjectIndex {
 
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
+        bySignature
+                .computeIfAbsent(new NameArity(method.methodName, method.arity),
+                        k -> ConcurrentHashMap.newKeySet())
+                .add(method);
     }
 
     /**
@@ -402,6 +420,30 @@ public final class ProjectIndex {
 
     public Set<MethodKey> knownMethods() {
         return Collections.unmodifiableSet(declarations.keySet());
+    }
+
+    /**
+     * Returns the set of declared MethodKeys whose {@code methodName}
+     * and {@code arity} match the given signature, across all declaring
+     * classes in the project. Returns an empty set if no project
+     * declaration matches or {@code methodName} is null.
+     *
+     * <p>Used by the post-build reverse-hierarchy repair pass to find
+     * same-named, same-arity candidates in O(1) per signature lookup
+     * (replaces an O(N) full-scan of {@link #knownMethods()} per
+     * subtype, which was the build-phase bottleneck for large projects
+     * — see issue #6).
+     *
+     * <p>The returned set is the live index set, not a defensive
+     * snapshot. Read-only iteration is safe under the indexer's
+     * concurrent writes because the underlying map is a
+     * {@link ConcurrentHashMap}. Callers must not mutate the returned
+     * set.
+     */
+    public Set<MethodKey> methodsWithSignature(String methodName, int arity) {
+        if (methodName == null) return Set.of();
+        Set<MethodKey> set = bySignature.get(new NameArity(methodName, arity));
+        return set == null ? Set.of() : set;
     }
 
     /**
