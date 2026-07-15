@@ -19,20 +19,21 @@ public final class CallNode {
     public final boolean truncated;  // true if this branch was cut at MAX_DEPTH
     public final boolean fanoutTruncated;  // true if this branch was cut at MAX_CALLERS_PER_FRAME
     public final int hiddenCallerCount;    // number of callers omitted due to fan-out cap
+    public final boolean deduped;    // true if this is a marker for a method already shown elsewhere in the tree
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
-        this(className, methodName, arity, file, line, false, false, false, 0);
+        this(className, methodName, arity, file, line, false, false, false, 0, false);
     }
 
     public CallNode(String className, String methodName, int arity,
                     String file, int line, boolean cycle) {
-        this(className, methodName, arity, file, line, cycle, false, false, 0);
+        this(className, methodName, arity, file, line, cycle, false, false, 0, false);
     }
 
     private CallNode(String className, String methodName, int arity,
                      String file, int line, boolean cycle, boolean truncated,
-                     boolean fanoutTruncated, int hiddenCallerCount) {
+                     boolean fanoutTruncated, int hiddenCallerCount, boolean deduped) {
         this.className = className;
         this.methodName = methodName;
         this.arity = arity;
@@ -43,6 +44,7 @@ public final class CallNode {
         this.truncated = truncated;
         this.fanoutTruncated = fanoutTruncated;
         this.hiddenCallerCount = hiddenCallerCount;
+        this.deduped = deduped;
     }
 
     /**
@@ -51,7 +53,7 @@ public final class CallNode {
      * source location, so the tree stays compact when cycles are present.
      */
     public static CallNode cycleMarker(String className, String methodName, int arity) {
-        return new CallNode(className, methodName, arity, null, 0, true, false, false, 0);
+        return new CallNode(className, methodName, arity, null, 0, true, false, false, 0, false);
     }
 
     /**
@@ -61,7 +63,7 @@ public final class CallNode {
      * serialize safely".
      */
     public static CallNode depthMarker(String className, String methodName, int arity) {
-        return new CallNode(className, methodName, arity, null, 0, false, true, false, 0);
+        return new CallNode(className, methodName, arity, null, 0, false, true, false, 0, false);
     }
 
     /**
@@ -76,7 +78,19 @@ public final class CallNode {
      */
     public static CallNode fanoutMarker(String className, String methodName,
                                         int arity, int hiddenCount) {
-        return new CallNode(className, methodName, arity, null, 0, false, false, true, hiddenCount);
+        return new CallNode(className, methodName, arity, null, 0, false, false, true, hiddenCount, false);
+    }
+
+    /**
+     * Builds a marker for a method that already appears as a full node
+     * elsewhere in the tree (a diamond). The marker carries the method's
+     * identity and declaration location so a reader can navigate to it,
+     * but no callers subtree — keeping the tree compact when popular
+     * upstream methods are reached via many paths.
+     */
+    public static CallNode dedupedMarker(String className, String methodName, int arity,
+                                         String file, int line) {
+        return new CallNode(className, methodName, arity, file, line, false, false, false, 0, true);
     }
 
     public CallNode addChild(CallNode child) {
@@ -88,9 +102,12 @@ public final class CallNode {
      * Serialize to a JSON-shaped map. Iterative (not recursive) so deep call
      * chains — up to {@code MAX_NODES} — don't blow the JVM stack.
      *
-     * <p>Each occurrence of a {@code CallNode} in the tree becomes its own
-     * map: the same method reached via two paths produces two distinct maps,
-     * matching the prior recursive semantics.
+     * <p>Each unique method appears at most once as a full node; subsequent
+     * occurrences (diamonds — the same method reached via two different
+     * parents) become a {@code "deduped": true} marker carrying the method's
+     * identity and declaration location but no callers subtree. This keeps
+     * the tree compact for popular upstream methods without losing the
+     * signal that the method is reached from multiple paths.
      */
     public Map<String, Object> toJson() {
         Map<String, Object> rootMap = new LinkedHashMap<>();
@@ -107,7 +124,7 @@ public final class CallNode {
             if (f.node.cycle) f.map.put("cycle", true);
             if (f.node.truncated) f.map.put("truncated", true);
             if (f.node.fanoutTruncated) f.map.put("truncatedCallers", f.node.hiddenCallerCount);
-            if (f.node.callers.isEmpty()) continue;
+            if (f.node.deduped) f.map.put("deduped", true);
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
             for (CallNode c : f.node.callers) {
@@ -115,7 +132,11 @@ public final class CallNode {
                 kids.add(childMap);
                 childFrames.add(new Frame(c, childMap));
             }
+            // Always emit the callers key — even as [] for leaves — so
+            // downstream consumers can iterate `obj.callers` uniformly
+            // instead of branching on "missing vs empty array".
             f.map.put("callers", kids);
+            if (childFrames.isEmpty()) continue;
             // Push children in reverse so they're processed in source order.
             for (int i = childFrames.size() - 1; i >= 0; i--) {
                 stack.push(childFrames.get(i));

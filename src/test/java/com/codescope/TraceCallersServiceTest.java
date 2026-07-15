@@ -181,6 +181,202 @@ class TraceCallersServiceTest {
                 "expected 'boolean' in error message, got: " + ex.getMessage());
     }
 
+    @Test
+    void leafNodeEmitsEmptyCallersArray() throws Exception {
+        // Regression: CallNode.toJson() used to skip the "callers" key
+        // entirely for nodes with no callers, producing inconsistent JSON
+        // (some nodes carry the key, some don't). For a leaf target the
+        // top-level "target.callers" must be an empty array, not missing —
+        // otherwise downstream consumers that iterate `obj.callers` or
+        // serialize the envelope can't tell "0 callers" from "schema bug".
+        TraceCallersService svc = new TraceCallersService();
+        String json = svc.traceCallersJson("com.example.Mid", "unrelated",
+                null, null, FIXTURE, false, false);
+        JsonNode tree = new ObjectMapper().readTree(json);
+        JsonNode target = tree.path("target");
+        assertEquals("com.example.Mid", target.path("class").asText());
+        assertTrue(target.path("callers").isArray(),
+                "leaf target's callers must be an array (was missing?), got: "
+                        + target.path("callers"));
+        assertEquals(0, target.path("callers").size(),
+                "leaf target should have 0 callers, got: " + target.path("callers"));
+    }
+
+    @Test
+    void callerCountReportsUniqueMethodsAcrossDiamondPaths() throws Exception {
+        // Regression: the "OK; N caller(s) in chain" message used to
+        // increment a counter for every addChild, so a diamond (one
+        // method reached via two different parents) inflated the count
+        // by the number of paths. The contract is "unique caller methods
+        // in the chain", matching how FindCallSitesService reports its
+        // union of caller keys.
+        //
+        // Build a self-contained fixture with this graph rooted at
+        // DiamondTop.go:
+        //   DiamondTop.go -> DiamondLeft.x  -> DiamondTarget.leaf
+        //   DiamondTop.go -> DiamondRight.y -> DiamondTarget.leaf
+        // Unique callers of DiamondTarget.leaf in this chain = 3
+        // (Left, Right, Top). Per-path adds = 4 (Left, Right, Top, Top).
+        Path tmp = Files.createTempDirectory("codescope-diamond-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTarget.java"), """
+                    package com.example;
+                    public class DiamondTarget {
+                        public void leaf() { System.out.println("d"); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondLeft.java"), """
+                    package com.example;
+                    public class DiamondLeft {
+                        public void x() { new DiamondTarget().leaf(); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondRight.java"), """
+                    package com.example;
+                    public class DiamondRight {
+                        public void y() { new DiamondTarget().leaf(); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTop.java"), """
+                    package com.example;
+                    public class DiamondTop {
+                        public void go() {
+                            new DiamondLeft().x();
+                            new DiamondRight().y();
+                        }
+                    }
+                    """);
+
+            TraceCallersService svc = new TraceCallersService();
+            String json = svc.traceCallersJson("com.example.DiamondTarget", "leaf",
+                    null, null, tmp, true, false);
+            JsonNode tree = new ObjectMapper().readTree(json);
+            JsonNode target = tree.path("target");
+
+            // The visible tree preserves the diamond: 2 direct callers
+            // (Left, Right) at depth 1, and DiamondTop.go converges on
+            // them at depth 2 — appearing as a child of both.
+            assertEquals(2, target.path("callers").size(),
+                    "expected 2 direct callers, got: " + target.path("callers"));
+
+            int topCount = 0;
+            for (JsonNode c1 : target.path("callers")) {
+                JsonNode innerCallers = c1.path("callers");
+                assertTrue(innerCallers.size() > 0,
+                        "c1 " + c1.path("class").asText() + " should have callers, got: " + innerCallers);
+                for (JsonNode c2 : innerCallers) {
+                    if ("com.example.DiamondTop".equals(c2.path("class").asText())
+                            && "go".equals(c2.path("method").asText())) topCount++;
+                }
+            }
+            assertEquals(2, topCount,
+                    "DiamondTop.go should converge from both Left and Right, appeared "
+                            + topCount + " times");
+
+            // The summary must say 3 (unique), not 4 (raw path-adds).
+            String message = tree.path("message").asText();
+            assertTrue(message.contains("3 caller(s)"),
+                    "message should report 3 unique callers, got: " + message);
+            assertFalse(message.contains("4 caller(s)"),
+                    "message must not use the per-path-add count, got: " + message);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
+    void diamondFoldsIntoDedupedMarker() throws Exception {
+        // Regression: a method reachable from the target via two
+        // different parents (a diamond) used to appear as two full
+        // copies in the tree, doubling the output size for any popular
+        // upstream. The tree now folds the second occurrence into a
+        // "deduped" marker — same class/method/arity/signature plus
+        // the method's declaration location, but no callers subtree —
+        // so consumers still see "this method is reached from
+        // multiple paths" without paying the size cost twice.
+        Path tmp = Files.createTempDirectory("codescope-dedup-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTarget.java"), """
+                    package com.example;
+                    public class DiamondTarget {
+                        public void leaf() { System.out.println("d"); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondLeft.java"), """
+                    package com.example;
+                    public class DiamondLeft {
+                        public void x() { new DiamondTarget().leaf(); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondRight.java"), """
+                    package com.example;
+                    public class DiamondRight {
+                        public void y() { new DiamondTarget().leaf(); }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTop.java"), """
+                    package com.example;
+                    public class DiamondTop {
+                        public void go() {
+                            new DiamondLeft().x();
+                            new DiamondRight().y();
+                        }
+                    }
+                    """);
+
+            TraceCallersService svc = new TraceCallersService();
+            String json = svc.traceCallersJson("com.example.DiamondTarget", "leaf",
+                    null, null, tmp, true, false);
+            JsonNode tree = new ObjectMapper().readTree(json);
+            JsonNode target = tree.path("target");
+            assertEquals(2, target.path("callers").size(),
+                    "expected 2 direct callers, got: " + target.path("callers"));
+
+            int fullCount = 0;
+            int dedupedCount = 0;
+            for (JsonNode c1 : target.path("callers")) {
+                for (JsonNode c2 : c1.path("callers")) {
+                    if (!"com.example.DiamondTop".equals(c2.path("class").asText())
+                            || !"go".equals(c2.path("method").asText())) continue;
+                    if (c2.path("deduped").asBoolean(false)) dedupedCount++;
+                    else fullCount++;
+                }
+            }
+            assertEquals(1, fullCount,
+                    "DiamondTop.go should appear exactly once as a full node, got: "
+                            + fullCount);
+            assertEquals(1, dedupedCount,
+                    "DiamondTop.go should appear exactly once as a deduped marker, got: "
+                            + dedupedCount);
+
+            // The deduped marker must still carry enough identity to be
+            // useful: class, method, arity, signature, and the method's
+            // declaration location so a reader can jump to it.
+            for (JsonNode c1 : target.path("callers")) {
+                for (JsonNode c2 : c1.path("callers")) {
+                    if (!c2.path("deduped").asBoolean(false)) continue;
+                    assertEquals("com.example.DiamondTop", c2.path("class").asText());
+                    assertEquals("go", c2.path("method").asText());
+                    assertTrue(c2.path("file").asText().contains("DiamondTop"),
+                            "deduped marker should carry the method's declaration file, got: "
+                                    + c2);
+                    assertTrue(c2.path("line").asInt() > 0,
+                            "deduped marker should carry the method's declaration line, got: "
+                                    + c2);
+                    assertTrue(c2.path("callers").isArray(),
+                            "deduped marker must still emit callers as [] for uniform iteration, got: "
+                                    + c2);
+                    assertEquals(0, c2.path("callers").size(),
+                            "deduped marker has no subtree, got: " + c2);
+                }
+            }
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
     // --- helpers ---
 
     private static void copyDir(Path src, Path dst) throws java.io.IOException {

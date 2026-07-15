@@ -137,8 +137,10 @@ class CallChainAnalyzerTest {
 
         CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, uncalled);
         assertTrue(r.found());
-        // nothing calls unrelated()
-        assertNull(r.root().toJson().get("callers"));
+        // nothing calls unrelated(); the callers key is always present
+        // (empty array for leaves) so downstream consumers can iterate it
+        // uniformly instead of branching on "missing vs empty".
+        assertEquals(List.of(), r.root().toJson().get("callers"));
     }
 
     @Test

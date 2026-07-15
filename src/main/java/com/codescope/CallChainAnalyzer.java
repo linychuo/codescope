@@ -70,7 +70,22 @@ public final class CallChainAnalyzer {
         }
 
         int nodes = 1;
-        int callerCount = 0;
+        // Count unique caller methods rather than per-path adds. A diamond
+        // (one method reachable via two parents) appears as a child in both
+        // subtrees; the tree preserves that for navigation, but the summary
+        // count should be the number of distinct caller methods, matching
+        // what FindCallSitesService reports for its caller-method union.
+        Set<MethodKey> uniqueCallers = new HashSet<>();
+        // Track every method already added as a full node anywhere in the
+        // tree. When the BFS encounters the same method again from a
+        // different parent (a diamond), we insert a deduped marker instead
+        // of a second full subtree — the marker's JSON carries the
+        // method's identity and declaration location, but no callers
+        // subtree, so the output stays compact for popular upstream
+        // methods. Per-path ancestor and same-parent dedup checks above
+        // (cycleMarker, directCallersSeen, localCallersSeen) are
+        // unchanged; this set operates strictly *after* them.
+        Set<MethodKey> seenInTree = new HashSet<>();
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
             // depth cap: see MAX_DEPTH javadoc.
@@ -118,6 +133,20 @@ public final class CallChainAnalyzer {
                     // of this frame.
                     if (!f.localCallersSeen.add(caller)) continue;
                     if (!collected.add(caller)) continue;
+                    // Diamond: same method reached via another path is a real
+                    // caller on this branch, but its full subtree is already
+                    // attached to the first occurrence. Insert a compact
+                    // marker so the reader still sees "this method is
+                    // reached from here" without paying the subtree cost
+                    // again.
+                    if (!seenInTree.add(caller)) {
+                        ProjectIndex.SourceLoc dedupLoc = index.declarationOf(caller);
+                        f.node.addChild(CallNode.dedupedMarker(
+                                caller.declaringClass, caller.methodName, caller.arity,
+                                dedupLoc != null ? dedupLoc.file() : null,
+                                dedupLoc != null ? dedupLoc.line() : 0));
+                        continue;
+                    }
 
                     ProjectIndex.SourceLoc loc = index.declarationOf(caller);
                     CallNode child = new CallNode(
@@ -133,7 +162,7 @@ public final class CallChainAnalyzer {
                     childAncestors.addAll(f.ancestors);
                     queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
                     nodes++;
-                    callerCount++;
+                    uniqueCallers.add(caller);
                     if (nodes > MAX_NODES) {
                         return new Result(root, true,
                                 "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
@@ -146,14 +175,14 @@ public final class CallChainAnalyzer {
                         f.key.declaringClass, f.key.methodName, f.key.arity, hidden));
             }
         }
-        if (callerCount == 0) {
+        if (uniqueCallers.isEmpty()) {
             return new Result(root, true,
                     "No callers found for '" + displayTarget.declaringClass + "#"
                             + displayTarget.methodName + "/" + displayTarget.arity
                             + "' in this project's sources. Verify the FQN and method name; "
                             + "if the method is a library method, it may simply not be called here.");
         }
-        return new Result(root, true, "OK; " + callerCount + " caller(s) in chain.");
+        return new Result(root, true, "OK; " + uniqueCallers.size() + " caller(s) in chain.");
     }
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
