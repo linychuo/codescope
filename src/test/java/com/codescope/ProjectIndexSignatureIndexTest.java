@@ -10,11 +10,13 @@ import static org.junit.jupiter.api.Assertions.*;
  * Verifies the write-through (name, arity) signature index on
  * {@link ProjectIndex}. The index is populated by
  * {@link ProjectIndex#putDeclaration} and queried by
- * {@link ProjectIndex#methodsWithSignature}, so the post-build
- * reverse-hierarchy repair pass can find same-named, same-arity
- * candidates in O(1) per signature lookup instead of an O(N)
- * full-scan of {@link ProjectIndex#knownMethods()} per subtype
- * (issue #6).
+ * {@link ProjectIndex#methodsWithSignature} (all candidates with a
+ * signature) and {@link ProjectIndex#methodInClassWithSignature}
+ * (the candidate in a specific class). The per-class lookup lets
+ * the post-build reverse-hierarchy repair pass find a single
+ * declaration in O(1) instead of re-scanning the entire signature
+ * bucket per subtype, which was the build-phase bottleneck for
+ * large projects (issue #6).
  */
 class ProjectIndexSignatureIndexTest {
 
@@ -96,5 +98,43 @@ class ProjectIndexSignatureIndexTest {
         idx.putDeclaration(m, new ProjectIndex.SourceLoc("A.java", 10));
         idx.putDeclaration(m, new ProjectIndex.SourceLoc("A.java", 99));
         assertEquals(1, idx.methodsWithSignature("save", 1).size());
+    }
+
+    @Test
+    void methodInClassWithSignatureReturnsTheDeclarationInThatClass() {
+        ProjectIndex idx = new ProjectIndex();
+        MethodKey a = mk("com.example.A", "save", 1);
+        MethodKey b = mk("com.example.B", "save", 1);
+        idx.putDeclaration(a, new ProjectIndex.SourceLoc("A.java", 10));
+        idx.putDeclaration(b, new ProjectIndex.SourceLoc("B.java", 20));
+
+        assertSame(a, idx.methodInClassWithSignature("com.example.A", "save", 1));
+        assertSame(b, idx.methodInClassWithSignature("com.example.B", "save", 1));
+    }
+
+    @Test
+    void methodInClassWithSignatureReturnsNullWhenClassHasNoSuchDeclaration() {
+        ProjectIndex idx = new ProjectIndex();
+        idx.putDeclaration(mk("com.example.A", "save", 1),
+                new ProjectIndex.SourceLoc("A.java", 10));
+        assertNull(idx.methodInClassWithSignature("com.example.B", "save", 1),
+                "B has no declaration with this signature; must be null, not a cross-class match");
+    }
+
+    @Test
+    void methodInClassWithSignatureReturnsNullWhenArityMismatch() {
+        ProjectIndex idx = new ProjectIndex();
+        idx.putDeclaration(mk("com.example.A", "save", 1),
+                new ProjectIndex.SourceLoc("A.java", 10));
+        assertNull(idx.methodInClassWithSignature("com.example.A", "save", 2));
+    }
+
+    @Test
+    void methodInClassWithSignatureReturnsNullOnNullArgs() {
+        ProjectIndex idx = new ProjectIndex();
+        idx.putDeclaration(mk("com.example.A", "save", 1),
+                new ProjectIndex.SourceLoc("A.java", 10));
+        assertNull(idx.methodInClassWithSignature(null, "save", 1));
+        assertNull(idx.methodInClassWithSignature("com.example.A", null, 1));
     }
 }

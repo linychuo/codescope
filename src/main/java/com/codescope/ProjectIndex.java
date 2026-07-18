@@ -88,13 +88,13 @@ public final class ProjectIndex {
     // visit(AnnotationTypeDeclaration) — see recordTypeHierarchy there.
     private final Map<String, Set<String>> typeHierarchy = new ConcurrentHashMap<>();
     // Signature index: for each (methodName, arity) pair, the set of
-    // declared MethodKeys in the project with that signature. Lets the
-    // post-build reverse-hierarchy repair pass find same-named,
+    // declared MethodKeys in the project with that signature. Used by the
+    // post-build reverse-hierarchy repair pass to find same-named,
     // same-arity candidates in O(1) per signature lookup instead of an
-    // O(N) full-scan of {@link #knownMethods()} per subtype, which was
-    // the build-phase bottleneck for large projects (issue #6).
+    // O(N) full-scan of {@link #knownMethods()} per subtype — that full
+    // scan was the build-phase bottleneck for large projects (issue #6).
     // Populated write-through at {@link #putDeclaration}.
-    private final Map<NameArity, Set<MethodKey>> bySignature = new ConcurrentHashMap<>();
+    private final Map<NameArity, Map<String, MethodKey>> bySignature = new ConcurrentHashMap<>();
 
     // Composite key for {@link #bySignature}. Package-private so the
     // test suite can construct it directly if ever needed; not part of
@@ -173,8 +173,8 @@ public final class ProjectIndex {
         declarations.putIfAbsent(method, loc);
         bySignature
                 .computeIfAbsent(new NameArity(method.methodName, method.arity),
-                        k -> ConcurrentHashMap.newKeySet())
-                .add(method);
+                        k -> new ConcurrentHashMap<>())
+                .put(method.declaringClass, method);
     }
 
     /**
@@ -428,22 +428,35 @@ public final class ProjectIndex {
      * classes in the project. Returns an empty set if no project
      * declaration matches or {@code methodName} is null.
      *
-     * <p>Used by the post-build reverse-hierarchy repair pass to find
-     * same-named, same-arity candidates in O(1) per signature lookup
-     * (replaces an O(N) full-scan of {@link #knownMethods()} per
-     * subtype, which was the build-phase bottleneck for large projects
-     * — see issue #6).
-     *
-     * <p>The returned set is the live index set, not a defensive
-     * snapshot. Read-only iteration is safe under the indexer's
-     * concurrent writes because the underlying map is a
-     * {@link ConcurrentHashMap}. Callers must not mutate the returned
-     * set.
+     * <p>The returned set is a live view backed by a
+     * {@link ConcurrentHashMap}; read-only iteration is safe under the
+     * indexer's concurrent writes, but callers must not mutate it. For
+     * "give me the method in this specific class", use
+     * {@link #methodInClassWithSignature} instead — it avoids the
+     * bucket scan this method requires.
      */
     public Set<MethodKey> methodsWithSignature(String methodName, int arity) {
         if (methodName == null) return Set.of();
-        Set<MethodKey> set = bySignature.get(new NameArity(methodName, arity));
-        return set == null ? Set.of() : set;
+        Map<String, MethodKey> bucket = bySignature.get(new NameArity(methodName, arity));
+        return bucket == null ? Set.of() : Set.copyOf(bucket.values());
+    }
+
+    /**
+     * Returns the declared MethodKey in {@code className} with the given
+     * signature, or null if the project has no such declaration.
+     * Equivalent to filtering {@link #methodsWithSignature} by declaring
+     * class, but a single {@link ConcurrentHashMap#get(Object)} instead
+     * of a full signature-bucket scan — important for the post-build
+     * reverse-hierarchy repair pass, where each subtype visit would
+     * otherwise re-iterate the entire signature set (e.g. all
+     * {@code equals(Object)} or {@code hashCode()} declarations across
+     * the project, which is the build-phase bottleneck for large
+     * projects).
+     */
+    public MethodKey methodInClassWithSignature(String className, String methodName, int arity) {
+        if (className == null || methodName == null) return null;
+        Map<String, MethodKey> bucket = bySignature.get(new NameArity(methodName, arity));
+        return bucket == null ? null : bucket.get(className);
     }
 
     /**

@@ -170,15 +170,14 @@ public final class JdtIndexer {
                 if (subs == null) continue;
                 for (String sub : subs) {
                     if (!visited.add(sub)) continue;
-                    for (MethodKey candidate : index.methodsWithSignature(m.methodName, m.arity)) {
-                        if (!candidate.declaringClass.equals(sub)) continue;
-                        int cMods = index.modifiersOf(candidate);
-                        if (cMods == 0) continue;
-                        if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
-                        if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
-                        index.recordHierarchy(m, candidate);
-                    }
                     queue.addLast(sub);
+                    MethodKey candidate = index.methodInClassWithSignature(sub, m.methodName, m.arity);
+                    if (candidate == null) continue;
+                    int cMods = index.modifiersOf(candidate);
+                    if (cMods == 0) continue;
+                    if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
+                    if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
+                    index.recordHierarchy(m, candidate);
                 }
             }
         }

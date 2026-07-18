@@ -70,21 +70,10 @@ public final class CallChainAnalyzer {
         }
 
         int nodes = 1;
-        // Count unique caller methods rather than per-path adds. A diamond
-        // (one method reachable via two parents) appears as a child in both
-        // subtrees; the tree preserves that for navigation, but the summary
-        // count should be the number of distinct caller methods, matching
-        // what FindCallSitesService reports for its caller-method union.
-        Set<MethodKey> uniqueCallers = new HashSet<>();
-        // Track every method already added as a full node anywhere in the
-        // tree. When the BFS encounters the same method again from a
-        // different parent (a diamond), we insert a deduped marker instead
-        // of a second full subtree — the marker's JSON carries the
-        // method's identity and declaration location, but no callers
-        // subtree, so the output stays compact for popular upstream
-        // methods. Per-path ancestor and same-parent dedup checks above
-        // (cycleMarker, directCallersSeen, localCallersSeen) are
-        // unchanged; this set operates strictly *after* them.
+        // Tree-wide dedup for the diamond case: the first time a method
+        // appears as a full child, attach its subtree; subsequent
+        // occurrences (the same method reached via a different parent)
+        // become a compact dedupedMarker instead of a second subtree.
         Set<MethodKey> seenInTree = new HashSet<>();
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
@@ -133,12 +122,6 @@ public final class CallChainAnalyzer {
                     // of this frame.
                     if (!f.localCallersSeen.add(caller)) continue;
                     if (!collected.add(caller)) continue;
-                    // Diamond: same method reached via another path is a real
-                    // caller on this branch, but its full subtree is already
-                    // attached to the first occurrence. Insert a compact
-                    // marker so the reader still sees "this method is
-                    // reached from here" without paying the subtree cost
-                    // again.
                     if (!seenInTree.add(caller)) {
                         ProjectIndex.SourceLoc dedupLoc = index.declarationOf(caller);
                         f.node.addChild(CallNode.dedupedMarker(
@@ -154,15 +137,14 @@ public final class CallChainAnalyzer {
                             loc != null ? loc.file() : null,
                             loc != null ? loc.line() : 0);
                     f.node.addChild(child);
-                    // Diamond: same method reached via another path is a real
-                    // caller on this branch. We add `caller` to the ancestors of
-                    // *its* descendants, not to its own ancestors.
+                    // Add `caller` to its descendants' ancestors so a
+                    // reachable back-edge through `caller` becomes a
+                    // cycle marker, not a second subtree.
                     Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
                     childAncestors.add(caller);
                     childAncestors.addAll(f.ancestors);
                     queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
                     nodes++;
-                    uniqueCallers.add(caller);
                     if (nodes > MAX_NODES) {
                         return new Result(root, true,
                                 "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
@@ -175,14 +157,14 @@ public final class CallChainAnalyzer {
                         f.key.declaringClass, f.key.methodName, f.key.arity, hidden));
             }
         }
-        if (uniqueCallers.isEmpty()) {
+        if (seenInTree.isEmpty()) {
             return new Result(root, true,
                     "No callers found for '" + displayTarget.declaringClass + "#"
                             + displayTarget.methodName + "/" + displayTarget.arity
                             + "' in this project's sources. Verify the FQN and method name; "
                             + "if the method is a library method, it may simply not be called here.");
         }
-        return new Result(root, true, "OK; " + uniqueCallers.size() + " caller(s) in chain.");
+        return new Result(root, true, "OK; " + seenInTree.size() + " caller(s) in chain.");
     }
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
