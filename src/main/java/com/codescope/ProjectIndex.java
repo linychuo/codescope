@@ -96,9 +96,7 @@ public final class ProjectIndex {
     // Populated write-through at {@link #putDeclaration}.
     private final Map<NameArity, Map<String, MethodKey>> bySignature = new ConcurrentHashMap<>();
 
-    // Composite key for {@link #bySignature}. Package-private so the
-    // test suite can construct it directly if ever needed; not part of
-    // the public API.
+    // Composite key for {@link #bySignature}. Package-private; not part of the public API.
     record NameArity(String name, int arity) {}
 
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
@@ -423,15 +421,15 @@ public final class ProjectIndex {
     }
 
     /**
-     * Returns the set of declared MethodKeys whose {@code methodName}
-     * and {@code arity} match the given signature, across all declaring
-     * classes in the project. Returns an empty set if no project
-     * declaration matches or {@code methodName} is null.
+     * Returns a defensive snapshot of declared MethodKeys whose
+     * {@code methodName} and {@code arity} match the given signature,
+     * across all declaring classes in the project. Returns an empty
+     * set if no project declaration matches or {@code methodName} is
+     * null.
      *
-     * <p>The returned set is a live view backed by a
-     * {@link ConcurrentHashMap}; read-only iteration is safe under the
-     * indexer's concurrent writes, but callers must not mutate it. For
-     * "give me the method in this specific class", use
+     * <p>The snapshot is decoupled from the index, so callers can
+     * iterate freely without seeing concurrent writes from the
+     * indexer. For "give me the method in this specific class", use
      * {@link #methodInClassWithSignature} instead — it avoids the
      * bucket scan this method requires.
      */

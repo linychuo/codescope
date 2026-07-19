@@ -217,37 +217,8 @@ class TraceCallersServiceTest {
         //   DiamondTop.go -> DiamondRight.y -> DiamondTarget.leaf
         // Unique callers of DiamondTarget.leaf in this chain = 3
         // (Left, Right, Top). Per-path adds = 4 (Left, Right, Top, Top).
-        Path tmp = Files.createTempDirectory("codescope-diamond-");
+        Path tmp = makeDiamondFixture("codescope-diamond-");
         try {
-            copyDir(FIXTURE, tmp);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTarget.java"), """
-                    package com.example;
-                    public class DiamondTarget {
-                        public void leaf() { System.out.println("d"); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondLeft.java"), """
-                    package com.example;
-                    public class DiamondLeft {
-                        public void x() { new DiamondTarget().leaf(); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondRight.java"), """
-                    package com.example;
-                    public class DiamondRight {
-                        public void y() { new DiamondTarget().leaf(); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTop.java"), """
-                    package com.example;
-                    public class DiamondTop {
-                        public void go() {
-                            new DiamondLeft().x();
-                            new DiamondRight().y();
-                        }
-                    }
-                    """);
-
             TraceCallersService svc = new TraceCallersService();
             String json = svc.traceCallersJson("com.example.DiamondTarget", "leaf",
                     null, null, tmp, true, false);
@@ -295,37 +266,8 @@ class TraceCallersServiceTest {
         // the method's declaration location, but no callers subtree —
         // so consumers still see "this method is reached from
         // multiple paths" without paying the size cost twice.
-        Path tmp = Files.createTempDirectory("codescope-dedup-");
+        Path tmp = makeDiamondFixture("codescope-dedup-");
         try {
-            copyDir(FIXTURE, tmp);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTarget.java"), """
-                    package com.example;
-                    public class DiamondTarget {
-                        public void leaf() { System.out.println("d"); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondLeft.java"), """
-                    package com.example;
-                    public class DiamondLeft {
-                        public void x() { new DiamondTarget().leaf(); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondRight.java"), """
-                    package com.example;
-                    public class DiamondRight {
-                        public void y() { new DiamondTarget().leaf(); }
-                    }
-                    """);
-            Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTop.java"), """
-                    package com.example;
-                    public class DiamondTop {
-                        public void go() {
-                            new DiamondLeft().x();
-                            new DiamondRight().y();
-                        }
-                    }
-                    """);
-
             TraceCallersService svc = new TraceCallersService();
             String json = svc.traceCallersJson("com.example.DiamondTarget", "leaf",
                     null, null, tmp, true, false);
@@ -378,6 +320,47 @@ class TraceCallersServiceTest {
     }
 
     // --- helpers ---
+
+    /**
+     * Builds a temp directory containing the standard fixture plus the
+     * 4-class diamond graph:
+     *   DiamondTop.go -> DiamondLeft.x  -> DiamondTarget.leaf
+     *   DiamondTop.go -> DiamondRight.y -> DiamondTarget.leaf
+     * Both diamond tests share this fixture; unique callers of
+     * DiamondTarget.leaf in the chain are {Left, Right, Top} = 3.
+     */
+    private static Path makeDiamondFixture(String tmpPrefix) throws java.io.IOException {
+        Path tmp = Files.createTempDirectory(tmpPrefix);
+        copyDir(FIXTURE, tmp);
+        Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTarget.java"), """
+                package com.example;
+                public class DiamondTarget {
+                    public void leaf() { System.out.println("d"); }
+                }
+                """);
+        Files.writeString(tmp.resolve("src/main/java/com/example/DiamondLeft.java"), """
+                package com.example;
+                public class DiamondLeft {
+                    public void x() { new DiamondTarget().leaf(); }
+                }
+                """);
+        Files.writeString(tmp.resolve("src/main/java/com/example/DiamondRight.java"), """
+                package com.example;
+                public class DiamondRight {
+                    public void y() { new DiamondTarget().leaf(); }
+                }
+                """);
+        Files.writeString(tmp.resolve("src/main/java/com/example/DiamondTop.java"), """
+                package com.example;
+                public class DiamondTop {
+                    public void go() {
+                        new DiamondLeft().x();
+                        new DiamondRight().y();
+                    }
+                }
+                """);
+        return tmp;
+    }
 
     private static void copyDir(Path src, Path dst) throws java.io.IOException {
         try (var s = Files.walk(src)) {

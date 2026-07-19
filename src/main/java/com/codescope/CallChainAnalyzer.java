@@ -70,10 +70,10 @@ public final class CallChainAnalyzer {
         }
 
         int nodes = 1;
-        // Tree-wide dedup for the diamond case: the first time a method
-        // appears as a full child, attach its subtree; subsequent
-        // occurrences (the same method reached via a different parent)
-        // become a compact dedupedMarker instead of a second subtree.
+        // Per-frame dedup (localCallersSeen / collected) doesn't cover the
+        // diamond case where one method is reached via two parents; this
+        // set tracks tree-wide so the second occurrence becomes a
+        // dedupedMarker instead of a duplicate subtree.
         Set<MethodKey> seenInTree = new HashSet<>();
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
@@ -122,20 +122,12 @@ public final class CallChainAnalyzer {
                     // of this frame.
                     if (!f.localCallersSeen.add(caller)) continue;
                     if (!collected.add(caller)) continue;
+                    ProjectIndex.SourceLoc loc = index.declarationOf(caller);
                     if (!seenInTree.add(caller)) {
-                        ProjectIndex.SourceLoc dedupLoc = index.declarationOf(caller);
-                        f.node.addChild(CallNode.dedupedMarker(
-                                caller.declaringClass, caller.methodName, caller.arity,
-                                dedupLoc != null ? dedupLoc.file() : null,
-                                dedupLoc != null ? dedupLoc.line() : 0));
+                        f.node.addChild(buildCallerNode(caller, loc, true));
                         continue;
                     }
-
-                    ProjectIndex.SourceLoc loc = index.declarationOf(caller);
-                    CallNode child = new CallNode(
-                            caller.declaringClass, caller.methodName, caller.arity,
-                            loc != null ? loc.file() : null,
-                            loc != null ? loc.line() : 0);
+                    CallNode child = buildCallerNode(caller, loc, false);
                     f.node.addChild(child);
                     // Add `caller` to its descendants' ancestors so a
                     // reachable back-edge through `caller` becomes a
@@ -174,6 +166,21 @@ public final class CallChainAnalyzer {
                   int depth, boolean isRoot) {
             this(key, node, ancestors, depth, isRoot, new HashSet<>());
         }
+    }
+
+    /**
+     * Builds a child node for {@code caller}: a full subtree node, or a
+     * {@code dedupedMarker} when {@code deduped} is true (the method
+     * already appears elsewhere in the tree). Both shapes carry the
+     * method's declaration location, or {@code (null, 0)} if undeclared.
+     */
+    private static CallNode buildCallerNode(MethodKey caller,
+                                            ProjectIndex.SourceLoc loc, boolean deduped) {
+        String file = loc == null ? null : loc.file();
+        int line = loc == null ? 0 : loc.line();
+        return deduped
+                ? CallNode.dedupedMarker(caller.declaringClass, caller.methodName, caller.arity, file, line)
+                : new CallNode(caller.declaringClass, caller.methodName, caller.arity, file, line);
     }
 
     /** Safety cap on tree size; configurable per-tool-call later. */
