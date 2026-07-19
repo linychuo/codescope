@@ -171,13 +171,15 @@ public final class JdtIndexer {
                 for (String sub : subs) {
                     if (!visited.add(sub)) continue;
                     queue.addLast(sub);
-                    MethodKey candidate = index.methodInClassWithSignature(sub, m.methodName, m.arity);
-                    if (candidate == null) continue;
-                    int cMods = index.modifiersOf(candidate);
-                    if (cMods == 0) continue;
-                    if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
-                    if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
-                    index.recordHierarchy(m, candidate);
+                    java.util.Set<MethodKey> candidates = index.methodsInClassWithSignature(sub, m.methodName, m.arity);
+                    if (candidates.isEmpty()) continue;
+                    for (MethodKey candidate : candidates) {
+                        int cMods = index.modifiersOf(candidate);
+                        if (cMods == 0) continue;
+                        if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
+                        if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
+                        index.recordHierarchy(m, candidate);
+                    }
                 }
             }
         }

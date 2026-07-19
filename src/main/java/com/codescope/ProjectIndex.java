@@ -87,14 +87,17 @@ public final class ProjectIndex {
     // and visit(EnumDeclaration) / visit(RecordDeclaration) /
     // visit(AnnotationTypeDeclaration) — see recordTypeHierarchy there.
     private final Map<String, Set<String>> typeHierarchy = new ConcurrentHashMap<>();
-    // Signature index: for each (methodName, arity) pair, the set of
-    // declared MethodKeys in the project with that signature. Used by the
-    // post-build reverse-hierarchy repair pass to find same-named,
-    // same-arity candidates in O(1) per signature lookup instead of an
-    // O(N) full-scan of {@link #knownMethods()} per subtype — that full
-    // scan was the build-phase bottleneck for large projects (issue #6).
-    // Populated write-through at {@link #putDeclaration}.
-    private final Map<NameArity, Map<String, MethodKey>> bySignature = new ConcurrentHashMap<>();
+    // Signature index: for each (methodName, arity) pair, the inner
+    // map groups Java overloads by their declaring class (a class may
+    // declare save(String) and save(int) under the same (name, arity)
+    // key, and both must be reachable as override candidates for the
+    // post-build reverse-hierarchy repair pass). Used by the repair
+    // pass to find same-named, same-arity candidates in O(1) per
+    // signature lookup instead of an O(N) full-scan of
+    // {@link #knownMethods()} per subtype — that full scan was the
+    // build-phase bottleneck for large projects (issue #6). Populated
+    // write-through at {@link #putDeclaration}.
+    private final Map<NameArity, Map<String, Set<MethodKey>>> bySignature = new ConcurrentHashMap<>();
 
     // Composite key for {@link #bySignature}. Package-private; not part of the public API.
     record NameArity(String name, int arity) {}
@@ -172,7 +175,8 @@ public final class ProjectIndex {
         bySignature
                 .computeIfAbsent(new NameArity(method.methodName, method.arity),
                         k -> new ConcurrentHashMap<>())
-                .put(method.declaringClass, method);
+                .computeIfAbsent(method.declaringClass, k -> ConcurrentHashMap.newKeySet())
+                .add(method);
     }
 
     /**
@@ -423,38 +427,83 @@ public final class ProjectIndex {
     /**
      * Returns a defensive snapshot of declared MethodKeys whose
      * {@code methodName} and {@code arity} match the given signature,
-     * across all declaring classes in the project. Returns an empty
-     * set if no project declaration matches or {@code methodName} is
-     * null.
+     * across all declaring classes and overloads in the project.
+     * Returns an empty set if no project declaration matches or
+     * {@code methodName} is null.
      *
      * <p>The snapshot is decoupled from the index, so callers can
      * iterate freely without seeing concurrent writes from the
-     * indexer. For "give me the method in this specific class", use
-     * {@link #methodInClassWithSignature} instead — it avoids the
+     * indexer. A single declaring class may have multiple Java
+     * overloads sharing the same (name, arity) — all are returned.
+     * For "give me the method in this specific class", use
+     * {@link #methodInClassWithSignature} or
+     * {@link #methodsInClassWithSignature} instead — they avoid the
      * bucket scan this method requires.
      */
     public Set<MethodKey> methodsWithSignature(String methodName, int arity) {
         if (methodName == null) return Set.of();
-        Map<String, MethodKey> bucket = bySignature.get(new NameArity(methodName, arity));
-        return bucket == null ? Set.of() : Set.copyOf(bucket.values());
+        Map<String, Set<MethodKey>> bucket = bySignature.get(new NameArity(methodName, arity));
+        if (bucket == null) return Set.of();
+        Set<MethodKey> all = new java.util.HashSet<>();
+        for (Set<MethodKey> overloads : bucket.values()) {
+            all.addAll(overloads);
+        }
+        return Set.copyOf(all);
     }
 
     /**
-     * Returns the declared MethodKey in {@code className} with the given
-     * signature, or null if the project has no such declaration.
-     * Equivalent to filtering {@link #methodsWithSignature} by declaring
-     * class, but a single {@link ConcurrentHashMap#get(Object)} instead
-     * of a full signature-bucket scan — important for the post-build
-     * reverse-hierarchy repair pass, where each subtype visit would
-     * otherwise re-iterate the entire signature set (e.g. all
-     * {@code equals(Object)} or {@code hashCode()} declarations across
-     * the project, which is the build-phase bottleneck for large
-     * projects).
+     * Returns the single declared MethodKey in {@code className} with
+     * the given signature, or null if there is no such declaration.
+     * Equivalent to filtering {@link #methodsWithSignature} by
+     * declaring class, but a single {@link ConcurrentHashMap#get(Object)}
+     * instead of a full signature-bucket scan — important for the
+     * post-build reverse-hierarchy repair pass, where each subtype
+     * visit would otherwise re-iterate the entire signature set (e.g.
+     * all {@code equals(Object)} or {@code hashCode()} declarations
+     * across the project, which is the build-phase bottleneck for
+     * large projects).
+     *
+     * <p>When the target class has multiple Java overloads sharing the
+     * same (name, arity) — for example {@code save(String)} and
+     * {@code save(int)} — this method throws
+     * {@link AmbiguousMethodException} rather than silently choosing
+     * one. Callers that need every overload should use
+     * {@link #methodsInClassWithSignature} instead.
      */
-    public MethodKey methodInClassWithSignature(String className, String methodName, int arity) {
+    public MethodKey methodInClassWithSignature(String className, String methodName, int arity)
+            throws AmbiguousMethodException {
         if (className == null || methodName == null) return null;
-        Map<String, MethodKey> bucket = bySignature.get(new NameArity(methodName, arity));
-        return bucket == null ? null : bucket.get(className);
+        Map<String, Set<MethodKey>> bucket = bySignature.get(new NameArity(methodName, arity));
+        if (bucket == null) return null;
+        Set<MethodKey> overloads = bucket.get(className);
+        if (overloads == null || overloads.isEmpty()) return null;
+        if (overloads.size() > 1) {
+            throw new AmbiguousMethodException(className, methodName, arity, null);
+        }
+        return overloads.iterator().next();
+    }
+
+    /**
+     * Returns every declared MethodKey in {@code className} sharing
+     * the given signature, or an empty set if none. Use this instead
+     * of {@link #methodInClassWithSignature} when the class may have
+     * multiple overloads of the same (name, arity) and the caller
+     * wants each one — for example, the reverse-hierarchy repair pass
+     * needs every {@code save(String)}, {@code save(int)}, and any
+     * other overload in a subtype to be linked as a hierarchy edge
+     * to the parent method.
+     *
+     * <p>The returned set is a defensive snapshot decoupled from the
+     * index, so callers may iterate freely without seeing concurrent
+     * writes from the indexer.
+     */
+    public Set<MethodKey> methodsInClassWithSignature(String className, String methodName, int arity) {
+        if (className == null || methodName == null) return Set.of();
+        Map<String, Set<MethodKey>> bucket = bySignature.get(new NameArity(methodName, arity));
+        if (bucket == null) return Set.of();
+        Set<MethodKey> overloads = bucket.get(className);
+        if (overloads == null || overloads.isEmpty()) return Set.of();
+        return Set.copyOf(overloads);
     }
 
     /**
