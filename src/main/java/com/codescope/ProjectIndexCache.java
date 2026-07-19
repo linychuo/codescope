@@ -97,7 +97,8 @@ public final class ProjectIndexCache {
      * Default {@code StreamWriteConstraints} cap nesting at 1000; we
      * raise it to {@value #MAX_NESTING_DEPTH} so deep call chains
      * emitted by {@link CallChainAnalyzer} serialize cleanly. The
-     * raised cap matches {@link CallChainAnalyzer#MAX_NODES} so the
+     * raised cap matches the default value of
+     * {@link CallChainAnalyzer}'s node cap (50_000) so the
      * mapper itself is never the choke point.
      *
      * <p>Package-private so tests can exercise the same mapper the

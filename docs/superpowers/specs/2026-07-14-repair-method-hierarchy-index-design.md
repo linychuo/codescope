@@ -166,3 +166,40 @@ for (MethodKey candidate : index.methodsWithSignature(m.methodName, m.arity)) {
 
 - `MAX_CALLERS_PER_FRAME` 已经先一步做了；这次只补 build 阶段
 - 如果未来还需要按 declaringClass 反查方法列表（`methodsOf(class)`），可以再加一级索引
+
+## 实现修正(2026-07-19,后置记录)
+
+以下四点在 spec 日期之后被修正,实现已偏离 spec 描述;**未来按 spec 实现会重新引入被修复的 bug**。
+
+### 1. `bySignature` inner 实际是 multimap,而非 spec 描述的 `Set<MethodKey>`
+
+spec 第 31-32 行的伪代码:
+```
+private final Map<NameArity, Set<MethodKey>> bySignature = new ConcurrentHashMap<>();
+```
+
+**实际代码**(参见 `ProjectIndex.java:97`):
+```
+private final Map<NameArity, Map<String, Set<MethodKey>>> bySignature = new ConcurrentHashMap<>();
+```
+
+变更原因:初次实现(`b68dc64`)把 inner 设成 `Map<String, MethodKey>`,key 是 `declaringClass` —— 同一个类里 `save(String)` 和 `save(int)` 共享 `(name, arity)` 外层 key 和 `declaringClass` 内层 key,`.put` 后写覆盖前写。`ProjectIndexSignatureIndexTest.methodsWithSignatureDistinguishesOverloadsByParameterTypes` 的 RED 阶段(`expected: 2 but was: 1`)证实了这个 bug。
+
+修复后的 multimap 让同一个 `declaringClass` 下多个 overload 都保留(外层仍按 `NameArity` 索引),自然支持新的 `methodsInClassWithSignature(sub, ...)` 直接按 `sub` 反查。
+
+### 2. `methodsWithSignature` 改成防御性 snapshot,不再是 live set
+
+spec 第 76-86 行:
+> "The returned set is the live index set, not a defensive snapshot."
+
+实际 `methodsWithSignature`(`ProjectIndex.java:443` 起)做 `Set.copyOf(...)`,multimap 的所有 inner Set 加到一个新 `HashSet` 后再 `Set.copyOf`。理由:multimap inner 是 `ConcurrentHashMap.newKeySet()`,对调用方更友好不持有 live 引用。
+
+下游(`repairMethodHierarchyViaTypeHierarchy` 在 `JdtIndexer.java:174`)改用 `methodsInClassWithSignature(sub, ...)`(`ProjectIndex.java:495`)做 per-subtype 查询,直接命中 inner map 的 bucket 而不再迭代整个 outer bucket。
+
+### 3. `methodInClassWithSignature` 在 overload 歧义时抛 `AmbiguousMethodException`
+
+实际 `methodInClassWithSignature(className, methodName, arity)`(`ProjectIndex.java:471`)遇到多个 overload 返回 null 抛出 `ProjectIndex.AmbiguousMethodException`(同文件 `ProjectIndex.java:776` 已有的歧义处理范式),返回 `null` 仅当 0 或 1 个 overload。注意 spec 没有提过这个方法,因为修复 pass 当时还没新增。
+
+### 4. 旧实现没注意到自我引用
+
+原 spec 假设 inner `Set<MethodKey>` 是正确的(因为 `MethodKey` 自身的 equals 已经覆盖 `declaringClass`/`methodName`/`arity`/`parameterTypes` 四元组)。b68dc64 真实实现没用 `Set`,而是 `Map<String, MethodKey>` —— 这才暴露了 round-1 修复的 bug。如果未来 contributor 严格按 spec 把 inner 改回 `Set<MethodKey>`,逻辑上也能 work,但失去了 `methodsInClassWithSignature(sub, ...)` 做 O(1) sub-bucket 查询的能力。鉴于此,**推荐保持 multimap 形状**。

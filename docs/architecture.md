@@ -84,7 +84,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `McpServer.tryParseAndDispatch` | 一次只消费一个 JSON 对象,尾随字节保留 | MCP host 不保证一请求一行,可能是粘包;不能因为中途有脏数据就把整段丢 |
 | `McpServer.sendRequestAwait` | server→client 的反向 RPC 用 `CompletableFuture<JsonNode>` 关联,`pending: id → Future` 先注册再写请求避免被极快响应甩掉,`notifications/cancelled` 直接 cancel | JSON-RPC 2.0 §6.1;响应可能超时、可能带 `error` 字段、可能极快到达,三种都得能正确结束 |
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
-| `CallChainAnalyzer.MAX_NODES = 50_000` | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞 |
+| `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `TraceCallersService.indexCache` | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;缓存命中省得每次都重做 pom 解析和文件扫描 |
 | `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树 | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择 |
