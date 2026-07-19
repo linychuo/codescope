@@ -20,6 +20,12 @@ public final class CallNode {
     public final boolean fanoutTruncated;  // true if this branch was cut at MAX_CALLERS_PER_FRAME
     public final int hiddenCallerCount;    // number of callers omitted due to fan-out cap
     public final boolean deduped;    // true if this is a marker for a method already shown elsewhere in the tree
+    // Whole-tree signal: true only on the root when the analyzer's BFS
+    // bailed out at MAX_NODES and the tree is partial. Mutated after
+    // construction because the cap is detected mid-BFS, not at root
+    // creation time. Never propagated to children — it's a property of
+    // the analyzed request, not of any individual method.
+    private boolean nodeCapTruncated;
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
@@ -99,6 +105,22 @@ public final class CallNode {
     }
 
     /**
+     * Marks this node's whole tree as having been truncated at the
+     * analyzer's MAX_NODES safety cap. Should only be called on the
+     * root of the tree, and only by the analyzer when it bails out
+     * mid-BFS — a partial tree otherwise looks identical to a complete
+     * one to consumers that ignore the analyzer's textual message.
+     *
+     * <p>Distinct from the {@code truncated} flag set by
+     * {@link #depthMarker}, which is per-branch (a depth-cut child).
+     * The whole-tree signal is consumed by callers iterating
+     * {@code root.toJson()} from the {@code trace_callers} envelope.
+     */
+    public void markNodeCapTruncated() {
+        this.nodeCapTruncated = true;
+    }
+
+    /**
      * Serialize to a JSON-shaped map. Iterative (not recursive) so deep call
      * chains — up to {@code MAX_NODES} — don't blow the JVM stack.
      *
@@ -125,6 +147,7 @@ public final class CallNode {
             if (f.node.truncated) f.map.put("truncated", true);
             if (f.node.fanoutTruncated) f.map.put("truncatedCallers", f.node.hiddenCallerCount);
             if (f.node.deduped) f.map.put("deduped", true);
+            if (f.node.nodeCapTruncated) f.map.put("nodeCapTruncated", true);
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
             for (CallNode c : f.node.callers) {

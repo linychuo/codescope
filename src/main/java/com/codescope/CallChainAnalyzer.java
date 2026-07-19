@@ -12,6 +12,28 @@ public final class CallChainAnalyzer {
 
     public record Result(CallNode root, boolean found, String message) {}
 
+    /** Default {@link #maxNodes}, matching {@link ProjectIndexCache#MAX_NESTING_DEPTH}. */
+    private static final int DEFAULT_MAX_NODES = 50_000;
+
+    private final int maxNodes;
+
+    /** Production constructor — uses {@link #DEFAULT_MAX_NODES}. */
+    public CallChainAnalyzer() {
+        this(DEFAULT_MAX_NODES);
+    }
+
+    /**
+     * Test-friendly constructor that lets callers dial the node cap
+     * down to a small number so a fixture doesn't need 50k+ real
+     * methods to exercise the truncation path. Intended for tests
+     * (and the eventual per-tool-call cap the public constructor
+     * {@link #CallChainAnalyzer()} was reserved for); production
+     * callers should use the no-arg form.
+     */
+    CallChainAnalyzer(int maxNodes) {
+        this.maxNodes = maxNodes;
+    }
+
     /**
      * BFS over the reverse call index starting from {@code target}. Each path
      * carries its own ancestor set: a method already on the current path is a
@@ -137,9 +159,10 @@ public final class CallChainAnalyzer {
                     childAncestors.addAll(f.ancestors);
                     queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
                     nodes++;
-                    if (nodes > MAX_NODES) {
+                    if (nodes > maxNodes) {
+                        root.markNodeCapTruncated();
                         return new Result(root, true,
-                                "Truncated at " + MAX_NODES + " nodes to prevent runaway expansion. "
+                                "Truncated at " + maxNodes + " nodes to prevent runaway expansion. "
                                         + "There may be a deeply-recursive or hot method in the chain.");
                     }
                 }
@@ -183,8 +206,11 @@ public final class CallChainAnalyzer {
                 : new CallNode(caller.declaringClass, caller.methodName, caller.arity, file, line);
     }
 
-    /** Safety cap on tree size; configurable per-tool-call later. */
-    private static final int MAX_NODES = 50_000;
+    /** Per-frame and per-depth caps remain static because their tests
+     * already use real fixtures (a 1200-caller target for the fan-out
+     * cap in {@link CallChainFanoutCapTest}). Only the whole-tree node
+     * cap needs to be lowerable to exercise the truncation path. */
+
 
     /**
      * Safety cap on tree depth. {@link CallNode#toJson()} builds the tree
