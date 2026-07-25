@@ -83,7 +83,7 @@ public final class MethodHierarchyExtractor {
      * upper bound's erasure (or {@code Object} if unbounded). That's
      * exactly what we need for both sides to agree.
      */
-    String erasedTypeNameOf(ITypeBinding tb) {
+    private String erasedTypeNameOf(ITypeBinding tb) {
         ITypeBinding erased = tb.getErasure();
         return erased.getQualifiedName();
     }
@@ -96,7 +96,7 @@ public final class MethodHierarchyExtractor {
      * produce identical strings.
      * Returns {@code null} if the binding has no usable name at all.
      */
-    private static String fqnFromBinding(ITypeBinding tb) {
+    static String fqnFromBinding(ITypeBinding tb) {
         if (tb == null) return null;
         if (tb.isAnonymous()) {
             String bin = tb.getBinaryName();

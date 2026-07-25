@@ -130,7 +130,7 @@ public final class CallSiteVisitor extends ASTVisitor {
         if (sup != null) {
             ITypeBinding sb = sup.resolveBinding();
             if (sb != null && sb.isFromSource()) {
-                String p = eraseTypeArgs(fqnFromBinding(sb));
+                String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(sb));
                 if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
             }
         }
@@ -139,7 +139,7 @@ public final class CallSiteVisitor extends ASTVisitor {
             if (iface == null) continue;
             ITypeBinding sb = iface.resolveBinding();
             if (sb == null || !sb.isFromSource()) continue;
-            String p = eraseTypeArgs(fqnFromBinding(sb));
+            String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(sb));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
         }
     }
@@ -278,7 +278,7 @@ public final class CallSiteVisitor extends ASTVisitor {
         // convert '$' to '.' for visual consistency with how we report
         // regular nested classes.
         ITypeBinding b = node.resolveBinding();
-        String fqn = fqnFromBinding(b);
+        String fqn = MethodHierarchyExtractor.fqnFromBinding(b);
         if (fqn == null) {
             // Fallback: synthesize a stable-ish name from the enclosing
             // type and the anon's source position. Worse than the
@@ -589,16 +589,16 @@ public final class CallSiteVisitor extends ASTVisitor {
         // would be written under a different key from the IBase
         // declaration, breaking resolveTargetViaAncestors'
         // upward walk.
-        String childKey = eraseTypeArgs(fqnFromBinding(binding));
+        String childKey = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(binding));
         if (childKey == null || childKey.isEmpty()) return;
         ITypeBinding superclass = binding.getSuperclass();
         if (superclass != null && superclass.isFromSource()) {
-            String p = eraseTypeArgs(fqnFromBinding(superclass));
+            String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(superclass));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
         }
         for (ITypeBinding iface : binding.getInterfaces()) {
             if (iface == null || !iface.isFromSource()) continue;
-            String p = eraseTypeArgs(fqnFromBinding(iface));
+            String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(iface));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
         }
     }
@@ -662,24 +662,6 @@ public final class CallSiteVisitor extends ASTVisitor {
     private static String formatSignature(List<String> paramTypes) {
         if (paramTypes.isEmpty()) return "";
         return String.join(",", paramTypes);
-    }
-
-    /**
-     * Resolves an {@link ITypeBinding} to the FQN we use in {@link MethodKey}.
-     * Anonymous classes have an empty {@code getQualifiedName()}; we fall
-     * back to {@code getBinaryName()} ("x.Outer$1") with {@code $}
-     * normalized to {@code .} so the decl side ({@link #fqnOfType}) and
-     * the call side ({@link MethodHierarchyExtractor#methodKeyOf}) produce identical strings.
-     * Returns {@code null} if the binding has no usable name at all.
-     */
-    private static String fqnFromBinding(ITypeBinding tb) {
-        if (tb == null) return null;
-        if (tb.isAnonymous()) {
-            String bin = tb.getBinaryName();
-            return bin == null ? null : bin.replace('$', '.');
-        }
-        String q = tb.getQualifiedName();
-        return q == null || q.isEmpty() ? null : q;
     }
 
     /**
