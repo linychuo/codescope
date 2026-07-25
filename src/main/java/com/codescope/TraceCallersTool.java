@@ -14,7 +14,15 @@ import java.util.Map;
  */
 public final class TraceCallersTool extends AbstractMcpTool {
 
-    private final TraceCallersService service = new TraceCallersService();
+    private final TraceCallersService service;
+
+    public TraceCallersTool() {
+        this(new ProjectIndexCache());
+    }
+
+    public TraceCallersTool(ProjectIndexCache cache) {
+        this.service = new TraceCallersService(cache);
+    }
 
     @Override public String name() { return "trace_callers"; }
 

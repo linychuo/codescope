@@ -38,9 +38,15 @@ public final class FindSymbolsService {
      * so a single MCP session that uses {@code trace_callers} and
      * {@code find_symbols} against the same project indexes it once.
      */
-    private final ProjectIndexCache indexCache = new ProjectIndexCache();
+    private final ProjectIndexCache indexCache;
 
-    public FindSymbolsService() {}
+    public FindSymbolsService() {
+        this(new ProjectIndexCache());
+    }
+
+    public FindSymbolsService(ProjectIndexCache indexCache) {
+        this.indexCache = indexCache;
+    }
 
     /**
      * @param query      case-insensitive substring matched against symbol simple names

@@ -27,9 +27,15 @@ public final class FindCallSitesService {
      * so a single MCP session that uses {@code trace_callers} and
      * {@code find_call_sites} against the same project indexes it once.
      */
-    private final ProjectIndexCache indexCache = new ProjectIndexCache();
+    private final ProjectIndexCache indexCache;
 
-    public FindCallSitesService() {}
+    public FindCallSitesService() {
+        this(new ProjectIndexCache());
+    }
+
+    public FindCallSitesService(ProjectIndexCache indexCache) {
+        this.indexCache = indexCache;
+    }
 
     /**
      * @param refresh if true, evict the cached index for {@code projectRoot}

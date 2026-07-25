@@ -44,6 +44,15 @@ public final class McpServer {
     private final ToolRegistry tools = new ToolRegistry();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Object stdoutLock = new Object();
+    private final ProjectIndexCache indexCache;
+
+    public McpServer() {
+        this(new ProjectIndexCache());
+    }
+
+    public McpServer(ProjectIndexCache indexCache) {
+        this.indexCache = indexCache;
+    }
 
     private final AtomicLong nextId = new AtomicLong(REQUEST_ID_BASE);
     // package-private so unit tests can drive server→client round-trips.

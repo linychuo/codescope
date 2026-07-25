@@ -16,7 +16,15 @@ import java.util.Map;
  */
 public final class FindSymbolsTool extends AbstractMcpTool {
 
-    private final FindSymbolsService service = new FindSymbolsService();
+    private final FindSymbolsService service;
+
+    public FindSymbolsTool() {
+        this(new ProjectIndexCache());
+    }
+
+    public FindSymbolsTool(ProjectIndexCache cache) {
+        this.service = new FindSymbolsService(cache);
+    }
 
     @Override public String name() { return "find_symbols"; }
 

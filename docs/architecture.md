@@ -38,7 +38,7 @@ MCP server 路径:
         ▼         ▼              ▼
    ┌─────────────────────────────────────┐
    │ TraceCallersService / ... /         │   业务编排
-   │ FindSymbolsService                  │   都各自有 LRU indexCache
+   │ FindSymbolsService                  │   share a single LRU indexCache injected by `Main` (MCP path) / held in `Cli.SHARED_CACHE` (CLI path)
    │  - LRU indexCache (8 项)            │   同 project 路径只构建一次,跨会话复用
    └─────┬───────────────────────────────┘
          │
@@ -86,7 +86,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
-| `TraceCallersService.indexCache` | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;缓存命中省得每次都重做 pom 解析和文件扫描 |
+| shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果 |
 | `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树 | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择 |
 | `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
 | `ProjectLoader.collectSourceRoots0` | 只匹配 `src/<...>/main/java`,**排除 test** | 测试代码不参与调用链;`src/test` 是另一棵子树 |

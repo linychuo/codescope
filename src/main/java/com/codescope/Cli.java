@@ -20,6 +20,9 @@ public final class Cli {
 
     private static final ObjectMapper RAW = new ObjectMapper();
     private static final ObjectMapper PRETTY = new ObjectMapper();
+    // One cache per CLI invocation so `trace-callers && find-symbols` in
+    // the same session rebuilds the index once, not twice.
+    private static final ProjectIndexCache SHARED_CACHE = new ProjectIndexCache();
 
     public static void main(String[] args) {
         System.exit(run(args));
@@ -91,18 +94,18 @@ public final class Cli {
             case "trace-callers" -> {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
-                yield new TraceCallersService().traceCallersJson(
+                yield new TraceCallersService(SHARED_CACHE).traceCallersJson(
                         cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
             }
             case "find-call-sites" -> {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
-                yield new FindCallSitesService().findCallSitesJson(
+                yield new FindCallSitesService(SHARED_CACHE).findCallSitesJson(
                         cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
             }
             case "find-symbols" -> {
                 String q = p.requirePos(0, "query");
-                yield new FindSymbolsService().findSymbolsJson(
+                yield new FindSymbolsService(SHARED_CACHE).findSymbolsJson(
                         q, p.kind, p.project, p.refresh, p.includeTests, p.limit);
             }
             default -> throw new UsageException("Unknown command: " + command

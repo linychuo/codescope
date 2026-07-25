@@ -14,7 +14,15 @@ import java.util.Map;
  */
 public final class FindCallSitesTool extends AbstractMcpTool {
 
-    private final FindCallSitesService service = new FindCallSitesService();
+    private final FindCallSitesService service;
+
+    public FindCallSitesTool() {
+        this(new ProjectIndexCache());
+    }
+
+    public FindCallSitesTool(ProjectIndexCache cache) {
+        this.service = new FindCallSitesService(cache);
+    }
 
     @Override public String name() { return "find_call_sites"; }
 

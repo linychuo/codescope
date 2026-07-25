@@ -9,10 +9,11 @@ public final class Main {
             Cli.main(args);
             return;
         }
-        TraceCallersTool traceCallers = new TraceCallersTool();
-        FindCallSitesTool findCallSites = new FindCallSitesTool();
-        FindSymbolsTool findSymbols = new FindSymbolsTool();
-        McpServer server = new McpServer()
+        ProjectIndexCache shared = new ProjectIndexCache();
+        TraceCallersTool traceCallers = new TraceCallersTool(shared);
+        FindCallSitesTool findCallSites = new FindCallSitesTool(shared);
+        FindSymbolsTool findSymbols = new FindSymbolsTool(shared);
+        McpServer server = new McpServer(shared)
                 .register(traceCallers)
                 .register(findCallSites)
                 .register(findSymbols);
