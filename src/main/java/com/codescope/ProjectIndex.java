@@ -542,52 +542,19 @@ public final class ProjectIndex {
     public MethodKey resolveTarget(String className, String methodName,
                                    Integer arity, List<String> paramTypes)
             throws AmbiguousMethodException {
-        // Pass 1: strict equals match (FQN-exact, arity-exact). The
-        // common case in unit tests and disciplined AI clients.
-        MethodKey match = null;
-        for (MethodKey m : declarations.keySet()) {
-            if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
-            if (arity != null && m.arity != arity.intValue()) continue;
-            if (paramTypes != null && !paramTypes.equals(m.parameterTypes)) continue;
-            if (match != null) {
-                throw new AmbiguousMethodException(className, methodName, arity, paramTypes);
-            }
-            match = m;
+        // Strict match plus FQN-suffix fallback, scoped to the
+        // caller's class. The helper handles the suffix fallback
+        // internally (iff strict added nothing AND paramTypes != null).
+        // Ambiguity is surfaced: if two declarations on the same
+        // class both match, throw.
+        List<MethodKey> matches = matchStrictThenSuffix(
+                declarations.keySet(), className, methodName, arity, paramTypes);
+        if (matches.size() > 1) {
+            throw new AmbiguousMethodException(className, methodName, arity, paramTypes);
         }
-        if (match != null) return match;
+        if (!matches.isEmpty()) return matches.get(0);
 
-        // Pass 2: FQN-suffix fallback. MCP clients (and AI agents) often
-        // pass short names ("DTO") or types imported from a different
-        // package, neither of which strict-equals the JDT-resolved FQN
-        // ("com.example.dto.DTO"). We accept a candidate if every
-        // user-supplied param type's last '.'-delimited segment equals
-        // the candidate's same segment. (Issue #3: arity/paramTypes
-        // mismatch made trace_callers and find_call_sites miss the
-        // target entirely.) Ambiguity is still surfaced — if pass 2
-        // also narrows to multiple candidates, the caller has supplied
-        // a useless selector and we throw.
-        //
-        // Skipped entirely when the user did not pass paramTypes: the
-        // suffix matcher has nothing to align against. The ancestor
-        // walk below still runs in that case (with strict matching
-        // only) so a sub-interface query can still find an inherited
-        // method on its parent.
-        if (paramTypes != null) {
-        MethodKey fallback = null;
-        for (MethodKey m : declarations.keySet()) {
-            if (!m.declaringClass.equals(className) || !m.methodName.equals(methodName)) continue;
-            if (arity != null && m.arity != arity.intValue()) continue;
-            if (m.parameterTypes.size() != paramTypes.size()) continue;
-            if (!paramTypesMatchBySuffix(paramTypes, m.parameterTypes)) continue;
-            if (fallback != null) {
-                throw new AmbiguousMethodException(className, methodName, arity, paramTypes);
-            }
-            fallback = m;
-        }
-        if (fallback != null) return fallback;
-        }
-
-        // Pass 3: ancestor-walk fallback. The user passed a class or
+        // Ancestor-walk fallback. The user passed a class or
         // interface that does NOT itself declare the target method —
         // it inherits the method from a supertype (e.g. ISub extends
         // IBase; ISub has no `InvFundTicketPrint` declaration, only
@@ -628,33 +595,16 @@ public final class ProjectIndex {
         visited.add(startClass);
         while (!queue.isEmpty()) {
             String cls = queue.removeFirst();
-            // Strict match first (cheap).
-            MethodKey strict = null;
-            for (MethodKey m : declarations.keySet()) {
-                if (!m.declaringClass.equals(cls) || !m.methodName.equals(methodName)) continue;
-                if (arity != null && m.arity != arity.intValue()) continue;
-                if (paramTypes != null && !paramTypes.equals(m.parameterTypes)) continue;
-                if (strict != null) {
-                    throw new AmbiguousMethodException(startClass, methodName, arity, paramTypes);
-                }
-                strict = m;
+            // Per-ancestor strict + FQN-suffix match. The helper's
+            // internal strict.isEmpty() check is what gives us the
+            // per-iteration semantics (a strict hit on one ancestor
+            // does not suppress the suffix pass on the next).
+            List<MethodKey> hits = matchStrictThenSuffix(
+                    declarations.keySet(), cls, methodName, arity, paramTypes);
+            if (hits.size() > 1) {
+                throw new AmbiguousMethodException(startClass, methodName, arity, paramTypes);
             }
-            if (strict != null) return strict;
-            // FQN-suffix match for this ancestor.
-            if (paramTypes != null) {
-                MethodKey suffix = null;
-                for (MethodKey m : declarations.keySet()) {
-                    if (!m.declaringClass.equals(cls) || !m.methodName.equals(methodName)) continue;
-                    if (arity != null && m.arity != arity.intValue()) continue;
-                    if (m.parameterTypes.size() != paramTypes.size()) continue;
-                    if (!paramTypesMatchBySuffix(paramTypes, m.parameterTypes)) continue;
-                    if (suffix != null) {
-                        throw new AmbiguousMethodException(startClass, methodName, arity, paramTypes);
-                    }
-                    suffix = m;
-                }
-                if (suffix != null) return suffix;
-            }
+            if (!hits.isEmpty()) return hits.get(0);
             // Walk one level up.
             Set<String> parents = typeHierarchy.get(cls);
             if (parents != null) {
@@ -690,6 +640,41 @@ public final class ProjectIndex {
         return true;
     }
 
+    /**
+     * Strict match plus FQN-suffix fallback against a single iteration's
+     * candidates. Iterates {@code candidates} with strict equality first;
+     * iff the strict pass added nothing AND {@code paramTypes != null},
+     * runs a second pass with FQN-suffix matching. Returns the union
+     * (strict matches if any, else suffix matches).
+     *
+     * <p>The per-iteration semantic is the load-bearing part: a strict
+     * hit on iteration 1 must NOT suppress the suffix pass on iteration
+     * 2 (e.g. when each iteration scans declarations for a different
+     * ancestor in the type hierarchy walk). Callers run one invocation
+     * per iteration so the fallback is naturally per-iteration.
+     */
+    static List<MethodKey> matchStrictThenSuffix(
+            Iterable<MethodKey> candidates, String cls, String methodName,
+            Integer arity, List<String> paramTypes) {
+        List<MethodKey> strict = new ArrayList<>();
+        for (MethodKey k : candidates) {
+            if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
+            if (arity != null && k.arity != arity.intValue()) continue;
+            if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
+            strict.add(k);
+        }
+        if (!strict.isEmpty() || paramTypes == null) return strict;
+        List<MethodKey> suffix = new ArrayList<>();
+        for (MethodKey k : candidates) {
+            if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
+            if (arity != null && k.arity != arity.intValue()) continue;
+            if (k.parameterTypes.size() != paramTypes.size()) continue;
+            if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
+            suffix.add(k);
+        }
+        return suffix;
+    }
+
     /** Lists every declared method with the given name, regardless of arity. */
     public List<MethodKey> findOverloads(String className, String methodName) {
         List<MethodKey> out = new ArrayList<>();
@@ -718,25 +703,12 @@ public final class ProjectIndex {
     public List<MethodKey> findInvokedKeys(String className, String methodName,
                                            Integer arity, List<String> paramTypes) {
         List<MethodKey> out = new ArrayList<>();
-        for (MethodKey k : calls.keySet()) {
-            if (!k.declaringClass.equals(className) || !k.methodName.equals(methodName)) continue;
-            if (arity != null && k.arity != arity.intValue()) continue;
-            if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
-            out.add(k);
-        }
-        // Lenient FQN-suffix pass (issue #3): if strict pass yielded
-        // nothing and the caller supplied paramTypes, accept keys
-        // whose recorded paramTypes match by simple-name suffix. Avoid
-        // duplicating keys already added by the strict pass.
-        if (out.isEmpty() && paramTypes != null) {
-            for (MethodKey k : calls.keySet()) {
-                if (!k.declaringClass.equals(className) || !k.methodName.equals(methodName)) continue;
-                if (arity != null && k.arity != arity.intValue()) continue;
-                if (k.parameterTypes.size() != paramTypes.size()) continue;
-                if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
-                out.add(k);
-            }
-        }
+        // Strict match plus FQN-suffix fallback, scoped to the
+        // caller's class. The helper handles the suffix fallback
+        // internally (iff strict added nothing AND paramTypes != null).
+        List<MethodKey> hits = matchStrictThenSuffix(
+                calls.keySet(), className, methodName, arity, paramTypes);
+        out.addAll(hits);
         // Ancestor-walk pass (issue #3 sub-interface scenario): the
         // user's className is a sub-interface (e.g. ISub) that
         // inherits the method from a supertype (e.g. IBase), so no
@@ -752,26 +724,15 @@ public final class ProjectIndex {
             visited.add(className);
             while (!queue.isEmpty()) {
                 String cls = queue.removeFirst();
-                int addedThisClass = 0;
-                for (MethodKey k : calls.keySet()) {
-                    if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
-                    if (arity != null && k.arity != arity.intValue()) continue;
-                    if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
-                    if (out.add(k)) addedThisClass++;
-                }
-                // Per-ancestor suffix fallback: a strict hit on an
-                // earlier ancestor must not skip the lenient pass on
-                // this ancestor — different ancestors can have keys
-                // that only match by FQN suffix.
-                if (addedThisClass == 0 && paramTypes != null) {
-                    for (MethodKey k : calls.keySet()) {
-                        if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
-                        if (arity != null && k.arity != arity.intValue()) continue;
-                        if (k.parameterTypes.size() != paramTypes.size()) continue;
-                        if (!paramTypesMatchBySuffix(paramTypes, k.parameterTypes)) continue;
-                        out.add(k);
-                    }
-                }
+                // Per-ancestor strict + FQN-suffix match. The helper's
+                // internal strict.isEmpty() check is what gives us the
+                // per-iteration semantics (a strict hit on one ancestor
+                // does not suppress the suffix pass on the next — the
+                // regression targeted by
+                // ProjectIndexFindInvokedKeysTest).
+                List<MethodKey> ancestorHits = matchStrictThenSuffix(
+                        calls.keySet(), cls, methodName, arity, paramTypes);
+                out.addAll(ancestorHits);
                 Set<String> parents = typeHierarchy.get(cls);
                 if (parents != null) {
                     for (String p : parents) {
