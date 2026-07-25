@@ -121,74 +121,8 @@ public final class JdtIndexer {
         // modifier bitmask recorded at declaration time so we never
         // link private or static methods (which are not virtual
         // dispatch — see ProjectIndex.recordMethodDeclarationModifiers).
-        repairMethodHierarchyViaTypeHierarchy(index);
+        new MethodHierarchyExtractor(index).repairMethodHierarchy();
         return index;
-    }
-
-    /**
-     * One-shot repair pass that adds method-hierarchy edges the
-     * forward {@link JdtIndexerVisitor#recordMethodHierarchy} walk
-     * missed. For every declared method M, walks
-     * {@code typeHierarchy} downward from {@code M.declaringClass}
-     * and links M to any same-named, same-arity method declared on a
-     * subtype. Catches the
-     * {@code interface IFoo extends AbsBase}-style edges that JDT
-     * binding traversal does not expose but AST traversal does.
-     *
-     * <p>Gate: both M and the candidate must have a recorded
-     * modifier bitmask and neither may be private or static.
-     * {@link org.eclipse.jdt.core.dom.Modifier#isPrivate(int)} and
-     * {@link org.eclipse.jdt.core.dom.Modifier#isStatic(int)} are
-     * the JDT-side checks; private methods are lexically scoped
-     * (Parent#privateM and Child#privateM are unrelated even with
-     * the same name) and static methods hide rather than override.
-     * Without this gate the repair pass would link Parent#privateM
-     * to Child#privateM and a trace_callers on one would surface
-     * callers of the other — exactly the regression the
-     * {@code privateMethodsAreNotCrossClassHierarchy} test
-     * guards against.
-     */
-    private static void repairMethodHierarchyViaTypeHierarchy(ProjectIndex index) {
-        java.util.List<MethodKey> declared = new java.util.ArrayList<>(index.knownMethods());
-        for (MethodKey m : declared) {
-            int mMods = index.modifiersOf(m);
-            // Skip leaf / non-virtual-dispatch methods: no hierarchy
-            // edge to add, and including them would either be a
-            // no-op (forward pass already skipped them) or a
-            // regression (forward pass correctly skipped them for
-            // private/static, we'd wrongly add them back).
-            if (mMods == 0) continue;
-            if (org.eclipse.jdt.core.dom.Modifier.isPrivate(mMods)) continue;
-            if (org.eclipse.jdt.core.dom.Modifier.isStatic(mMods)) continue;
-            java.util.Set<String> visited = new java.util.HashSet<>();
-            java.util.Deque<String> queue = new java.util.ArrayDeque<>();
-            queue.addLast(m.declaringClass);
-            visited.add(m.declaringClass);
-            while (!queue.isEmpty()) {
-                String cls = queue.removeFirst();
-                java.util.Set<String> subs = index.subtypesOf(cls);
-                if (subs == null) continue;
-                for (String sub : subs) {
-                    if (!visited.add(sub)) continue;
-                    queue.addLast(sub);
-                    java.util.Set<MethodKey> candidates = index.methodsInClassWithSignature(sub, m.methodName, m.arity);
-                    if (candidates.isEmpty()) continue;
-                    for (MethodKey candidate : candidates) {
-                        int cMods = index.modifiersOf(candidate);
-                        if (cMods == 0) continue;
-                        if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
-                        if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
-                        // Same (name, arity) in a class can match an
-                        // overload with different parameter types, not
-                        // an override. parameterTypes equality gates the
-                        // link so a Parent.m(String) doesn't get a
-                        // phantom Child.m(int) sibling.
-                        if (!candidate.parameterTypes.equals(m.parameterTypes)) continue;
-                        index.recordHierarchy(m, candidate);
-                    }
-                }
-            }
-        }
     }
 
     private void parseFile(Path src, String[] cp, String[] sp, String[] encodingNames,
@@ -229,7 +163,8 @@ public final class JdtIndexer {
             return;
         }
         try {
-            cu.accept(new CallSiteVisitor(index, relPath));
+            MethodHierarchyExtractor hierarchy = new MethodHierarchyExtractor(index);
+            cu.accept(new CallSiteVisitor(index, hierarchy, relPath));
         } catch (RuntimeException e) {
             // The visitor itself doesn't throw, but JDT's binding recovery
             // can throw a RuntimeException deep in a BindingResolver
