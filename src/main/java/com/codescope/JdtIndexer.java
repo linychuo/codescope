@@ -178,6 +178,12 @@ public final class JdtIndexer {
                         if (cMods == 0) continue;
                         if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
                         if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
+                        // Same (name, arity) in a class can match an
+                        // overload with different parameter types, not
+                        // an override. parameterTypes equality gates the
+                        // link so a Parent.m(String) doesn't get a
+                        // phantom Child.m(int) sibling.
+                        if (!candidate.parameterTypes.equals(m.parameterTypes)) continue;
                         index.recordHierarchy(m, candidate);
                     }
                 }
@@ -994,10 +1000,15 @@ public final class JdtIndexer {
                     if (Modifier.isPrivate(mMods) || Modifier.isStatic(mMods)) continue;
                     if (!m.getName().equals(myName)) continue;
                     if (m.getParameterTypes().length != myArity) continue;
+                    // Name + arity is necessary but not sufficient for
+                    // an override — a class that declares both m(String)
+                    // and m(int) overloads has two unrelated methods, not
+                    // one override target. The repair pass applies the
+                    // same check, so callers see a consistent hierarchy.
                     MethodKey parentKey = methodKeyOf(m);
-                    if (parentKey != null) {
-                        index.recordHierarchy(myKey, parentKey);
-                    }
+                    if (parentKey == null) continue;
+                    if (!parentKey.parameterTypes.equals(myKey.parameterTypes)) continue;
+                    index.recordHierarchy(myKey, parentKey);
                 }
                 // Recurse into this supertype's own supertypes — captures
                 // the I2-extends-I1 case where I2 inherits m from I1.

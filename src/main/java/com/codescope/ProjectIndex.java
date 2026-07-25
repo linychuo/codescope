@@ -752,13 +752,18 @@ public final class ProjectIndex {
             visited.add(className);
             while (!queue.isEmpty()) {
                 String cls = queue.removeFirst();
+                int addedThisClass = 0;
                 for (MethodKey k : calls.keySet()) {
                     if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
                     if (arity != null && k.arity != arity.intValue()) continue;
                     if (paramTypes != null && !paramTypes.equals(k.parameterTypes)) continue;
-                    out.add(k);
+                    if (out.add(k)) addedThisClass++;
                 }
-                if (out.isEmpty() && paramTypes != null) {
+                // Per-ancestor suffix fallback: a strict hit on an
+                // earlier ancestor must not skip the lenient pass on
+                // this ancestor — different ancestors can have keys
+                // that only match by FQN suffix.
+                if (addedThisClass == 0 && paramTypes != null) {
                     for (MethodKey k : calls.keySet()) {
                         if (!k.declaringClass.equals(cls) || !k.methodName.equals(methodName)) continue;
                         if (arity != null && k.arity != arity.intValue()) continue;

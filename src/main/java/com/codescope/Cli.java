@@ -92,18 +92,18 @@ public final class Cli {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
                 yield new TraceCallersService().traceCallersJson(
-                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, false);
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
             }
             case "find-call-sites" -> {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
                 yield new FindCallSitesService().findCallSitesJson(
-                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, false);
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
             }
             case "find-symbols" -> {
                 String q = p.requirePos(0, "query");
                 yield new FindSymbolsService().findSymbolsJson(
-                        q, p.kind, p.project, p.refresh, false, p.limit);
+                        q, p.kind, p.project, p.refresh, p.includeTests, p.limit);
             }
             default -> throw new UsageException("Unknown command: " + command
                     + ". Use trace-callers, find-call-sites, or find-symbols.");
@@ -146,6 +146,7 @@ public final class Cli {
                     i++;
                 }
                 case "--refresh" -> { p.refresh = true; i++; }
+                case "--include-tests" -> { p.includeTests = true; i++; }
                 case "--kind" -> {
                     requireValue(args, i, "--kind");
                     p.kind = args[++i];
@@ -225,6 +226,7 @@ public final class Cli {
                   --arity <n>                        Method arity (overload disambiguation)
                   --param-types <t1,t2,...>          Comma-separated FQN parameter types
                   --refresh                          Evict cached index and rebuild
+                  --include-tests                    Include test sources in the index (src/test/java)
                   --kind <kind>                      Symbol kind: class|interface|enum|record|annotation|method|constructor|field
                   --limit <n>                        Max results for find-symbols (default 100)
 
@@ -245,6 +247,7 @@ public final class Cli {
         Integer arity;
         List<String> paramTypes;
         boolean refresh;
+        boolean includeTests;
         String kind;
         int limit = 100;
         final List<String> positional = new ArrayList<>();

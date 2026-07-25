@@ -213,6 +213,21 @@ class CliTest {
     }
 
     @Test
+    void includeTestsFlagIsAccepted() {
+        // Sanity: --include-tests must parse without a usage error and
+        // route into the service (which accepts the same arg). The codescope
+        // project's tests/ directory has JUnit5 tests, so we expect the
+        // command to succeed end-to-end.
+        Path project = Path.of(".").toAbsolutePath();
+        if (!Files.isRegularFile(project.resolve("pom.xml"))) return;
+        int code = Cli.run(new String[]{
+                "find-symbols", "writeLine",
+                "--project", project.toString(),
+                "--include-tests"});
+        assertEquals(0, code, "stderr: " + err);
+    }
+
+    @Test
     void unknownSymbolKindExitsOne() {
         Path project = Path.of(".").toAbsolutePath();
         if (!Files.isRegularFile(project.resolve("pom.xml"))) return;
