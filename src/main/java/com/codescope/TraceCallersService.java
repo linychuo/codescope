@@ -50,68 +50,40 @@ public final class TraceCallersService {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, TraceCallersException::new);
 
-        // Resolve against project declarations. This is the right path for
-        // project methods: it gives a precise MethodKey (with parameter
-        // types from the declaration, if the user didn't supply any) and
-        // surfaces ambiguity for project-only overloads.
-        MethodKey target;
+        // Resolve against project declarations or library call edges.
+        // MethodResolver centralizes the try/catch/format/fallback path
+        // that was previously duplicated here and in FindCallSitesService.
+        MethodResolver.Result res;
         try {
-            target = index.resolveTarget(className, methodName, arity, paramTypes);
+            res = MethodResolver.resolve(index, className, methodName, arity, paramTypes);
         } catch (ProjectIndex.AmbiguousMethodException e) {
-            // findOverloads only sees project declarations. For library
-            // methods this list is always empty, so we say so explicitly
-            // and point the user at the paramTypes path.
-            List<MethodKey> projectOverloads = index.findOverloads(className, methodName);
-            String overloadsHint = projectOverloads.isEmpty()
-                    ? "no overloads are visible in this project's sources (the class is likely from a library); "
-                            + "pass `paramTypes` with the FQN types to pick one"
-                    : "available overloads: " + projectOverloads.stream()
-                            .map(MethodKey::toString)
-                            .toList();
-            throw new TraceCallersException(e.getMessage() + " " + overloadsHint + ".");
+            throw new TraceCallersException(MethodResolver.overloadsHint(
+                    index, className, methodName, e));
         }
 
-        // Library targets: the class is not declared in project sources
-        // (e.g. java.io.PrintStream). JdtIndexer still recorded every
-        // call edge with the resolved binding signature (arity, FQN
-        // param types), so we look up the call-edge map by the same
-        // selector. Any matches are seeded into the analyzer's BFS as
-        // a single logical target — a method that calls println(String)
-        // AND println(int) appears once under the synthesized root.
-        List<MethodKey> seeds = List.of();
-        CallChainAnalyzer.Result r;
-        if (target == null) {
-            seeds = index.findInvokedKeys(className, methodName, arity, paramTypes);
-            // The displayed root uses the user's selector (arity defaults
-            // to 0 if not provided). It's only the BFS *seeds* that need
-            // to match the recorded keys.
-            MethodKey display = new MethodKey(className, methodName,
-                    arity == null ? 0 : arity,
-                    paramTypes == null ? List.of() : paramTypes);
-            if (seeds.isEmpty()) {
-                // Synthesize the display key as the single seed so the
-                // analyzer still produces a coherent "no callers"
-                // message instead of a degenerate result.
-                r = analyzer.traceCallers(index, display, List.of(display));
-            } else {
-                r = analyzer.traceCallers(index, display, seeds);
-            }
+        MethodKey target;
+        List<MethodKey> seeds;
+        MethodKey display;
+        if (res instanceof MethodResolver.Result.ProjectTarget pt) {
+            target = pt.target();
+            seeds = List.of(target);
+            display = target;
         } else {
-            r = analyzer.traceCallers(index, target);
+            MethodResolver.Result.LibrarySeeds ls = (MethodResolver.Result.LibrarySeeds) res;
+            target = null;
+            seeds = ls.seeds();
+            display = ls.display();
         }
+
+        CallChainAnalyzer.Result r = (target != null)
+                ? analyzer.traceCallers(index, target)
+                : analyzer.traceCallers(index, display, seeds);
 
         String message = r.message();
-        // For library targets where multiple overloads matched, surface
-        // which signatures we unioned so the user knows what was bundled
-        // into the displayed root.
-        if (target == null && seeds.size() > 1) {
-            String overloads = seeds.stream()
-                    .map(MethodKey::fullSignature)
-                    .sorted()
-                    .toList()
-                    .toString();
-            message = message + " (combined callers across "
-                    + seeds.size() + " library overloads: " + overloads + ")";
+        // Library overload union suffix only when seeds collected >1 keys.
+        // (For project targets, seeds == List.of(target) so size <= 1.)
+        if (seeds.size() > 1) {
+            message = message + MethodResolver.overloadUnionSuffix(seeds);
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 

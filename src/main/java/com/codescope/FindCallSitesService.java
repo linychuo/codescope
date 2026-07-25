@@ -52,36 +52,33 @@ public final class FindCallSitesService {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, FindCallSitesException::new);
 
-        // Same library-target resolution as trace_callers: try
-        // resolveTarget against project declarations, fall back to
-        // findInvokedKeys when the class is jar-only.
-        MethodKey target;
+        // Same library-target resolution as trace_callers. The try/catch
+        // and overload-hint formatting are now centralized in MethodResolver.
+        MethodResolver.Result res;
         try {
-            target = index.resolveTarget(className, methodName, arity, paramTypes);
+            res = MethodResolver.resolve(index, className, methodName, arity, paramTypes);
         } catch (ProjectIndex.AmbiguousMethodException e) {
-            List<MethodKey> projectOverloads = index.findOverloads(className, methodName);
-            String overloadsHint = projectOverloads.isEmpty()
-                    ? "no overloads are visible in this project's sources (the class is likely from a library); "
-                            + "pass `paramTypes` with the FQN types to pick one"
-                    : "available overloads: " + projectOverloads.stream()
-                            .map(MethodKey::toString)
-                            .toList();
-            throw new FindCallSitesException(e.getMessage() + " " + overloadsHint + ".");
+            throw new FindCallSitesException(MethodResolver.overloadsHint(
+                    index, className, methodName, e));
         }
 
-        List<MethodKey> seeds = List.of();
-        Map<MethodKey, List<ProjectIndex.SourceLoc>> union;
+        MethodKey target;
+        List<MethodKey> seeds;
+        MethodKey display;
+        if (res instanceof MethodResolver.Result.ProjectTarget pt) {
+            target = pt.target();
+            seeds = List.of(target);
+            display = target;
+        } else {
+            MethodResolver.Result.LibrarySeeds ls = (MethodResolver.Result.LibrarySeeds) res;
+            target = null;
+            seeds = ls.seeds();
+            display = ls.display();
+        }
+
+        List<MethodKey> ordered = new ArrayList<>();
         if (target == null) {
-            seeds = index.findInvokedKeys(className, methodName, arity, paramTypes);
-            if (seeds.isEmpty()) {
-                // Synthesize a display key for the no-callers case.
-                MethodKey display = new MethodKey(className, methodName,
-                        arity == null ? 0 : arity,
-                        paramTypes == null ? List.of() : paramTypes);
-                union = index.callSitesOf(display);
-            } else {
-                union = unionCallSites(index, seeds);
-            }
+            ordered.addAll(seeds);
         } else {
             // Cross interface boundaries: callers that statically invoke
             // an interface method (JDT binding resolves the MethodKey
@@ -95,38 +92,29 @@ public final class FindCallSitesService {
             // relatedMethods.
             List<MethodKey> related = new ArrayList<>(index.relatedMethods(target));
             if (related.size() == 1 && related.get(0).equals(target)) {
-                union = index.callSitesOf(target);
-                seeds = List.of(target);
+                ordered.add(target);
             } else {
                 // `target` first so the response ordering and overload
                 // hint favor the user's selector; related tail.
-                List<MethodKey> ordered = new ArrayList<>(related.size());
                 ordered.add(target);
-                for (MethodKey rk : related) {
-                    if (!rk.equals(target)) ordered.add(rk);
-                }
-                union = unionCallSites(index, ordered);
-                seeds = ordered;
+                for (MethodKey rk : related) if (!rk.equals(target)) ordered.add(rk);
             }
         }
 
-        String message = buildMessage(className, methodName, arity, target, union, seeds);
-        // Surface overload-union info the same way trace_callers does.
-        if (target == null && seeds.size() > 1) {
-            String overloads = seeds.stream()
-                    .map(MethodKey::fullSignature)
-                    .sorted()
-                    .toList()
-                    .toString();
-            message = message + " (combined call sites across "
-                    + seeds.size() + " library overloads: " + overloads + ")";
+        Map<MethodKey, List<ProjectIndex.SourceLoc>> union;
+        if (ordered.size() == 1) {
+            union = index.callSitesOf(ordered.get(0));
+        } else {
+            union = unionCallSites(index, ordered);
+        }
+
+        String message = buildMessage(className, methodName, arity, target, union, ordered);
+        if (ordered.size() > 1) {
+            message = message + MethodResolver.overloadUnionSuffix(ordered);
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
         Map<String, Object> out = new LinkedHashMap<>();
-        MethodKey display = target != null ? target : new MethodKey(className, methodName,
-                arity == null ? 0 : arity,
-                paramTypes == null ? List.of() : paramTypes);
         ProjectIndex.SourceLoc targetLoc = index.declarationOf(display);
         Map<String, Object> targetJson = new LinkedHashMap<>();
         targetJson.put("class", display.declaringClass);

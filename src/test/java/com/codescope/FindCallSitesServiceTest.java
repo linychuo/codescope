@@ -132,10 +132,11 @@ class FindCallSitesServiceTest {
             assertTrue(s.path("call_site").path("line").asInt() > 0,
                     "call_site.line should be > 0, got: " + s);
         }
-        // Message should mention "combined call sites across N library
-        // overloads" — the multi-seed union fired.
+        // Message should mention "combined callers across N library
+        // overloads" — the multi-seed union fired. (Wording unified
+        // with trace_callers via MethodResolver.overloadUnionSuffix.)
         String message = tree.path("message").asText();
-        assertTrue(message.contains("combined call sites across"),
+        assertTrue(message.contains("combined callers across"),
                 "expected overload-union hint in message, got: " + message);
     }
 
