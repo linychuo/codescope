@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: package-private static helper `List<MethodKey> matchStrictThenSuffix(Iterable<MethodKey> candidates, String cls, String methodName, Integer arity, List<String> paramTypes)` on `ProjectIndex`. Iterates `candidates` with strict equality; iff strict added nothing AND `paramTypes != null`, iterates again with FQN-suffix equality. Returns the union.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/test/java/com/codescope/ProjectIndexStrictSuffixTest.java`:
 
@@ -118,12 +118,12 @@ class ProjectIndexStrictSuffixTest {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails to compile**
+- [x] **Step 2: Run the test to verify it fails to compile**
 
 Run: `mvn -q test-compile 2>&1 | tail -10`
 Expected: `cannot find symbol` for `ProjectIndex.matchStrictThenSuffix`.
 
-- [ ] **Step 3: Implement the helper**
+- [x] **Step 3: Implement the helper**
 
 Add to `ProjectIndex.java` (place it next to the existing `paramTypesMatchBySuffix` private static at ~line 678):
 
@@ -214,17 +214,17 @@ out.addAll(hits);
 
 (Keep the `int addedThisClass` local? No — remove the per-iteration tracking. The helper's internal `strict.isEmpty()` check is what gave us the per-iteration semantics in the first place.)
 
-- [ ] **Step 4: Run the new test to verify it passes**
+- [x] **Step 4: Run the new test to verify it passes**
 
 Run: `mvn test -Dtest=ProjectIndexStrictSuffixTest 2>&1 | tail -10`
 Expected: `Tests run: 6, Failures: 0, Errors: 0, Skipped: 0`.
 
-- [ ] **Step 5: Run the full test suite to verify no regression**
+- [x] **Step 5: Run the full test suite to verify no regression**
 
 Run: `mvn test 2>&1 | tail -10`
 Expected: `Tests run: 225, Failures: 0` (219 baseline + 6 new).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/main/java/com/codescope/ProjectIndex.java src/test/java/com/codescope/ProjectIndexStrictSuffixTest.java
@@ -266,7 +266,7 @@ EOF
   - `static String overloadsHint(ProjectIndex index, String className, String methodName, ProjectIndex.AmbiguousMethodException cause)`
   - `static String overloadUnionSuffix(List<MethodKey> seeds)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/test/java/com/codescope/MethodResolverTest.java`:
 
@@ -398,12 +398,12 @@ class MethodResolverTest {
 
 (Note: `resolvePropagatesAmbiguity` is a placeholder — its real assertion is that calling resolve with no matching declarations does not throw and returns a LibrarySeeds. The actual ambiguity-throw path is covered by `EdgeCaseTest`. If you'd rather delete this test, drop it from the count.)
 
-- [ ] **Step 2: Run the test to verify it fails to compile**
+- [x] **Step 2: Run the test to verify it fails to compile**
 
 Run: `mvn -q test-compile 2>&1 | tail -10`
 Expected: `cannot find symbol` for `MethodResolver`.
 
-- [ ] **Step 3: Create MethodResolver**
+- [x] **Step 3: Create MethodResolver**
 
 Create `src/main/java/com/codescope/MethodResolver.java`:
 
@@ -508,12 +508,12 @@ public final class MethodResolver {
 }
 ```
 
-- [ ] **Step 4: Run MethodResolver tests to verify the new helper passes**
+- [x] **Step 4: Run MethodResolver tests to verify the new helper passes**
 
 Run: `mvn test -Dtest=MethodResolverTest 2>&1 | tail -10`
 Expected: `Tests run: 8, Failures: 0, Errors: 0, Skipped: 0`. (7 if you dropped the placeholder test.)
 
-- [ ] **Step 5: Rewrite TraceCallersService to use MethodResolver**
+- [x] **Step 5: Rewrite TraceCallersService to use MethodResolver**
 
 In `src/main/java/com/codescope/TraceCallersService.java`, replace lines 50-116 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with:
 
@@ -563,7 +563,7 @@ try {
 }
 ```
 
-- [ ] **Step 6: Rewrite FindCallSitesService to use MethodResolver**
+- [x] **Step 6: Rewrite FindCallSitesService to use MethodResolver**
 
 In `src/main/java/com/codescope/FindCallSitesService.java`, replace lines 52-110 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with the analogous pattern. Look at the file for the exact current shape; the rewrite is:
 
@@ -619,12 +619,12 @@ message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
 (Keep `unionCallSites`, `buildMessage`, `buildCallSitesArray` private static helpers — they don't move to MethodResolver because they're specific to find_call_sites.)
 
-- [ ] **Step 7: Run the full test suite**
+- [x] **Step 7: Run the full test suite**
 
 Run: `mvn test 2>&1 | tail -10`
 Expected: `Tests run: 232, Failures: 0` (225 from Task 1 + 7 new MethodResolver tests, minus the optional placeholder; baseline 219 baseline preserved).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/main/java/com/codescope/MethodResolver.java \
@@ -675,7 +675,7 @@ This task has three sub-tasks, each independently commit-able:
 
 #### Task 3a: Promote `CallSiteVisitor` to a top-level class
 
-- [ ] **Step 1: Identify the outer-class state used by CallSiteVisitor**
+- [x] **Step 1: Identify the outer-class state used by CallSiteVisitor**
 
 Run: `grep -n "private.*\\(\\|private final\|private static" src/main/java/com/codescope/JdtIndexer.java | grep -v "^[0-9]*:    private " | head -30` (or just read the outer class definition)
 
@@ -686,7 +686,7 @@ Inspect by reading lines 267-1110 of `JdtIndexer.java`. Confirm: no `JdtIndexer.
 
 Re-read 267-1110 to identify the helpers. They are all on `CallSiteVisitor` itself (every helper between the visitor methods is on `CallSiteVisitor` per the `private final class CallSiteVisitor extends ASTVisitor` declaration). So promotion is purely a file move.
 
-- [ ] **Step 2: Move the inner class to a top-level file**
+- [x] **Step 2: Move the inner class to a top-level file**
 
 Create `src/main/java/com/codescope/CallSiteVisitor.java` containing the entire `private static final class CallSiteVisitor extends ASTVisitor { ... }` block (lines 267-1110 of `JdtIndexer.java`), with changes:
 - Class declaration: `public final class CallSiteVisitor extends ASTVisitor` (drop `private static`, drop nested status, change to public final).
@@ -698,12 +698,12 @@ In `JdtIndexer.java`, REMOVE the entire `private static final class CallSiteVisi
 
 In `parseFile` (around line 232), update the `new CallSiteVisitor(index, relPath)` call to match the new top-level class: `new CallSiteVisitor(index, relPath)`. Same signature, no change yet.
 
-- [ ] **Step 3: Run the full test suite to verify behavior preservation**
+- [x] **Step 3: Run the full test suite to verify behavior preservation**
 
 Run: `mvn test 2>&1 | tail -10`
 Expected: `Tests run: 225, Failures: 0` (219 baseline + 6 from Task 1).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main/java/com/codescope/JdtIndexer.java src/main/java/com/codescope/CallSiteVisitor.java
@@ -728,7 +728,7 @@ EOF
 
 #### Task 3b: Extract `MethodHierarchyExtractor`
 
-- [ ] **Step 1: Identify the methods to move**
+- [x] **Step 1: Identify the methods to move**
 
 The two methods currently on `JdtIndexer`:
 - `repairMethodHierarchyViaTypeHierarchy(ProjectIndex index)` (lines 151-192, currently `private static`)
@@ -736,7 +736,7 @@ The two methods currently on `JdtIndexer`:
 
 Both belong in the new `MethodHierarchyExtractor`. The first runs after `build()` completes; the second is called per-MethodDeclaration during AST walking.
 
-- [ ] **Step 2: Create MethodHierarchyExtractor**
+- [x] **Step 2: Create MethodHierarchyExtractor**
 
 Create `src/main/java/com/codescope/MethodHierarchyExtractor.java`:
 
@@ -802,7 +802,7 @@ public final class MethodHierarchyExtractor {
 
 (The bodies of both methods are large. **Lift them verbatim — do not rewrite them.** When moving the `recordMethodHierarchy` body, change any reference that read the outer-class `index` or `file` to use `this.index` and (if needed) constructor-injected parameters. Likewise, when `repairMethodHierarchy` calls `index.subtypesOf(...)`, `index.knownMethods()`, etc., those already exist on `ProjectIndex` — no change to method bodies.)
 
-- [ ] **Step 3: Update CallSiteVisitor to delegate**
+- [x] **Step 3: Update CallSiteVisitor to delegate**
 
 In `CallSiteVisitor.java`, add a field `private final MethodHierarchyExtractor hierarchy;` and a constructor parameter. Update `JdtIndexer.parseFile` to construct:
 
@@ -819,12 +819,12 @@ new MethodHierarchyExtractor(index).repairMethodHierarchy();
 
 Remove the old `private static void repairMethodHierarchyViaTypeHierarchy(ProjectIndex index)` method (lines 151-192).
 
-- [ ] **Step 4: Run the full test suite**
+- [x] **Step 4: Run the full test suite**
 
 Run: `mvn test 2>&1 | tail -10`
 Expected: `Tests run: 225, Failures: 0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/codescope/JdtIndexer.java \
@@ -869,7 +869,7 @@ EOF
 - Produces: each `*Tool` has TWO constructors analogous to the services. The Tool used by McpServer is the `(ProjectIndexCache)` variant.
 - Produces: `McpServer(ProjectIndexCache cache)` constructor; default no-arg constructor keeps current behavior (defensively copies a new cache for backwards compat).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/test/java/com/codescope/SharedIndexCacheTest.java`:
 
@@ -968,7 +968,7 @@ class SharedIndexCacheTest {
 
 (Note: this test depends on the `ProjectIndexCache(ProjectIndexCache constructor accepting a JdtIndexer spy. We have that already (`ProjectIndexCache(JdtIndexer indexer)` at line 63 of `ProjectIndexCache.java`). The test also uses reflection on a private field — package-private would be cleaner. Either is fine for one test.)
 
-- [ ] **Step 2: Run the test to verify it fails to compile**
+- [x] **Step 2: Run the test to verify it fails to compile**
 
 Run: `mvn -q test-compile 2>&1 | tail -10`
 Expected: error in `SharedIndexCacheTest` because nothing prevents the current code from instantiating two caches (each `*Service` has its own).
@@ -978,7 +978,7 @@ Expected: error in `SharedIndexCacheTest` because nothing prevents the current c
 Run: `mvn test -Dtest=SharedIndexCacheTest 2>&1 | tail -30`
 Expected: FAIL with "expected 1, got 2" or similar — the test reveals the bug.
 
-- [ ] **Step 3: Add the (ProjectIndexCache) constructors**
+- [x] **Step 3: Add the (ProjectIndexCache) constructors**
 
 In `TraceCallersService.java`, add:
 
@@ -996,7 +996,7 @@ Make `indexCache` a `final` field (no longer `private final ProjectIndexCache in
 
 Same edit for `FindCallSitesService.java` and `FindSymbolsService.java`.
 
-- [ ] **Step 4: Add (ProjectIndexCache) constructors to Tools**
+- [x] **Step 4: Add (ProjectIndexCache) constructors to Tools**
 
 In `TraceCallersTool.java`, change:
 
@@ -1020,7 +1020,7 @@ public TraceCallersTool(ProjectIndexCache cache) {
 
 Same pattern for `FindCallSitesTool.java` and `FindSymbolsTool.java`.
 
-- [ ] **Step 5: Add (ProjectIndexCache) constructor to McpServer**
+- [x] **Step 5: Add (ProjectIndexCache) constructor to McpServer**
 
 In `McpServer.java`, add:
 
@@ -1042,7 +1042,7 @@ public ProjectIndexCache indexCache() {
 
 Do **not** yet wire `indexCache` into Tools — `Main.main` will do that next.
 
-- [ ] **Step 6: Wire the shared cache through Main**
+- [x] **Step 6: Wire the shared cache through Main**
 
 In `Main.java`:
 
@@ -1070,7 +1070,7 @@ public static void main(String[] args) throws Exception {
 }
 ```
 
-- [ ] **Step 7: Wire the shared cache through Cli**
+- [x] **Step 7: Wire the shared cache through Cli**
 
 In `Cli.java`, add a static `ProjectIndexCache` and pass it to each service:
 
@@ -1097,17 +1097,17 @@ case "find-symbols" -> {
 }
 ```
 
-- [ ] **Step 8: Run the new test**
+- [x] **Step 8: Run the new test**
 
 Run: `mvn test -Dtest=SharedIndexCacheTest 2>&1 | tail -10`
 Expected: `Tests run: 1, Failures: 0`. The fix took effect.
 
-- [ ] **Step 9: Run the full test suite**
+- [x] **Step 9: Run the full test suite**
 
 Run: `mvn test 2>&1 | tail -10`
 Expected: `Tests run: 233, Failures: 0` (232 + 1 new). All prior tests still green.
 
-- [ ] **Step 10: Update the architecture doc**
+- [x] **Step 10: Update the architecture doc**
 
 In `docs/architecture.md`, update the diagram (around line 41) from:
 
@@ -1126,7 +1126,7 @@ to:
 
 > | shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果 |
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add src/main/java/com/codescope/TraceCallersService.java \

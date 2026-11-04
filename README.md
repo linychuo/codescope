@@ -77,5 +77,5 @@ export CODESCOPE_MVN_ARGS="-gs /path/to/settings.xml"
 
 ```bash
 mvn test
-# 181 个测试
+# 245 个测试
 ```
