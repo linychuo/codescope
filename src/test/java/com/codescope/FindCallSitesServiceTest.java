@@ -288,6 +288,25 @@ class FindCallSitesServiceTest {
         }
     }
 
+    @Test
+    void projectTargetWithInterfaceHierarchyDoesNotReportLibraryOverloads() throws Exception {
+        // Regression: IfaceRepositoryImpl#findById is related to
+        // IfaceRepository#findById via the method hierarchy, so the
+        // service unions their call sites. That union is NOT a set of
+        // library overloads — both keys are project types — so the
+        // "(combined callers across N library overloads)" suffix must
+        // not be appended. Only genuine library targets (no project
+        // declaration) get that wording.
+        FindCallSitesService svc = new FindCallSitesService();
+        String json = svc.findCallSitesJson(
+                "com.example.IfaceRepositoryImpl", "findById",
+                null, null, FIXTURE, false, false);
+        String message = new ObjectMapper().readTree(json).path("message").asText();
+        assertFalse(message.contains("library overloads"),
+                "project-target hierarchy union must not be labeled library overloads, got: "
+                        + message);
+    }
+
     // --- helpers (mirror TraceCallersServiceTest) ---
 
     private static void copyDir(Path src, Path dst) throws java.io.IOException {

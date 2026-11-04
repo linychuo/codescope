@@ -115,8 +115,15 @@ public final class FindCallSitesService {
         }
 
         String message = buildMessage(className, methodName, arity, target, union, ordered);
-        if (ordered.size() > 1) {
-            message = message + MethodResolver.overloadUnionSuffix(ordered);
+        // The "(combined callers across N library overloads)" suffix is
+        // only accurate for library targets — no project declaration —
+        // where `seeds` is the set of recorded call-edge overloads. A
+        // project target with a method-hierarchy relation also ends up
+        // with ordered.size() > 1, but those keys are overrides /
+        // implementors (project types), not library overloads, so they
+        // must not get that wording.
+        if (target == null && seeds.size() > 1) {
+            message = message + MethodResolver.overloadUnionSuffix(seeds);
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
