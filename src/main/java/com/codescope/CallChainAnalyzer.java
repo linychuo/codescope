@@ -123,14 +123,20 @@ public final class CallChainAnalyzer {
             int hidden = 0;
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
                 for (MethodKey caller : index.callersOfSet(relatedKey)) {
-                    if (collected.size() >= MAX_CALLERS_PER_FRAME) {
-                        hidden++;
-                        continue;
-                    }
+                    // A true back-edge on the current path is a cycle
+                    // marker, not an expandable caller. Markers carry no
+                    // subtree, so they are always recorded — the fan-out
+                    // cap below bounds the callers the BFS expands, not
+                    // the markers it emits. Checking this first also keeps
+                    // `hidden` an accurate count of omitted callers rather
+                    // than folding cycle markers into it.
                     if (f.ancestors.contains(caller)) {
-                        // True back-edge on the current path -> cycle marker.
                         f.node.addChild(CallNode.cycleMarker(
                                 caller.declaringClass, caller.methodName, caller.arity));
+                        continue;
+                    }
+                    if (collected.size() >= MAX_CALLERS_PER_FRAME) {
+                        hidden++;
                         continue;
                     }
                     // Direct-caller dedup ONLY applies at the root level
