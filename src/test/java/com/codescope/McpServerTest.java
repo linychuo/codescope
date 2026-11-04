@@ -10,9 +10,11 @@ import org.junit.jupiter.api.Timeout;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -731,7 +733,104 @@ class McpServerTest {
         }
     }
 
+    @Test
+    void toolCallDoesNotBlockSubsequentRequests() throws Exception {
+        // Regression: a long-running tools/call (e.g. indexing a project)
+        // used to run on the read loop, so no other request — including
+        // notifications/cancelled — could be processed until it finished.
+        // The read loop must hand the call to a worker and keep reading.
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        McpServer s = new McpServer().register(new StubTool("slow", Map.of(), args -> {
+            started.countDown();
+            try {
+                release.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Tool.ToolResult.text("slow-done");
+        }));
+
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write(("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"slow\",\"arguments\":{}}}")
+                .getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf, true),
+                "tools/call should be dispatched without blocking the read loop");
+
+        assertTrue(started.await(5, TimeUnit.SECONDS), "tool did not start");
+
+        // The read loop is free while the tool runs: a ping is answered
+        // immediately, before the slow tool finishes.
+        s.handle(req(2, "ping", null));
+        List<JsonNode> lines = awaitLines(outBuf, 1);
+        assertEquals(2, lines.get(0).path("id").asInt(),
+                "ping should be answered while the tool call is in flight");
+
+        release.countDown();
+        lines = awaitLines(outBuf, 2);
+        assertEquals(1, lines.get(1).path("id").asInt(),
+                "the tool response should arrive after the ping");
+        assertTrue(lines.get(1).path("result").path("content").get(0).path("text").asText()
+                .contains("slow-done"));
+    }
+
+    @Test
+    void cancellationInterruptsInFlightToolCall() throws Exception {
+        // Regression: with a synchronous read loop, a cancellation could
+        // not even be received during a long tool call. Now the read loop
+        // processes it and interrupts the worker thread.
+        CountDownLatch started = new CountDownLatch(1);
+        McpServer s = new McpServer().register(new StubTool("slow", Map.of(), args -> {
+            started.countDown();
+            try {
+                Thread.sleep(30_000);
+                return Tool.ToolResult.text("completed");
+            } catch (InterruptedException e) {
+                return Tool.ToolResult.text("interrupted");
+            }
+        }));
+
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write(("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"slow\",\"arguments\":{}}}")
+                .getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf, true));
+        assertTrue(started.await(5, TimeUnit.SECONDS), "tool did not start");
+
+        s.handle(Map.of("jsonrpc", "2.0", "method", "notifications/cancelled",
+                "params", Map.of("id", 1)));
+
+        List<JsonNode> lines = awaitLines(outBuf, 1);
+        assertEquals(1, lines.get(0).path("id").asInt());
+        String text = lines.get(0).path("result").path("content").get(0).path("text").asText();
+        assertTrue(text.contains("interrupted"),
+                "cancellation should interrupt the tool thread, got: " + text);
+    }
+
     // --- helpers ---
+
+    /** Reads every JSON line currently in {@code buf}, parsing each. */
+    private static List<JsonNode> parseLines(ByteArrayOutputStream buf) throws Exception {
+        List<JsonNode> out = new ArrayList<>();
+        for (String line : buf.toString(StandardCharsets.UTF_8).split("\n")) {
+            if (line.isBlank()) continue;
+            out.add(JSON.readTree(line));
+        }
+        return out;
+    }
+
+    /** Polls until {@code buf} holds at least {@code n} JSON lines (5s bound). */
+    private static List<JsonNode> awaitLines(ByteArrayOutputStream buf, int n) throws Exception {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (System.currentTimeMillis() < deadline) {
+            List<JsonNode> lines = parseLines(buf);
+            if (lines.size() >= n) return lines;
+            Thread.sleep(10);
+        }
+        throw new IllegalStateException("expected " + n + " response line(s) within 5s, got: <"
+                + buf.toString(StandardCharsets.UTF_8) + ">");
+    }
 
     private static Map<String, Object> req(Object id, String method, Map<String, Object> params) {
         Map<String, Object> m = new LinkedHashMap<>();

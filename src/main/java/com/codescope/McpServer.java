@@ -58,6 +58,11 @@ public final class McpServer {
     // package-private so unit tests can drive server→client round-trips.
     final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 
+    // In-flight tools/call worker threads, keyed by request id, so a
+    // `notifications/cancelled` can interrupt the worker. Only
+    // tools/call is dispatched asynchronously (see dispatchAsync).
+    private final Map<Long, Thread> inFlightToolCalls = new ConcurrentHashMap<>();
+
     /** Notified (off the I/O thread) with the first workspace root the host advertises. */
     private volatile Consumer<String> defaultProjectRootSink;
 
@@ -110,7 +115,7 @@ public final class McpServer {
             // success tryParseAndDispatch removes the consumed bytes
             // (preserving any trailing data); on parse error it resets
             // the whole buffer.
-            while (tryParseAndDispatch(buf)) {
+            while (tryParseAndDispatch(buf, true)) {
                 // keep going until the buffer holds no complete object
             }
         }
@@ -129,6 +134,20 @@ public final class McpServer {
      */
     /** @return true if a complete object was consumed from {@code buf}. */
     boolean tryParseAndDispatch(ByteArrayOutputStream buf) {
+        return tryParseAndDispatch(buf, false);
+    }
+
+    /**
+     * As {@link #tryParseAndDispatch(ByteArrayOutputStream)}, with control
+     * over whether {@code tools/call} runs off the read loop.
+     *
+     * @param asyncToolCalls when true, a {@code tools/call} request is
+     *        handed to a worker thread so a slow index build does not
+     *        block reads (and cancellation / other requests keep flowing);
+     *        when false, everything runs on the calling thread — the
+     *        historical behavior, kept for direct unit tests.
+     */
+    boolean tryParseAndDispatch(ByteArrayOutputStream buf, boolean asyncToolCalls) {
         if (buf.size() == 0) return false;
         byte[] bytes = buf.toByteArray();
         int consumed = findObjectEnd(bytes);
@@ -149,7 +168,11 @@ public final class McpServer {
                 buf.reset();
                 buf.write(tail, 0, tailLen);
             }
-            handle(msg);
+            if (asyncToolCalls) {
+                dispatchAsync(msg);
+            } else {
+                handle(msg);
+            }
             return true;
         } catch (Exception e) {
             // Malformed object: reply with id=null and drop the bad bytes.
@@ -158,6 +181,55 @@ public final class McpServer {
             sendError(null, -32700, "Parse error: " + e.getMessage());
             buf.reset();
             return true;
+        }
+    }
+
+    /**
+     * Dispatch a parsed message from the read loop. Only
+     * {@code tools/call} is handed to a worker thread — it is the one
+     * method that can block for seconds while a project is indexed.
+     * Everything else (initialize, tools/list, ping, responses,
+     * notifications) is handled on the read thread, preserving the
+     * existing single-threaded ordering for the protocol plumbing.
+     */
+    private void dispatchAsync(Map<String, Object> msg) {
+        if (!"tools/call".equals(msg.get("method"))) {
+            safeHandle(msg);
+            return;
+        }
+        Long id = coerceId(msg.get("id"));
+        if (id == null) {
+            // A tools/call without a usable id is a notification; handle()
+            // ignores it, but run it off-thread for consistency.
+            Thread t = Thread.ofVirtual().name("tool-call-anon")
+                    .unstarted(() -> safeHandle(msg));
+            t.start();
+            return;
+        }
+        Thread[] holder = new Thread[1];
+        Thread t = Thread.ofVirtual().name("tool-call-" + id).unstarted(() -> {
+            try {
+                safeHandle(msg);
+            } finally {
+                inFlightToolCalls.remove(id, holder[0]);
+            }
+        });
+        holder[0] = t;
+        inFlightToolCalls.put(id, t);
+        t.start();
+    }
+
+    /**
+     * Handle a message on a worker thread. {@link #handle} throws
+     * {@link IOException} only from {@code respond()}/{@code writeLine()}
+     * (broken pipe); there is no reliable id to reply to from a worker,
+     * so log to stderr — the same channel {@code sendError} uses.
+     */
+    private void safeHandle(Map<String, Object> msg) {
+        try {
+            handle(msg);
+        } catch (IOException e) {
+            System.err.println("[codescope] failed to handle message: " + e);
         }
     }
 
@@ -321,6 +393,11 @@ public final class McpServer {
         for (CompletableFuture<JsonNode> f : pending.values()) {
             f.cancel(true);
         }
+        // Interrupt any in-flight tools/call workers so they don't keep
+        // running against a closing stdin.
+        for (Thread t : inFlightToolCalls.values()) {
+            t.interrupt();
+        }
     }
 
     // package-private for direct unit tests; not part of the public API.
@@ -385,6 +462,12 @@ public final class McpServer {
                 if (cancelledId != null) {
                     CompletableFuture<JsonNode> fut = pending.remove(cancelledId);
                     if (fut != null) fut.cancel(true);
+                    // Also interrupt an in-flight tools/call worker. The
+                    // read loop is the only thread that can receive this
+                    // notification during a slow tool call, so reaching
+                    // here means the call has been running on a worker.
+                    Thread tool = inFlightToolCalls.remove(cancelledId);
+                    if (tool != null) tool.interrupt();
                 }
                 return;
             }
