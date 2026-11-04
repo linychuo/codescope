@@ -82,8 +82,8 @@ public final class JdtIndexer {
         // case, where the implementing interface's
         // binding.getInterfaces() returns empty even though the AST
         // exposes the abstract supertype as a superInterfaceType.
-        // By the time we get here, typeHierarchy is fully populated
-        // from the AST walk, so we can repair missing edges
+        // By the time we get here, the type hierarchy is fully
+        // populated from the AST walk, so we can repair missing edges
         // deterministically: for each declared method M, find all
         // subtypes of M.declaringClass and look for a same-named,
         // same-arity method on each. The gate uses the per-method

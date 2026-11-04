@@ -135,31 +135,22 @@ public final class MethodHierarchyExtractor {
         String myName = b.getName();
         int myArity = b.getParameterTypes().length;
 
-        // Two parallel supertype walks: one driven by JDT
-        // bindings (fast, but misses the "interface extends
-        // abstract class" edge — see comments below), one driven
-        // by AST node text (slow, but always text-faithful). We
-        // union the matches.
+        // JDT binding supertype walk: seed the queue with the
+        // declaring type's superclass and interfaces, then BFS
+        // outward, linking every same-named / same-arity /
+        // same-parameterTypes method declared on a supertype.
         //
-        // JDT 3.45 binding walk:
-        //   - class → seed superclass + interfaces
-        //   - interface → seed interfaces only (getSuperclass is
-        //     null). When an interface extends an abstract class
-        //     (legal Java: `interface IFoo extends AbsBase`),
-        //     JDT models the abstract supertype as a SUPER
-        //     INTERFACE (per the dump_iface2 probe), but only on
-        //     the AST node — ITypeBinding.getInterfaces() returns
-        //     an empty array for the same interface. The binding
-        //     walk therefore misses the abstract superclass and
-        //     would leave the method-hierarchy edge dangling.
-        //
-        // AST walk: TypeDeclaration.getSuperclassType() returns
-        // null for an interface regardless of what `extends`
-        // names (the AST is text-faithful but the slot is for
-        // "the extends clause when it's a class" — JDT routes
-        // extends-class-as-superinterface through
-        // superInterfaceTypes()). So we look at BOTH slots and
-        // let the visitor / findBinding bridge them.
+        // Known gap: JDT does not expose an abstract-class supertype
+        // of an interface through ITypeBinding — for the legal
+        // `interface IFoo extends AbsBase`, getInterfaces() is empty
+        // and getSuperclass() is null. The AST node does expose it
+        // (as a superInterfaceType), so CallSiteVisitor records the
+        // type-hierarchy edge from AST, and the post-build
+        // {@link #repairMethodHierarchy} pass rebuilds the
+        // method-hierarchy edge by walking subtypes downward. This
+        // forward walk therefore covers the common cases (class
+        // extends class, interface extends interface) and the repair
+        // pass closes the interface-extends-class gap.
         java.util.Set<org.eclipse.jdt.core.dom.ITypeBinding> visited =
                 new java.util.HashSet<>();
         java.util.Deque<org.eclipse.jdt.core.dom.ITypeBinding> queue =
@@ -169,42 +160,6 @@ public final class MethodHierarchyExtractor {
         for (org.eclipse.jdt.core.dom.ITypeBinding iface : dc.getInterfaces()) {
             queue.add(iface);
         }
-        // Seed from the AST node — only valid if we can find the
-        // AST node behind `dc`. We don't have a direct path here
-        // (recordMethodHierarchy is called from
-        // visit(MethodDeclaration), but binding may have resolved
-        // to a synthetic / outer scope node). We try to recover
-        // the AST node by walking the type binding; the safest
-        // fallback is to consult the indexer's
-        // recordSupertypesFromAst results, but those are visited
-        // at a different time. For the binding-only walk below
-        // we rely on JDT, and accept that some deep hierarchies
-        // (interface-extends-class with bridge methods) may need
-        // a separate repair pass. The Pass-3 ancestor walk in
-        // ProjectIndex.resolveTarget catches that fallback at
-        // query time via typeHierarchy, which IS recorded from
-        // AST. The remaining gap is method-hierarchy edges that
-        // recordMethodHierarchy alone would have added but for
-        // the binding walk missing the super-interface edge.
-        //
-        // To close that gap, we re-seed the queue from the AST
-        // node representing `dc` if the indexer's
-        // recordSupertypesFromBinding saw the binding-side
-        // missing edge. The simplest correct path: at every
-        // queue pop, after processing st.getDeclaredMethods(),
-        // also enqueue st's AST superclassType / superInterfaceTypes
-        // bindings. JDT bridges these to ITypeBinding via
-        // Type.resolveBinding(). This catches the
-        // interface-extends-class case because the AST node
-        // exposes AbstractService as a superInterfaceType on the
-        // ITicketPredealDomainService TypeDeclaration node.
-        // method-hierarchy repair via reverse typeHierarchy walk happens in
-        // {@link #repairMethodHierarchy} once
-        // all sources have been visited and typeHierarchy is
-        // fully populated. This forward binding walk still adds
-        // the common-case edges (class extends class, interface
-        // extends interface) so callers do not need to wait for
-        // the post-pass.
         while (!queue.isEmpty()) {
             org.eclipse.jdt.core.dom.ITypeBinding st = queue.removeFirst();
             if (st == null || !visited.add(st)) continue;
@@ -243,7 +198,7 @@ public final class MethodHierarchyExtractor {
     /**
      * One-shot repair pass that adds method-hierarchy edges the
      * forward {@link #recordMethodHierarchy} walk missed. For every
-     * declared method M, walks {@code typeHierarchy} downward from
+     * declared method M, walks {@code subtypesOf} downward from
      * {@code M.declaringClass} and links M to any same-named,
      * same-arity method declared on a subtype. Catches the
      * {@code interface IFoo extends AbsBase}-style edges that JDT

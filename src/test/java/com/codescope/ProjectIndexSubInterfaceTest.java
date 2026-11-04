@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>Before the fix, {@code trace_callers(IfaceDaoSub, findById)}
  * missed every caller because {@code resolveTarget} strictly looked
  * up {@code declarations.get(declaringClass=IfaceDaoSub, …)} — which
- * is empty. The fix walks {@code typeHierarchy} upward from the
+ * is empty. The fix walks {@code supertypesOf} upward from the
  * user's className and tries to resolve the method on each ancestor.
  */
 class ProjectIndexSubInterfaceTest {

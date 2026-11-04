@@ -73,20 +73,23 @@ public final class ProjectIndex {
     // references an interface method is reachable when the BFS reaches
     // a concrete implementation (or vice versa).
     private final Map<MethodKey, Set<MethodKey>> hierarchy = new ConcurrentHashMap<>();
-    // Type-hierarchy index: for each type FQN P, the set of type FQNs
-    // that directly extend or implement P (class extends class, class
-    // implements interface, interface extends interface). Stored
-    // bidirectionally — recordTypeHierarchy writes both sides, so
-    // subtypesOf(P) walks it directly. Used by resolveTarget /
+    // Type-hierarchy index, stored as two directed maps:
+    //   typeParents[child]   = direct supertypes of child
+    //   typeChildren[parent] = direct subtypes of parent
+    // recordTypeHierarchy writes both directions so supertypesOf /
+    // subtypesOf are each a single O(1) lookup. Used by resolveTarget /
     // findInvokedKeys as a fallback when the user queries a class or
     // interface that does not declare the target method itself but
     // inherits it (e.g. `ISub extends IBase` — ISub has no
     // `InvFundTicketPrint` declaration but its parent IBase does, and
-    // calls through an ISub-typed field bind to IBase#m in JDT).
-    // Populated eagerly by JdtIndexer during visit(TypeDeclaration)
-    // and visit(EnumDeclaration) / visit(RecordDeclaration) /
-    // visit(AnnotationTypeDeclaration) — see recordTypeHierarchy there.
-    private final Map<String, Set<String>> typeHierarchy = new ConcurrentHashMap<>();
+    // calls through an ISub-typed field bind to IBase#m in JDT), and by
+    // the reverse-hierarchy repair pass to find same-named methods on
+    // subtypes. Populated eagerly by JdtIndexer during
+    // visit(TypeDeclaration) / visit(EnumDeclaration) /
+    // visit(RecordDeclaration) / visit(AnnotationTypeDeclaration) — see
+    // recordTypeHierarchy there.
+    private final Map<String, Set<String>> typeParents = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> typeChildren = new ConcurrentHashMap<>();
     // Signature index: for each (methodName, arity) pair, the inner
     // map groups Java overloads by their declaring class (a class may
     // declare save(String) and save(int) under the same (name, arity)
@@ -228,9 +231,12 @@ public final class ProjectIndex {
      * Records that {@code childType} is a direct subtype of
      * {@code parentType} (a class extending another class, a class
      * implementing an interface, or an interface extending another
-     * interface). Stored bidirectionally so {@link #subtypesOf} can
-     * answer "which declared types in this project extend P" in O(1)
-     * per lookup, without re-walking declarations.
+     * interface). Stored as two directed edges —
+     * {@code typeParents[child] += parent} and
+     * {@code typeChildren[parent] += child} — so
+     * {@link #supertypesOf} and {@link #subtypesOf} each answer in O(1)
+     * per lookup, without re-walking declarations and without conflating
+     * the two directions.
      *
      * <p>Self-pairs (a type listed as its own supertype) and nulls are
      * silently skipped. Both FQNs must be non-empty — a top-level type
@@ -242,8 +248,8 @@ public final class ProjectIndex {
         if (childType == null || parentType == null) return;
         if (childType.isEmpty() || parentType.isEmpty()) return;
         if (childType.equals(parentType)) return;
-        typeHierarchy.computeIfAbsent(parentType, k -> ConcurrentHashMap.newKeySet()).add(childType);
-        typeHierarchy.computeIfAbsent(childType, k -> ConcurrentHashMap.newKeySet()).add(parentType);
+        typeParents.computeIfAbsent(childType, k -> ConcurrentHashMap.newKeySet()).add(parentType);
+        typeChildren.computeIfAbsent(parentType, k -> ConcurrentHashMap.newKeySet()).add(childType);
     }
 
     /**
@@ -259,7 +265,29 @@ public final class ProjectIndex {
      */
     public Set<String> subtypesOf(String parentType) {
         if (parentType == null || parentType.isEmpty()) return Set.of();
-        Set<String> direct = typeHierarchy.get(parentType);
+        Set<String> direct = typeChildren.get(parentType);
+        if (direct == null || direct.isEmpty()) return Set.of();
+        return direct;
+    }
+
+    /**
+     * Returns the set of type FQNs that {@code childType} directly
+     * extends or implements. The result includes only types that were
+     * recorded by the indexer — if the type has no recorded supertypes,
+     * this returns an empty set (not null).
+     *
+     * <p>This is the upward-walk counterpart to {@link #subtypesOf}:
+     * {@code resolveTarget} / {@code findInvokedKeys} use it to find the
+     * declaration or call edges of a method the user's class inherits
+     * from a supertype. Walking down into subtypes would resolve a query
+     * to a method the user's class does not actually have.
+     *
+     * <p>The returned set is the live index set (not a defensive
+     * snapshot) — callers must not mutate it.
+     */
+    public Set<String> supertypesOf(String childType) {
+        if (childType == null || childType.isEmpty()) return Set.of();
+        Set<String> direct = typeParents.get(childType);
         if (direct == null || direct.isEmpty()) return Set.of();
         return direct;
     }
@@ -333,11 +361,13 @@ public final class ProjectIndex {
      * needs to know whether the result was truncated can do so without a
      * second scan over the index.
      *
-     * <p>Sort cost is bounded: only the kept prefix (up to {@code limit})
-     * is fully sorted. Excess matches beyond {@code limit} are counted
-     * but not ordered, since they would be discarded anyway. This keeps
-     * the worst-case complexity at {@code O(N log L)} where L is the
-     * limit, not {@code O(N log N)}.
+     * <p>All matches are collected and sorted, then truncated to
+     * {@code limit} — so the returned prefix is the first {@code limit}
+     * entries in sort order, not an arbitrary slice of the map's
+     * iteration order. {@code O(N log N)} in the match count; the
+     * alternative (keep the first {@code limit} seen, then sort) is
+     * cheaper but returns a non-deterministic subset, which callers
+     * cannot reason about.
      */
     public SymbolSearchResult searchSymbols(String query, String kindFilter, int limit) {
         if (query == null || query.isEmpty()) {
@@ -345,7 +375,6 @@ public final class ProjectIndex {
         }
         String needle = query.toLowerCase();
         List<Symbol> hits = new ArrayList<>();
-        int total = 0;
         for (List<Symbol> bucket : symbols.values()) {
             List<Symbol> snap;
             synchronized (bucket) {
@@ -353,20 +382,19 @@ public final class ProjectIndex {
             }
             for (Symbol s : snap) {
                 if (kindFilter != null && !kindFilter.equals(s.kind)) continue;
-                if (s.name.toLowerCase().contains(needle)) {
-                    total++;
-                    if (hits.size() < limit) hits.add(s);
-                }
+                if (s.name.toLowerCase().contains(needle)) hits.add(s);
             }
         }
-        if (hits.size() > 1) {
-            hits.sort((a, b) -> {
-                int byFqn = a.fqn.compareTo(b.fqn);
-                if (byFqn != 0) return byFqn;
-                String sa = a.signature == null ? "" : a.signature;
-                String sb = b.signature == null ? "" : b.signature;
-                return sa.compareTo(sb);
-            });
+        hits.sort((a, b) -> {
+            int byFqn = a.fqn.compareTo(b.fqn);
+            if (byFqn != 0) return byFqn;
+            String sa = a.signature == null ? "" : a.signature;
+            String sb = b.signature == null ? "" : b.signature;
+            return sa.compareTo(sb);
+        });
+        int total = hits.size();
+        if (hits.size() > limit) {
+            hits = new ArrayList<>(hits.subList(0, limit));
         }
         return new SymbolSearchResult(hits, total);
     }
@@ -561,8 +589,8 @@ public final class ProjectIndex {
         // IBase does). Calls through an ISub-typed field bind to
         // IBase#m in JDT, so the calls map and declarations both
         // reference IBase. We walk up the type hierarchy from
-        // `className` (via typeHierarchy, which is recorded
-        // bidirectionally), and for each ancestor try the strict +
+        // `className` (via supertypesOf, which returns only direct
+        // supertypes), and for each ancestor try the strict +
         // FQN-suffix match. First match wins; multiple distinct
         // ancestors declaring the same name+arity is still a real
         // diamond (a class implementing two interfaces that both
@@ -574,7 +602,7 @@ public final class ProjectIndex {
 
     /**
      * Walks the type hierarchy upward from {@code startClass} (each step
-     * consults {@link #typeHierarchy} for the next ancestor set) and tries
+     * consults {@link #supertypesOf} for the next ancestor set) and tries
      * to resolve {@code methodName} against each ancestor's declarations.
      * Returns the first match — strict match preferred, FQN-suffix match
      * used only when strict fails for that ancestor. Ambiguity is
@@ -606,7 +634,7 @@ public final class ProjectIndex {
             }
             if (!hits.isEmpty()) return hits.get(0);
             // Walk one level up.
-            Set<String> parents = typeHierarchy.get(cls);
+            Set<String> parents = supertypesOf(cls);
             if (parents != null) {
                 for (String p : parents) {
                     if (visited.add(p)) queue.addLast(p);
@@ -733,7 +761,7 @@ public final class ProjectIndex {
                 List<MethodKey> ancestorHits = matchStrictThenSuffix(
                         calls.keySet(), cls, methodName, arity, paramTypes);
                 out.addAll(ancestorHits);
-                Set<String> parents = typeHierarchy.get(cls);
+                Set<String> parents = supertypesOf(cls);
                 if (parents != null) {
                     for (String p : parents) {
                         if (visited.add(p)) queue.addLast(p);
