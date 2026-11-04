@@ -46,6 +46,12 @@ public final class MethodResolver {
                                  String className, String methodName,
                                  Integer arity, List<String> paramTypes)
             throws ProjectIndex.AmbiguousMethodException {
+        // An empty list means "no filter" — the shape produced by CLI
+        // `--param-types ""` and MCP `paramTypes: []`. Without this
+        // normalization the empty list is treated as a real filter that
+        // matches only zero-arg methods, so a declared method with
+        // parameters looks like a non-existent library method.
+        if (paramTypes != null && paramTypes.isEmpty()) paramTypes = null;
         MethodKey target = index.resolveTarget(className, methodName, arity, paramTypes);
         if (target != null) return new Result.ProjectTarget(target);
 

@@ -89,6 +89,22 @@ class MethodResolverTest {
     }
 
     @Test
+    void emptyParamTypesBehavesLikeNoFilter() throws Exception {
+        // Regression: an empty paramTypes list (CLI `--param-types ""` or
+        // MCP `paramTypes: []`) was treated as a real filter that matched
+        // only zero-arg methods, so a declared method with parameters
+        // looked like a non-existent library method.
+        ProjectIndex idx = newIndex();
+        idx.putDeclaration(new MethodKey("com.x.A", "m", 1, List.of("java.lang.String")),
+                new ProjectIndex.SourceLoc("A.java", 1));
+        MethodResolver.Result r = MethodResolver.resolve(idx, "com.x.A", "m", null, List.of());
+        assertInstanceOf(MethodResolver.Result.ProjectTarget.class, r,
+                "empty paramTypes must mean 'no filter', not 'zero-arg only'");
+        assertEquals("com.x.A",
+                ((MethodResolver.Result.ProjectTarget) r).target().declaringClass);
+    }
+
+    @Test
     void overloadUnionSuffixListsSortedSignatures() {
         List<MethodKey> seeds = List.of(
                 new MethodKey("a.b.C", "m", 1, List.of("int")),
