@@ -77,10 +77,17 @@ public final class ProjectIndexCache {
      */
     public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh, boolean includeTests) {
         IndexCacheKey key = new IndexCacheKey(projectRoot, includeTests);
-        if (refresh) {
-            entries.remove(key);
+        // Hold the cache mutex across the eviction + rebuild. Both
+        // entries.remove and entries.computeIfAbsent synchronize on the
+        // same mutex, so wrapping them makes the pair atomic: a concurrent
+        // caller cannot insert a value in the gap, which would let a
+        // refresh observe (or trigger) a second build of the same key.
+        synchronized (entries) {
+            if (refresh) {
+                entries.remove(key);
+            }
+            return entries.computeIfAbsent(key, this::buildIndex);
         }
-        return entries.computeIfAbsent(key, this::buildIndex);
     }
 
     private ProjectIndex buildIndex(IndexCacheKey key) {
