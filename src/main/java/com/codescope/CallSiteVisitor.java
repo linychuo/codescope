@@ -42,10 +42,8 @@ import java.util.List;
  *
  * <p>Covers {@code class}/{@code interface} (TypeDeclaration),
  * {@code enum}, {@code record}, and {@code @interface} declarations.
- * In JDT 3.45 with bindings enabled, top-level records may be wrapped in
- * an {@link ImplicitTypeDeclaration}; we enter/exit that too for forward
- * compatibility, but its body only carries the canonical constructor
- * (a known JDT 3.45 limitation — see {@code Point} test fixture).
+ * An {@link ImplicitTypeDeclaration} wrapper is entered/exit'd too as a
+ * defensive fallback for AST shapes that wrap a declaration in one.
  */
 public final class CallSiteVisitor extends ASTVisitor {
     private final ProjectIndex index;
@@ -256,10 +254,11 @@ public final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(ImplicitTypeDeclaration node) {
-        // JDT 3.45 wraps top-level records here when bindings are enabled.
-        // The name is empty; we still enter so nested visits are scoped.
-        // No symbol recorded: the wrapped record is visited separately
-        // via visit(RecordDeclaration) and recorded there.
+        // Defensive fallback: some AST shapes wrap a declaration in an
+        // ImplicitTypeDeclaration. Its name is usually empty, in which
+        // case fqnOfType keeps the enclosing type so nested visits stay
+        // scoped. No symbol is recorded here — a wrapped record is
+        // visited separately via visit(RecordDeclaration).
         typeStack.push(fqnOfType(nameOf(node)));
         return true;
     }

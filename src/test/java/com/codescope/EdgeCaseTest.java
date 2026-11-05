@@ -336,6 +336,42 @@ class EdgeCaseTest {
     }
 
     @Test
+    void indexesPostJava8Syntax(@TempDir Path tmp) throws IOException {
+        // The parser must run at a modern compliance level (see
+        // JdtIndexer.parseFile). At the Java 1.8 baseline these constructs
+        // are syntax errors and the whole file is dropped from the index.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Modern.java"), """
+                package com.example;
+                public class Modern {
+                    public int useVar() {
+                        var x = 42;
+                        return x;
+                    }
+                    public String switchExpr(int v) {
+                        return switch (v) {
+                            case 1 -> "one";
+                            default -> "other";
+                        };
+                    }
+                }
+                """);
+        ProjectIndex index = new JdtIndexer().build(
+                List.of(srcDir.resolve("Modern.java")), List.of(),
+                List.of(srcDir.getParent().getParent().toString()), tmp);
+        assertTrue(index.skippedFiles().isEmpty(),
+                "modern syntax must not be skipped, got: " + index.skippedFiles());
+        assertTrue(index.knownMethods().stream()
+                        .anyMatch(k -> k.declaringClass.equals("com.example.Modern")
+                                && k.methodName.equals("useVar")),
+                "var-based method should be indexed, got: " + index.knownMethods());
+        assertTrue(index.knownMethods().stream()
+                        .anyMatch(k -> k.declaringClass.equals("com.example.Modern")
+                                && k.methodName.equals("switchExpr")),
+                "switch-expression method should be indexed, got: " + index.knownMethods());
+    }
+
+    @Test
     void jdtIndexerBuildReturnsPromptlyOnInterrupt(@TempDir Path tmp) throws Exception {
         // The interrupt handler inside JdtIndexer.build() breaks out of the
         // future-wait loop on InterruptedException, but the surrounding

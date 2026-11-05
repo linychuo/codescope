@@ -209,21 +209,35 @@ class CallChainAnalyzerTest {
 
     @Test
     void indexesRecordFileWithoutCrashing() {
-        // JDT 3.45 with bindings enabled wraps top-level records in an
-        // ImplicitTypeDeclaration whose body only carries the canonical
-        // constructor — explicit record methods are not reachable through the
-        // AST. We don't expect distanceFromOrigin to be indexed, but the file
-        // must not abort the build. Trigger an indexer pass on a record file.
-        try {
-            index.resolveTarget("com.example.Point", "distanceFromOrigin");
-        } catch (ProjectIndex.AmbiguousMethodException e) {
-            // not expected, but not a crash
-        }
+        // The fixture's Point is a top-level record. The JDT parser is
+        // pinned to a modern compliance level (see JdtIndexer.parseFile),
+        // so the record body is reachable and the file must not abort the
+        // build.
+        assertDoesNotThrow(() -> mustResolve(index, "com.example.Point", "distanceFromOrigin"));
         // The fixture sources must still all be present in the index's known methods
         // (i.e. the other types like Target, Mid, etc. survived the parse pass).
         assertFalse(index.knownMethods().isEmpty());
         // And the non-record enum fixture is still tracked (regression guard for #8).
         assertDoesNotThrow(() -> mustResolve(index, "com.example.Kind", "label"));
+    }
+
+    @Test
+    void recordDeclarationAndMethodsAreIndexed() {
+        // Regression: the JDT parser defaulted to the compiler baseline
+        // compliance (Java 1.8), so `record Point(int x, int y)` parsed as
+        // a syntax error and the record's declaration and methods were
+        // silently dropped from the index.
+        MethodKey dist = mustResolve(index, "com.example.Point", "distanceFromOrigin");
+        assertNotNull(dist, "Point.distanceFromOrigin should resolve");
+        assertEquals("com.example.Point", dist.declaringClass);
+        assertEquals("distanceFromOrigin", dist.methodName);
+    }
+
+    @Test
+    void recordTypeIsSearchable() {
+        ProjectIndex.SymbolSearchResult res = index.searchSymbols("Point", "record", 100);
+        assertEquals(1, res.totalCount(),
+                "the top-level record type should be indexed as kind=record");
     }
 
     @Test

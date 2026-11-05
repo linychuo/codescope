@@ -1,5 +1,6 @@
 package com.codescope;
 
+import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.CompilationUnit;
@@ -10,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -111,6 +113,20 @@ public final class JdtIndexer {
         parser.setResolveBindings(true);
         parser.setBindingsRecovery(true);
         parser.setKind(ASTParser.K_COMPILATION_UNIT);
+        // Pin the language level to the newest the bundled JDT supports.
+        // Left at the compiler baseline (Java 1.8), the parser rejects
+        // records, var, text blocks, switch expressions, sealed types and
+        // every other post-8 construct as a syntax error — the file is
+        // then silently dropped, so its declarations, symbols and call
+        // edges never reach the index. Parsing with a higher level is a
+        // superset of the project's own level, so it is safe for older
+        // sources too.
+        Map<String, String> compilerOptions = JavaCore.getOptions();
+        String compliance = JavaCore.latestSupportedJavaVersion();
+        compilerOptions.put(JavaCore.COMPILER_COMPLIANCE, compliance);
+        compilerOptions.put(JavaCore.COMPILER_SOURCE, compliance);
+        compilerOptions.put(JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM, compliance);
+        parser.setCompilerOptions(compilerOptions);
 
         CompilationUnit cu;
         try {
