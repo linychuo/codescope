@@ -199,8 +199,10 @@ public final class McpServer {
         }
         Long id = coerceId(msg.get("id"));
         if (id == null) {
-            // A tools/call without a usable id is a notification; handle()
-            // ignores it, but run it off-thread for consistency.
+            // No numeric id to track: either a notification (handle()
+            // ignores it) or a request with a non-numeric string id
+            // (handle() replies using the raw id). Run it off-thread for
+            // consistency; there is just no entry to cancel.
             Thread t = Thread.ofVirtual().name("tool-call-anon")
                     .unstarted(() -> safeHandle(msg));
             t.start();
@@ -724,8 +726,12 @@ public final class McpServer {
     }
 
     /**
-     * InputStream wrapper that lets {@link McpServer#stop()} unblock the
-     * read loop without permanently closing the JVM's stdin.
+     * InputStream wrapper whose {@link #close()} only sets a flag — the
+     * underlying {@code System.in} is never closed, so stdio stays usable
+     * for the rest of the JVM. A read already blocked inside
+     * {@code System.in} is not interrupted; the flag is checked before
+     * each new read, so a stopped server stops issuing them (and the
+     * shutdown hook / process exit ends the blocked one).
      */
     private static final class CloseableInputStream extends InputStream {
         private final InputStream delegate;
