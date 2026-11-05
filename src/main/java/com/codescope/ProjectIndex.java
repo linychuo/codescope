@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -326,7 +327,9 @@ public final class ProjectIndex {
      */
     public void recordSymbol(Symbol s) {
         if (s == null || s.name == null || s.name.isEmpty()) return;
-        List<Symbol> bucket = symbols.computeIfAbsent(s.name.toLowerCase(),
+        // Locale.ROOT: the bucket key and the search needle must fold the
+        // same way regardless of the host default locale (Turkish-I etc.).
+        List<Symbol> bucket = symbols.computeIfAbsent(s.name.toLowerCase(Locale.ROOT),
                 k -> Collections.synchronizedList(new ArrayList<>()));
         synchronized (bucket) {
             for (Symbol existing : bucket) {
@@ -373,7 +376,7 @@ public final class ProjectIndex {
         if (query == null || query.isEmpty()) {
             return new SymbolSearchResult(List.of(), 0);
         }
-        String needle = query.toLowerCase();
+        String needle = query.toLowerCase(Locale.ROOT);
         List<Symbol> hits = new ArrayList<>();
         for (List<Symbol> bucket : symbols.values()) {
             List<Symbol> snap;
@@ -382,7 +385,7 @@ public final class ProjectIndex {
             }
             for (Symbol s : snap) {
                 if (kindFilter != null && !kindFilter.equals(s.kind)) continue;
-                if (s.name.toLowerCase().contains(needle)) hits.add(s);
+                if (s.name.toLowerCase(Locale.ROOT).contains(needle)) hits.add(s);
             }
         }
         hits.sort((a, b) -> {
@@ -393,8 +396,12 @@ public final class ProjectIndex {
             return sa.compareTo(sb);
         });
         int total = hits.size();
-        if (hits.size() > limit) {
-            hits = new ArrayList<>(hits.subList(0, limit));
+        // A negative limit is a caller bug; preserve the historical
+        // contract of an empty match list (with the full total) rather
+        // than throwing from subList.
+        int effectiveLimit = Math.max(0, limit);
+        if (hits.size() > effectiveLimit) {
+            hits = new ArrayList<>(hits.subList(0, effectiveLimit));
         }
         return new SymbolSearchResult(hits, total);
     }

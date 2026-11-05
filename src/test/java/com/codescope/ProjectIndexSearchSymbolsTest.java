@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,6 +39,39 @@ class ProjectIndexSearchSymbolsTest {
                 .toList();
         assertEquals(allFqns.subList(0, 100), returned,
                 "truncation must keep the first `limit` matches in sort order");
+    }
+
+    @Test
+    void negativeLimitReturnsEmptyMatchesRatherThanThrowing() {
+        // Defensive: a negative limit is a caller bug, but the old contract
+        // returned an empty match list (with the full total) rather than
+        // throwing. Keep that behavior.
+        ProjectIndex idx = new ProjectIndex();
+        idx.recordSymbol(new ProjectIndex.Symbol("process", "method",
+                "com.example.C0#process/1", "com.example.C0", "C0.java", 1, "java.lang.String"));
+        ProjectIndex.SymbolSearchResult res = idx.searchSymbols("process", null, -1);
+        assertTrue(res.matches().isEmpty(),
+                "negative limit should yield no matches, got: " + res.matches());
+        assertEquals(1, res.totalCount(), "total must still count every match");
+    }
+
+    @Test
+    void symbolSearchIsLocaleIndependent() {
+        // String.toLowerCase() without a locale uses the default one; under
+        // Turkish the dotted/dotless I makes "TITLE" and "title" fold to
+        // different strings, so a case-insensitive search would miss.
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr"));
+            ProjectIndex idx = new ProjectIndex();
+            idx.recordSymbol(new ProjectIndex.Symbol("TITLE", "class",
+                    "com.x.TITLE", null, "TITLE.java", 1, null));
+            ProjectIndex.SymbolSearchResult res = idx.searchSymbols("title", null, 10);
+            assertEquals(1, res.totalCount(),
+                    "search must be locale-independent (Turkish-I)");
+        } finally {
+            Locale.setDefault(original);
+        }
     }
 
     @Test
