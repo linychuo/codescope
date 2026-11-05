@@ -154,13 +154,12 @@ class FindSymbolsServiceTest {
         // We don't search with kind=class because Point is a record,
         // not a class — the kind filter would exclude it.
         //
-        // JDT 3.45 with bindings enabled wraps top-level records in an
-        // ImplicitTypeDeclaration whose body only carries the canonical
-        // constructor — so find_symbols does NOT see top-level record
-        // bodies (matching the limitation the indexer already documents
-        // in CallChainAnalyzerTest#indexesRecordFileWithoutCrashing).
-        // We only assert on the kinds that ARE visitable: enum and
-        // annotation.
+        // The parser is pinned to a modern compliance level (see
+        // JdtIndexer.parseFile), so top-level records are visited as
+        // RecordDeclaration and indexed like any other type. The record
+        // assertions live in CallChainAnalyzerTest
+        // (#recordDeclarationAndMethodsAreIndexed / #recordTypeIsSearchable);
+        // here we cover the enum and annotation kinds.
         FindSymbolsService svc = new FindSymbolsService();
         JsonNode k = new ObjectMapper().readTree(
                 svc.findSymbolsJson("Kind", null, FIXTURE, false,

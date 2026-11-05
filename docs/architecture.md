@@ -65,7 +65,7 @@ MCP server 路径:
 `JdtIndexer` 解析源码时看到的是 `MethodInvocation` (caller 体内),即 `caller → callee` 这条边。但写到 `ProjectIndex` 时把它翻过来,key 是 callee,value 是 caller 集合:
 
 ```java
-// JdtIndexer.CallSiteVisitor
+// CallSiteVisitor
 index.recordInvocation(methodStack.peek().key, target);  // caller, callee
 // ProjectIndex 内部按 callee 建表
 calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
@@ -82,10 +82,12 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | 文件 | 决策 | 原因 |
 |------|------|------|
 | `McpServer.tryParseAndDispatch` | 一次只消费一个 JSON 对象,尾随字节保留 | MCP host 不保证一请求一行,可能是粘包;不能因为中途有脏数据就把整段丢 |
+| `McpServer.dispatchAsync` | 只有 `tools/call` 丢到 worker 线程,读循环不阻塞 | 大项目索引耗时数秒;阻塞读循环会收不到 `notifications/cancelled` 和后续请求,`stop()` 也中断不了在飞的工具 |
 | `McpServer.sendRequestAwait` | server→client 的反向 RPC 用 `CompletableFuture<JsonNode>` 关联,`pending: id → Future` 先注册再写请求避免被极快响应甩掉,`notifications/cancelled` 直接 cancel | JSON-RPC 2.0 §6.1;响应可能超时、可能带 `error` 字段、可能极快到达,三种都得能正确结束 |
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
+| `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃 |
 | shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果 |
 | `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树 | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择 |
 | `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
@@ -99,7 +101,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | 给 CLI 加一个子命令(不动 MCP) | `Cli.dispatch` 添一个 `case`,参数复用对应 `*Service` |
 | 修改 `trace_callers` 的入参/出参 schema | `TraceCallersTool.inputSchema()`(对外)+ `TraceCallersService`(业务)+ `McpServerTest`/`CallChainAnalyzerTest`(测试) |
 | 改 JSON-RPC 协议层行为(分帧、错误码、cancellation) | `McpServer.java` 一处,改动会反映在 `McpServerTest` |
-| 改 JDT 解析(支持新的 AST 节点类型) | `JdtIndexer.CallSiteVisitor` 里的 `visit(Xxx)` 方法 |
+| 改 JDT 解析(支持新的 AST 节点类型) | `CallSiteVisitor` 里的 `visit(Xxx)` 方法 |
 | 改 BFS/cycle 算法 | `CallChainAnalyzer.bfs`,`EdgeCaseTest` 是它的回归网 |
 | 改依赖解析(支持 Gradle、自定义 settings.xml 等) | `DependencyResolver`(接口) + `MvnCliDependencyResolver`(Maven CLI 实现) + `DependencyResolverFactory`(自动检测),测试在 `MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest` |
 | 修并发 bug | `ProjectIndex`(`ConcurrentHashMap` 外层 + `synchronized(set)` 保护 `LinkedHashSet`),`EdgeCaseTest.projectIndexIsThreadSafe*` 是直接覆盖 |

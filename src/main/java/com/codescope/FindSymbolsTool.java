@@ -36,10 +36,7 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                 + "container, and source location. Use this to answer \"where is X defined?\" "
                 + "or \"what classes/methods contain the word Y?\" without knowing the full "
                 + "qualified name. For transitive caller chains, use `trace_callers`; for "
-                + "non-transitive call positions, use `find_call_sites`. "
-                + "Caveat: under JDT 3.45, top-level record declarations are wrapped in an "
-                + "ImplicitTypeDeclaration, so the record kind and its components are NOT "
-                + "indexed; nested records and enum/annotation/class kinds are indexed normally.";
+                + "non-transitive call positions, use `find_call_sites`.";
     }
 
     @Override

@@ -71,11 +71,10 @@ export CODESCOPE_MVN_ARGS="-gs /path/to/settings.xml"
 - 支持 Maven 项目（调用 `mvn dependency:build-classpath` 获取依赖），Gradle 后续加入
 - `project` 必须是绝对路径
 - 重载需用 `arity` 或 `paramTypes` 消歧
-- `find_symbols` 看不到顶层 `record` 声明（JDT 限制）
 
 ## 测试
 
 ```bash
 mvn test
-# 245 个测试
+# 248 个测试
 ```
