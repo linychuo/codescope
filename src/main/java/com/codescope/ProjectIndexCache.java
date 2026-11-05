@@ -93,7 +93,10 @@ public final class ProjectIndexCache {
     private ProjectIndex buildIndex(IndexCacheKey key) {
         try {
             ProjectLoader.LoadResult load = new ProjectLoader().load(key.projectRoot(), key.includeTests());
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), key.projectRoot());
+            // Relativize against the effective root (the aggregator when the
+            // user pointed at a sub-module), not the sub-module itself —
+            // otherwise sibling-module files get ".." segments.
+            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), load.root());
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to load project at " + key.projectRoot(), e);
         }
@@ -103,10 +106,9 @@ public final class ProjectIndexCache {
      * Shared Jackson {@link ObjectMapper} for every {@code *Service}.
      * Default {@code StreamWriteConstraints} cap nesting at 1000; we
      * raise it to {@value #MAX_NESTING_DEPTH} so deep call chains
-     * emitted by {@link CallChainAnalyzer} serialize cleanly. The
-     * raised cap matches the default value of
-     * {@link CallChainAnalyzer}'s node cap (50_000) so the
-     * mapper itself is never the choke point.
+     * emitted by {@link CallChainAnalyzer} serialize cleanly. A tree is
+     * at most {@link CallChainAnalyzer}'s {@code MAX_DEPTH} (500) frames
+     * deep, so the mapper's nesting limit is never the choke point.
      *
      * <p>Package-private so tests can exercise the same mapper the
      * services use, without going through the full Maven-project

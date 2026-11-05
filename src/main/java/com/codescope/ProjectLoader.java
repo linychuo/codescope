@@ -20,7 +20,13 @@ public final class ProjectLoader {
     public record LoadResult(
             List<Path> sources,
             List<String> classpath,
-            List<String> sourcepath) {}
+            List<String> sourcepath,
+            /**
+             * The effective project root (the aggregator, when {@code projectRoot}
+             * is a sub-module). File paths in the index are relativized against
+             * this so they stay inside the indexed tree.
+             */
+            Path root) {}
 
     /**
      * Loads sources + classpath for a Maven project.
@@ -50,7 +56,7 @@ public final class ProjectLoader {
         classpath.addAll(jreClasspath());
         classpath.addAll(wellKnownApiJars(classpath));
         List<String> sourcepath = collectSourceRoots(effective, includeTests);
-        return new LoadResult(sources, classpath, sourcepath);
+        return new LoadResult(sources, classpath, sourcepath, effective);
     }
 
     /**

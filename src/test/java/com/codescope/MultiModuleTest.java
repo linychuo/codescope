@@ -92,6 +92,24 @@ class MultiModuleTest {
     }
 
     @Test
+    void cacheRelativizesSubModuleAgainstEffectiveRoot() throws Exception {
+        // Pointing --project at a sub-module walks up to the aggregator
+        // for sources; the index must relativize against that aggregator
+        // too. Relativizing against the sub-module escapes the project
+        // root with ".." segments in every sibling-module file path.
+        Path subModule = Path.of("src/test/resources/multi-module-fixture/app");
+        ProjectIndex index = new ProjectIndexCache().loadOrRebuild(subModule, false, false);
+        assertFalse(index.knownMethods().isEmpty());
+        for (MethodKey k : index.knownMethods()) {
+            ProjectIndex.SourceLoc loc = index.declarationOf(k);
+            if (loc != null) {
+                assertFalse(loc.file().contains(".."),
+                        "file path must be relative to the effective root, got: " + loc.file());
+            }
+        }
+    }
+
+    @Test
     void aggregatorAsProjectRootIsUnchanged() throws IOException {
         // Regression: pointing --project at the aggregator directly must
         // keep working (no double-walk-up). The fixture's root is

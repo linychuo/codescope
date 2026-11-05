@@ -144,7 +144,7 @@ public final class JdtIndexer {
         try {
             relPath = relativize(src, projectRoot);
         } catch (IllegalArgumentException e) {
-            index.recordSkippedFile(src.toString(), "not under project root: " + e.getMessage());
+            index.recordSkippedFile(src.toString(), "path relativization failed: " + e.getMessage());
             return;
         }
         try {
@@ -163,11 +163,13 @@ public final class JdtIndexer {
 
     private static String relativize(Path file, Path root) {
         if (root == null) return file.toString();
-        // Path#relativize throws IllegalArgumentException if `file` is not
-        // under `root`. ProjectLoader guarantees every source is under the
-        // project root, so the throw is a real misconfiguration — let it
-        // surface to the skipped-files record rather than silently masking
-        // it with an absolute path.
+        // Path#relativize only throws for an absolute/relative mismatch or
+        // different filesystem roots; for a file outside `root` on the same
+        // filesystem it returns a ".."-prefixed path rather than throwing.
+        // Let a real throw surface to the skipped-files record instead of
+        // masking it with an absolute path. Callers pass the effective
+        // project root (ProjectLoader.LoadResult#root) so normal sources
+        // stay inside the indexed tree.
         return root.relativize(file).toString();
     }
 }
