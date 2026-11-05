@@ -96,25 +96,25 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         return IS_WINDOWS ? "mvn.cmd" : "mvn";
     }
 
-    private List<String> buildCommand(Path projectRoot, Path outputFile) {
+    List<String> buildCommand(Path projectRoot, Path outputFile) {
         List<String> cmd = new ArrayList<>();
         cmd.add(resolveMvnCommand(projectRoot));
         cmd.add("-f");
         cmd.add(projectRoot.resolve("pom.xml").toString());
         // User-provided extra args (from CLI / factory)
-        cmd.addAll(extraArgs);
+        extraArgs.stream().filter(s -> !s.isEmpty()).forEach(cmd::add);
         // System property fallback: -Dcodescope.mvn.args=...
         if (extraArgs.isEmpty()) {
             String propArgs = System.getProperty(PROP_MVN_ARGS);
             if (propArgs != null && !propArgs.isBlank()) {
-                cmd.addAll(Arrays.asList(propArgs.split("\\s+")));
+                addShellWords(cmd, propArgs);
             }
         }
         // Env var fallback: CODESCOPE_MVN_ARGS
         if (extraArgs.isEmpty() && System.getProperty(PROP_MVN_ARGS) == null) {
             String envArgs = System.getenv(ENV_MVN_ARGS);
             if (envArgs != null && !envArgs.isBlank()) {
-                cmd.addAll(Arrays.asList(envArgs.split("\\s+")));
+                addShellWords(cmd, envArgs);
             }
         }
         cmd.add("dependency:build-classpath");
@@ -123,5 +123,17 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         cmd.add("-Dmdep.includeScope=compile");
         cmd.add("-q");  // quiet mode - less noise
         return cmd;
+    }
+
+    /**
+     * Append whitespace-separated words to {@code cmd}, dropping empty
+     * segments. {@code "  -gs /x "} splits to {@code ["", "-gs", "/x"]};
+     * an empty argument passed through to Maven is at best ignored and at
+     * worst a malformed invocation.
+     */
+    private static void addShellWords(List<String> cmd, String args) {
+        for (String word : args.split("\\s+")) {
+            if (!word.isEmpty()) cmd.add(word);
+        }
     }
 }

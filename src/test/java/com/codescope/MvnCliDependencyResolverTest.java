@@ -88,6 +88,24 @@ class MvnCliDependencyResolverTest {
     }
 
     @Test
+    void buildCommandDropsEmptyExtraArgs(@TempDir Path tmp) throws Exception {
+        // A leading/trailing space in -Dcodescope.mvn.args makes
+        // String.split("\\s+") emit an empty first/last element; passing
+        // that empty string through to Maven is at best ignored and at
+        // worst a malformed invocation.
+        System.setProperty("codescope.mvn.args", "  -gs   /tmp/settings.xml  ");
+        try {
+            List<String> cmd = new MvnCliDependencyResolver()
+                    .buildCommand(tmp, tmp.resolve("cp.out"));
+            assertFalse(cmd.contains(""), "command must not contain empty args: " + cmd);
+            assertTrue(cmd.contains("-gs"), "got: " + cmd);
+            assertTrue(cmd.contains("/tmp/settings.xml"), "got: " + cmd);
+        } finally {
+            System.clearProperty("codescope.mvn.args");
+        }
+    }
+
+    @Test
     void resolvesInFixtureProject() throws Exception {
         // Integration test: run against the fixture project (no deps, just
         // verify the mvn command succeeds and returns something).
