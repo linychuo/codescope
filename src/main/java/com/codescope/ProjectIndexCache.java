@@ -11,6 +11,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 /**
@@ -55,6 +57,14 @@ public final class ProjectIndexCache {
                     return size() > MAX_CACHED_PROJECTS;
                 }
             });
+    /**
+     * Per-key locks so two different projects can build concurrently. The
+     * {@code entries} map stays globally locked for its short LRU
+     * operations; only the slow build happens outside it. One lock is
+     * retained per distinct key for the cache's lifetime — small, but
+     * unbounded in a server that indexes many projects.
+     */
+    private final Map<IndexCacheKey, ReentrantLock> keyLocks = new ConcurrentHashMap<>();
 
     public ProjectIndexCache() {
         this(new JdtIndexer());
@@ -69,24 +79,35 @@ public final class ProjectIndexCache {
      * absent. On {@code refresh=true} the cached entry is evicted first
      * so a concurrent caller cannot return a stale value mid-rebuild.
      *
-     * <p>IO failures during build are wrapped in
-     * {@link UncheckedIOException} so the {@code computeIfAbsent}
-     * lambda can throw; the cache leaves the entry unset so a future
-     * call (e.g. after the user fixes the project) will retry rather
-     * than serve a poisoned entry.
+     * <p>The build runs under a per-key lock but outside the cache mutex,
+     * so different projects build concurrently while the LRU map stays
+     * correct. IO failures during build are wrapped in
+     * {@link UncheckedIOException}; the cache leaves the entry unset so a
+     * future call (e.g. after the user fixes the project) will retry
+     * rather than serve a poisoned entry.
      */
     public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh, boolean includeTests) {
         IndexCacheKey key = new IndexCacheKey(projectRoot, includeTests);
-        // Hold the cache mutex across the eviction + rebuild. Both
-        // entries.remove and entries.computeIfAbsent synchronize on the
-        // same mutex, so wrapping them makes the pair atomic: a concurrent
-        // caller cannot insert a value in the gap, which would let a
-        // refresh observe (or trigger) a second build of the same key.
-        synchronized (entries) {
-            if (refresh) {
-                entries.remove(key);
+        ReentrantLock lock = keyLocks.computeIfAbsent(key, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            synchronized (entries) {
+                if (!refresh) {
+                    ProjectIndex cached = entries.get(key);
+                    if (cached != null) return cached;
+                } else {
+                    entries.remove(key);
+                }
             }
-            return entries.computeIfAbsent(key, this::buildIndex);
+            ProjectIndex built = buildIndex(key);
+            synchronized (entries) {
+                ProjectIndex raced = entries.get(key);
+                if (raced != null) return raced;
+                entries.put(key, built);
+                return built;
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
