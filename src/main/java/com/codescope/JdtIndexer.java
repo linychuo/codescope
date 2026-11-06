@@ -126,6 +126,11 @@ public final class JdtIndexer {
         compilerOptions.put(JavaCore.COMPILER_COMPLIANCE, compliance);
         compilerOptions.put(JavaCore.COMPILER_SOURCE, compliance);
         compilerOptions.put(JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM, compliance);
+        // Accept preview language features for the pinned level. Without
+        // this a project using them would have those files dropped as
+        // syntax errors. Preview use only produces warnings, which the
+        // indexer ignores (it only checks for a null AST).
+        compilerOptions.put(JavaCore.COMPILER_PB_ENABLE_PREVIEW_FEATURES, JavaCore.ENABLED);
         parser.setCompilerOptions(compilerOptions);
 
         CompilationUnit cu;
