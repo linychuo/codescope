@@ -2,19 +2,42 @@ package com.codescope;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 public final class MvnCliDependencyResolver implements DependencyResolver {
 
     private static final String ENV_MVN_ARGS = "CODESCOPE_MVN_ARGS";
     private static final String PROP_MVN_ARGS = "codescope.mvn.args";
+    private static final String PROP_MVN_TIMEOUT = "codescope.mvn.timeout";
+    /** Default cap on one mvn invocation (10 minutes). */
+    private static final long DEFAULT_TIMEOUT_SECONDS = 600;
     private static final boolean IS_WINDOWS = System.getProperty("os.name")
             .toLowerCase(Locale.ROOT).contains("win");
+
+    /**
+     * Cap on one {@code mvn dependency:build-classpath} invocation, in
+     * seconds. Without it a Maven that hangs (network fetch, prompt, lock
+     * contention) would block the whole tool indefinitely. Override with
+     * {@code -Dcodescope.mvn.timeout=<seconds>}.
+     */
+    static long timeoutSeconds() {
+        String v = System.getProperty(PROP_MVN_TIMEOUT);
+        if (v == null || v.isBlank()) return DEFAULT_TIMEOUT_SECONDS;
+        try {
+            long n = Long.parseLong(v.trim());
+            return n < 0 ? DEFAULT_TIMEOUT_SECONDS : n;
+        } catch (NumberFormatException e) {
+            return DEFAULT_TIMEOUT_SECONDS;
+        }
+    }
 
     private final List<String> extraArgs;
 
@@ -42,9 +65,29 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
             pb.directory(projectRoot.toFile());
             pb.redirectErrorStream(true);
             Process process = pb.start();
-            // Read stdout to avoid blocking
-            String stdout = new String(process.getInputStream().readAllBytes());
-            int exitCode = process.waitFor();
+            // Drain stdout on a separate virtual thread: a chatty Maven must
+            // not fill the pipe and deadlock us while we wait for exit.
+            CompletableFuture<String> stdoutFuture = new CompletableFuture<>();
+            Thread.ofVirtual().name("mvn-stdout").start(() -> {
+                try {
+                    stdoutFuture.complete(new String(
+                            process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                } catch (IOException e) {
+                    stdoutFuture.complete("");
+                }
+            });
+            try {
+                if (!process.waitFor(timeoutSeconds(), TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    throw new IOException("mvn dependency:build-classpath timed out after "
+                            + timeoutSeconds() + "s");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("mvn process was interrupted", e);
+            }
+            String stdout = stdoutFuture.join();
+            int exitCode = process.exitValue();
             if (exitCode != 0) {
                 throw new IOException("mvn dependency:build-classpath failed (exit="
                         + exitCode + "): " + stdout);
@@ -53,9 +96,6 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
                 return List.of();  // no output file -> no dependencies
             }
             return parseClasspathFile(outputFile);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("mvn process was interrupted", e);
         } finally {
             try {
                 Files.deleteIfExists(outputFile);

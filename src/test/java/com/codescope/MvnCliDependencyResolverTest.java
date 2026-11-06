@@ -106,6 +106,22 @@ class MvnCliDependencyResolverTest {
     }
 
     @Test
+    void resolveTimesOutWhenMavenRunsTooLong() throws Exception {
+        // A zero-second timeout forces the wait to expire immediately. The
+        // fixture project's mvn invocation takes seconds, so this reliably
+        // exercises the timeout path instead of a real build.
+        System.setProperty("codescope.mvn.timeout", "0");
+        try {
+            MvnCliDependencyResolver r = new MvnCliDependencyResolver();
+            IOException e = assertThrows(IOException.class, () -> r.resolve(
+                    Path.of("src/test/resources/fixture-project")));
+            assertTrue(e.getMessage().contains("timed out"), "got: " + e.getMessage());
+        } finally {
+            System.clearProperty("codescope.mvn.timeout");
+        }
+    }
+
+    @Test
     void resolvesInFixtureProject() throws Exception {
         // Integration test: run against the fixture project (no deps, just
         // verify the mvn command succeeds and returns something).
