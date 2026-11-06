@@ -116,6 +116,42 @@ class ProjectLoaderTest {
     }
 
     @Test
+    void includesPomDeclaredSourceDirectory(@TempDir Path root) throws IOException {
+        // Maven allows <build><sourceDirectory>; the loader must include it
+        // in addition to the conventional src/<...>/main/java roots.
+        writeJava(root.resolve("src/java/com/x/Custom.java"), "com.x", "Custom");
+        Files.writeString(root.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>x</artifactId><version>1</version>"
+                        + "<build><sourceDirectory>src/java</sourceDirectory></build>"
+                        + "</project>");
+
+        List<Path> sources = ProjectLoader.collectSources(root, false);
+        assertTrue(sources.stream().anyMatch(p -> p.toString().endsWith("Custom.java")),
+                "pom-declared sourceDirectory must be indexed, got: " + sources);
+    }
+
+    @Test
+    void includesPomDeclaredTestSourceDirectoryWhenRequested(@TempDir Path root) throws IOException {
+        writeJava(root.resolve("src/test-java/com/x/HelperTest.java"), "com.x", "HelperTest");
+        Files.writeString(root.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>x</artifactId><version>1</version>"
+                        + "<build><testSourceDirectory>src/test-java</testSourceDirectory></build>"
+                        + "</project>");
+
+        List<Path> withTests = ProjectLoader.collectSources(root, true);
+        assertTrue(withTests.stream().anyMatch(p -> p.toString().endsWith("HelperTest.java")),
+                "pom-declared testSourceDirectory must be indexed when includeTests, got: "
+                        + withTests);
+        List<Path> mainOnly = ProjectLoader.collectSources(root, false);
+        assertFalse(mainOnly.stream().anyMatch(p -> p.toString().endsWith("HelperTest.java")),
+                "test source must be excluded when includeTests=false, got: " + mainOnly);
+    }
+
+    @Test
     void absoluteRelativePathIsRejected(@TempDir Path projectRoot) throws IOException {
         // A hostile pom with <relativePath>/absolute/path/pom.xml</relativePath>
         // would, without hardening, let discoverEffectiveRoot jump out of

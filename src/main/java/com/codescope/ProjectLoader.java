@@ -1,11 +1,19 @@
 package com.codescope;
 
+import org.apache.maven.model.Build;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /** Locates Java source files, JRE jars, and a Maven classpath for a project root. */
@@ -370,7 +378,79 @@ public final class ProjectLoader {
         } catch (IOException e) {
             // best-effort
         }
+        out.addAll(pomDeclaredSourceRoots(projectRoot, includeTests));
         return out;
+    }
+
+    /**
+     * Source roots a project declares in its pom via
+     * {@code <build><sourceDirectory>} / {@code <testSourceDirectory>}.
+     * The conventional {@code src/<...>/main/java} discovery covers the
+     * default layout; this adds the non-standard ones Maven lets a project
+     * configure. Every pom under the project is consulted, so a custom
+     * source directory in any multi-module child is picked up too.
+     */
+    private static List<Path> pomDeclaredSourceRoots(Path projectRoot, boolean includeTests) {
+        List<Path> out = new ArrayList<>();
+        if (!Files.isDirectory(projectRoot)) return out;
+        try (Stream<Path> s = Files.walk(projectRoot, MAX_DIRECTORY_DEPTH)) {
+            s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equals("pom.xml"))
+                    .filter(p -> !relativeSegmentEquals(p.getParent(), projectRoot, "target"))
+                    .forEach(pom -> addDeclaredRoots(out, pom, includeTests));
+        } catch (IOException e) {
+            // best-effort
+        }
+        return out;
+    }
+
+    private static void addDeclaredRoots(List<Path> out, Path pom, boolean includeTests) {
+        Path moduleDir = pom.getParent();
+        if (moduleDir == null) return;
+        try (InputStream in = new FileInputStream(pom.toFile())) {
+            Model model = new MavenXpp3Reader().read(in);
+            Build build = model.getBuild();
+            if (build == null) return;
+            addIfDirectory(out, moduleDir,
+                    resolveModelValue(model, build.getSourceDirectory(), moduleDir));
+            if (includeTests) {
+                addIfDirectory(out, moduleDir,
+                        resolveModelValue(model, build.getTestSourceDirectory(), moduleDir));
+            }
+        } catch (Exception e) {
+            // best-effort: a malformed pom shouldn't break source discovery
+        }
+    }
+
+    private static void addIfDirectory(List<Path> out, Path base, String relative) {
+        if (relative == null || relative.isBlank()) return;
+        Path resolved = base.resolve(relative).toAbsolutePath().normalize();
+        if (Files.isDirectory(resolved) && !out.contains(resolved)) out.add(resolved);
+    }
+
+    /**
+     * Substitutes {@code ${...}} references from the model's properties,
+     * falling back to the system properties and Maven's built-in
+     * {@code project.basedir} / {@code basedir}.
+     */
+    private static String resolveModelValue(Model model, String value, Path moduleDir) {
+        if (value == null) return null;
+        Matcher m = Pattern.compile("\\$\\{([^}]+)\\}").matcher(value);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String key = m.group(1);
+            String replacement = model.getProperties().getProperty(key);
+            if (replacement == null) {
+                if ("project.basedir".equals(key) || "basedir".equals(key)) {
+                    replacement = moduleDir.toString();
+                } else {
+                    replacement = System.getProperty(key, "");
+                }
+            }
+            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     private static boolean relativeSegmentEquals(Path p, Path root, String segment) {
