@@ -382,6 +382,16 @@ class FindSymbolsServiceTest {
         }
     }
 
+    @Test
+    void validKindsHaveStableDocumentedOrder() {
+        // Set.of's iteration order is randomized per JVM run, which leaked
+        // into the "Valid: ..." diagnostics. Keep the advertised order.
+        assertEquals(
+                List.of("class", "interface", "enum", "record", "annotation",
+                        "method", "constructor", "field", "synthetic"),
+                new ArrayList<>(FindSymbolsService.VALID_KINDS));
+    }
+
     private static void deleteRecursively(Path p) throws java.io.IOException {
         if (!Files.exists(p)) return;
         try (var s = Files.walk(p)) {

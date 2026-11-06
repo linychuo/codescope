@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,10 +28,16 @@ public final class FindSymbolsService {
     /** Hard ceiling on `limit` to keep responses bounded. */
     static final int MAX_LIMIT = 1000;
 
-    /** Recognized kind values for the optional `kind` argument. */
-    static final Set<String> VALID_KINDS = Set.of(
-            "class", "interface", "enum", "record", "annotation",
-            "method", "constructor", "field", "synthetic");
+    /**
+     * Recognized kind values for the optional {@code kind} argument, in the
+     * order they are advertised. A {@link LinkedHashSet} rather than
+     * {@code Set.of}: the latter's iteration order is randomized per JVM
+     * run, which made the "Valid: ..." diagnostics nondeterministic.
+     */
+    static final Set<String> VALID_KINDS = Collections.unmodifiableSet(
+            new LinkedHashSet<>(List.of(
+                    "class", "interface", "enum", "record", "annotation",
+                    "method", "constructor", "field", "synthetic")));
 
     private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 
