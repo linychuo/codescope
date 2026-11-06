@@ -87,11 +87,11 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
-| `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃 |
-| shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果 |
-| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树 | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择 |
+| `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |
+| shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8;每个 key 一把 `ReentrantLock`,构建在缓存锁外进行 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果;per-key 锁让不同 project 并发构建,LRU 的读写仍在全局锁内保持正确 |
+| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
 | `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
-| `ProjectLoader.collectSourceRoots0` | 只匹配 `src/<...>/main/java`,**排除 test** | 测试代码不参与调用链;`src/test` 是另一棵子树 |
+| `ProjectLoader.collectSourceRoots0` | 匹配 `src/<...>/main/java`(test 视 `includeTests`),并并入每个 pom 的 `<build><sourceDirectory>`/`<testSourceDirectory>` | 测试代码默认不参与调用链;Maven 允许自定义源码目录,不读 pom 会漏掉这些文件 |
 
 ## 改哪儿 — 常见场景
 

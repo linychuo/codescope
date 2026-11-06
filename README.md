@@ -66,6 +66,12 @@ export CODESCOPE_MVN_ARGS="-gs /path/to/settings.xml"
 
 自动检测 Maven Wrapper（`mvnw` / `mvnw.cmd`）和 `MAVEN_HOME`。
 
+单次 `mvn dependency:build-classpath` 调用有超时保护（默认 600 秒），避免 Maven 卡住时工具无限挂起：
+
+```bash
+java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
+```
+
 ## 限制
 
 - 支持 Maven 项目（调用 `mvn dependency:build-classpath` 获取依赖），Gradle 后续加入
@@ -76,5 +82,5 @@ export CODESCOPE_MVN_ARGS="-gs /path/to/settings.xml"
 
 ```bash
 mvn test
-# 252 个测试
+# 260 个测试
 ```
