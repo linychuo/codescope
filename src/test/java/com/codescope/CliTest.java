@@ -134,6 +134,29 @@ class CliTest {
     }
 
     @Test
+    void irrelevantOptionWarnsButDoesNotFail() {
+        // --limit only applies to find-symbols. Passing it to trace-callers
+        // should warn rather than fail or silently ignore; the service still
+        // runs and rejects the pom-less project below.
+        int code = Cli.run(new String[]{
+                "trace-callers", "com.x.Foo", "bar",
+                "--project", "/some/path", "--limit", "5"});
+        assertEquals(1, code, "stderr: " + err);
+        assertTrue(err.toString().contains("--limit is not used by 'trace-callers'"),
+                "expected irrelevant-option warning, got: " + err);
+    }
+
+    @Test
+    void irrelevantArityOptionWarnsForFindSymbols() {
+        int code = Cli.run(new String[]{
+                "find-symbols", "x",
+                "--project", "/some/path", "--arity", "1"});
+        assertEquals(1, code, "stderr: " + err);
+        assertTrue(err.toString().contains("--arity is not used by 'find-symbols'"),
+                "expected irrelevant-option warning, got: " + err);
+    }
+
+    @Test
     void badProjectPathExitsOne(@TempDir Path tmp) {
         // tmp exists but has no pom.xml — the service rejects it.
         int code = Cli.run(new String[]{

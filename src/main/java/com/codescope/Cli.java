@@ -53,7 +53,7 @@ public final class Cli {
 
         ParsedArgs p;
         try {
-            p = parseArgs(rest);
+            p = parseArgs(rest, command);
         } catch (UsageException e) {
             System.err.println("codescope: " + e.getMessage());
             System.err.println();
@@ -125,7 +125,7 @@ public final class Cli {
         }
     }
 
-    private static ParsedArgs parseArgs(String[] args) {
+    private static ParsedArgs parseArgs(String[] args, String command) {
         ParsedArgs p = new ParsedArgs();
         int i = 0;
         while (i < args.length) {
@@ -140,12 +140,14 @@ public final class Cli {
                     requireValue(args, i, "--arity");
                     int n = parsePositiveInt(args[++i], "--arity");
                     p.arity = n;
+                    p.aritySet = true;
                     i++;
                 }
                 case "--param-types" -> {
                     requireValue(args, i, "--param-types");
                     String s = args[++i];
                     p.paramTypes = parseParamTypes(s);
+                    p.paramTypesSet = true;
                     i++;
                 }
                 case "--refresh" -> { p.refresh = true; i++; }
@@ -153,11 +155,13 @@ public final class Cli {
                 case "--kind" -> {
                     requireValue(args, i, "--kind");
                     p.kind = args[++i];
+                    p.kindSet = true;
                     i++;
                 }
                 case "--limit" -> {
                     requireValue(args, i, "--limit");
                     p.limit = parsePositiveInt(args[++i], "--limit");
+                    p.limitSet = true;
                     i++;
                 }
                 default -> {
@@ -169,7 +173,29 @@ public final class Cli {
                 }
             }
         }
+        warnIfIrrelevant(p, command);
         return p;
+    }
+
+    /**
+     * Options that only one command understands are warned about rather
+     * than silently ignored, so a copy-pasted command line doesn't look
+     * like it applied a setting it did not.
+     */
+    private static void warnIfIrrelevant(ParsedArgs p, String command) {
+        boolean symbols = "find-symbols".equals(command);
+        if (!symbols) {
+            if (p.kindSet) warnIrrelevant("--kind", command);
+            if (p.limitSet) warnIrrelevant("--limit", command);
+        } else {
+            if (p.aritySet) warnIrrelevant("--arity", command);
+            if (p.paramTypesSet) warnIrrelevant("--param-types", command);
+        }
+    }
+
+    private static void warnIrrelevant(String option, String command) {
+        System.err.println("codescope: warning: " + option
+                + " is not used by '" + command + "'; ignoring");
     }
 
     private static void requireValue(String[] args, int i, String opt) {
@@ -253,6 +279,7 @@ public final class Cli {
         boolean includeTests;
         String kind;
         int limit = 100;
+        boolean aritySet, paramTypesSet, kindSet, limitSet;
         final List<String> positional = new ArrayList<>();
 
         String requirePos(int idx, String name) {
