@@ -93,6 +93,42 @@ class McpServerStdioTest {
     }
 
     @Test
+    void oneShotPipeStillDeliversToolResponse() throws Exception {
+        // The documented one-shot pattern (`printf ... | java -jar ...`) closes
+        // stdin immediately after the request. The read loop must wait for the
+        // in-flight tools/call worker, otherwise the JVM exits before the
+        // response is written and the pipe yields nothing.
+        Process proc = startServer();
+        try {
+            BufferedReader out = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8));
+            OutputStream in = proc.getOutputStream();
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
+            String args = JSON.writeValueAsString(java.util.Map.of(
+                    "class", "com.example.Target",
+                    "method", "leaf",
+                    "project", FIXTURE.toAbsolutePath().toString()));
+            send(in, String.format(
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\","
+                            + "\"params\":{\"name\":\"trace_callers\",\"arguments\":%s}}\n",
+                    args));
+            in.close();   // EOF right after the request, like the shell pipe
+
+            assertEquals(1, readJson(out).path("id").asInt(), "initialize response");
+            JsonNode callResp = readJson(out);
+            assertEquals(2, callResp.path("id").asInt(),
+                    "tools/call response must arrive after stdin EOF");
+            JsonNode content = callResp.path("result").path("content");
+            assertTrue(content.isArray() && content.size() >= 1,
+                    "tools/call response must carry content");
+        } finally {
+            proc.destroy();
+            proc.waitFor(5, TimeUnit.SECONDS);
+            if (proc.isAlive()) proc.destroyForcibly();
+        }
+    }
+
+    @Test
     void returnsErrorForUnknownMethod() throws Exception {
         Process proc = startServer();
         try (BufferedReader out = new BufferedReader(

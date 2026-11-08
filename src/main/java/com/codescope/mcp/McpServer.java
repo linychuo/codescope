@@ -39,6 +39,13 @@ public final class McpServer {
     private static final int STDIN_CHUNK_SIZE = 4096;
     private static final long REQUEST_ID_BASE = 1_000_000L;  // avoids collision with client-side small ids
     private static final int ROOTS_FETCH_TIMEOUT_SECONDS = 2;
+    /**
+     * Cap on waiting for in-flight tools/call workers after stdin EOF. The
+     * one-shot pipe pattern ({@code printf ... | java -jar ...}) closes stdin
+     * immediately after the request; without waiting, the read loop exits and
+     * the JVM kills the worker before it writes its response.
+     */
+    private static final long TOOL_CALL_EOF_WAIT_MILLIS = 10 * 60 * 1000L;
 
     private final ObjectMapper json = new ObjectMapper();
     private final ToolRegistry tools = new ToolRegistry();
@@ -117,6 +124,30 @@ public final class McpServer {
             // the whole buffer.
             while (tryParseAndDispatch(buf, true)) {
                 // keep going until the buffer holds no complete object
+            }
+        }
+        // EOF (or stop): wait for in-flight tools/call workers so their
+        // responses are written before the process exits. Without this, the
+        // one-shot pipe pattern (`printf ... | java -jar ...`) loses the
+        // tool response: the read loop exits on EOF while the worker is still
+        // indexing.
+        awaitInFlightToolCalls();
+    }
+
+    /**
+     * Wait for the in-flight tools/call workers to finish. Each worker
+     * removes itself from {@link #inFlightToolCalls} as it completes; the
+     * snapshot avoids racing with that removal. A worker is bounded by the
+     * Maven timeout and the indexer caps, so this terminates; the generous
+     * per-thread cap is a belt-and-braces guard against a wedged worker.
+     */
+    private void awaitInFlightToolCalls() {
+        for (Thread t : List.copyOf(inFlightToolCalls.values())) {
+            try {
+                t.join(TOOL_CALL_EOF_WAIT_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
