@@ -82,5 +82,5 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 
 ```bash
 mvn test
-# 258 个测试
+# 269 个测试
 ```

@@ -1,6 +1,5 @@
 package com.codescope.index;
 
-import com.codescope.analysis.MethodHierarchyExtractor;
 import com.codescope.model.MethodKey;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -46,7 +45,7 @@ import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
  * An {@link ImplicitTypeDeclaration} wrapper is entered/exit'd too as a
  * defensive fallback for AST shapes that wrap a declaration in one.
  */
-public final class CallSiteVisitor extends ASTVisitor {
+final class CallSiteVisitor extends ASTVisitor {
     private final ProjectIndex index;
     private final MethodHierarchyExtractor hierarchy;
     private final String file;
@@ -68,7 +67,7 @@ public final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(TypeDeclaration node) {
-        String fqn = fqnOfType(nameOf(node));
+        String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
         recordTypeSymbol(node, fqn, node.isInterface() ? "interface" : "class");
         // Record type-hierarchy edges (child FQN → each direct
@@ -150,7 +149,7 @@ public final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(EnumDeclaration node) {
-        String fqn = fqnOfType(nameOf(node));
+        String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
         recordTypeSymbol(node, fqn, "enum");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
@@ -211,7 +210,7 @@ public final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(RecordDeclaration node) {
-        String fqn = fqnOfType(nameOf(node));
+        String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
         recordTypeSymbol(node, fqn, "record");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
@@ -241,7 +240,7 @@ public final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(AnnotationTypeDeclaration node) {
-        String fqn = fqnOfType(nameOf(node));
+        String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
         recordTypeSymbol(node, fqn, "annotation");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
@@ -314,29 +313,43 @@ public final class CallSiteVisitor extends ASTVisitor {
     public boolean visit(MethodDeclaration node) {
         String callerClass = currentClass();
         List<String> paramTypes = new ArrayList<>();
-        for (Object p : node.parameters()) {
-            org.eclipse.jdt.core.dom.SingleVariableDeclaration svd =
-                    (org.eclipse.jdt.core.dom.SingleVariableDeclaration) p;
-            org.eclipse.jdt.core.dom.ITypeBinding tb = svd.getType().resolveBinding();
-            // svd.getType() for a varargs parameter returns the element
-            // type (not the array), so the binding's getQualifiedName()
-            // is just the element name. We need to add `[]` for the
-            // varargs marker and for any extra dimensions declared
-            // after the parameter name (`String args[]` style).
-            // For type-variable parameters (`<T> void m(T x)`), use
-            // the upper-bound's erasure so the key matches call-site
-            // bindings (which have the substituted type, e.g. `String`).
-            String name;
-            if (tb == null) {
-                name = svd.getType().toString();
-            } else {
-                name = tb.getErasure().getQualifiedName();
-                if (svd.isVarargs()) name = name + "[]";
-                if (svd.getExtraDimensions() > 0) {
-                    for (int i = 0; i < svd.getExtraDimensions(); i++) name = name + "[]";
+        if (node.isCompactConstructor()) {
+            // A record's compact constructor (`public Point { ... }`) has no
+            // declared parameters, but its binding carries the record
+            // component types. Use those so the declaration key matches the
+            // `new Point(1,2)` call-site binding (Point#Point/2), instead of
+            // splitting the graph into an arity-0 key with no callers.
+            IMethodBinding b = node.resolveBinding();
+            if (b != null) {
+                for (ITypeBinding pt : b.getParameterTypes()) {
+                    paramTypes.add(pt.getErasure().getQualifiedName());
                 }
             }
-            paramTypes.add(name);
+        } else {
+            for (Object p : node.parameters()) {
+                org.eclipse.jdt.core.dom.SingleVariableDeclaration svd =
+                        (org.eclipse.jdt.core.dom.SingleVariableDeclaration) p;
+                org.eclipse.jdt.core.dom.ITypeBinding tb = svd.getType().resolveBinding();
+                // svd.getType() for a varargs parameter returns the element
+                // type (not the array), so the binding's getQualifiedName()
+                // is just the element name. We need to add `[]` for the
+                // varargs marker and for any extra dimensions declared
+                // after the parameter name (`String args[]` style).
+                // For type-variable parameters (`<T> void m(T x)`), use
+                // the upper-bound's erasure so the key matches call-site
+                // bindings (which have the substituted type, e.g. `String`).
+                String name;
+                if (tb == null) {
+                    name = svd.getType().toString();
+                } else {
+                    name = tb.getErasure().getQualifiedName();
+                    if (svd.isVarargs()) name = name + "[]";
+                    if (svd.getExtraDimensions() > 0) {
+                        for (int i = 0; i < svd.getExtraDimensions(); i++) name = name + "[]";
+                    }
+                }
+                paramTypes.add(name);
+            }
         }
         String methodName = node.getName().getIdentifier();
         MethodKey callerKey = new MethodKey(
@@ -349,6 +362,10 @@ public final class CallSiteVisitor extends ASTVisitor {
         // methods (which are not virtual dispatch and must not
         // be linked across the hierarchy).
         index.recordMethodDeclarationModifiers(callerKey, node.getModifiers());
+        index.recordDeclaringPackage(callerKey, packageName);
+        if (node.isConstructor()) {
+            index.recordConstructor(callerKey);
+        }
         // Walk the declaring type's supertypes to find methods with
         // the same name+arity — those are M's hierarchy siblings
         // (overridden in superclass, or declared in a super-interface
@@ -674,6 +691,23 @@ public final class CallSiteVisitor extends ASTVisitor {
         if (enclosing.isEmpty()) return simpleName;
         if (simpleName.isEmpty()) return enclosing;
         return enclosing + "." + simpleName;
+    }
+
+    /**
+     * FQN for a type declaration. Local classes report an empty
+     * {@code getQualifiedName()} (JDT marks them {@code isLocal()}), so the
+     * AST-derived {@link #fqnOfType} would disagree with the binding-derived
+     * FQN used on the call side. Use the binary name for local types so both
+     * sides agree (mirrors the anonymous-class handling in
+     * {@link MethodHierarchyExtractor#fqnFromBinding}).
+     */
+    private static String fqnOfTypeDeclaration(AbstractTypeDeclaration node, String astFqn) {
+        ITypeBinding tb = node.resolveBinding();
+        if (tb != null && tb.isLocal()) {
+            String bin = tb.getBinaryName();
+            if (bin != null && !bin.isEmpty()) return bin.replace('$', '.');
+        }
+        return astFqn;
     }
 
     private String currentClass() {

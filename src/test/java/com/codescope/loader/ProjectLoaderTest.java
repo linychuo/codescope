@@ -131,6 +131,68 @@ class ProjectLoaderTest {
     }
 
     @Test
+    void pomDeclaredSourceDirectoryMatchingDiscoveredRootIsNotDuplicated(@TempDir Path root) throws IOException {
+        // A pom that explicitly declares the conventional src/main/java must
+        // not cause the same file to be walked (and indexed) twice.
+        writeJava(root.resolve("src/main/java/com/x/A.java"), "com.x", "A");
+        Files.writeString(root.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>x</artifactId><version>1</version>"
+                        + "<build><sourceDirectory>src/main/java</sourceDirectory></build>"
+                        + "</project>");
+
+        List<Path> sources = ProjectLoader.collectSources(root, false);
+        long count = sources.stream().filter(p -> p.toString().endsWith("A.java")).count();
+        assertEquals(1, count, "A.java must be collected exactly once, got " + sources);
+    }
+
+    @Test
+    void overlappingPomDeclaredRootDoesNotDuplicateFiles(@TempDir Path root) throws IOException {
+        // A pom that declares a parent of the conventional source root
+        // (e.g. <sourceDirectory>src</sourceDirectory>) overlaps the
+        // walk-discovered src/main/java; the same file must not be collected
+        // twice.
+        writeJava(root.resolve("src/main/java/com/x/B.java"), "com.x", "B");
+        Files.writeString(root.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>x</artifactId><version>1</version>"
+                        + "<build><sourceDirectory>src</sourceDirectory></build>"
+                        + "</project>");
+
+        List<Path> sources = ProjectLoader.collectSources(root, false);
+        long count = sources.stream().filter(p -> p.toString().endsWith("B.java")).count();
+        assertEquals(1, count, "B.java must be collected exactly once, got " + sources);
+    }
+
+    @Test
+    void inheritsPomDeclaredSourceDirectoryFromParent(@TempDir Path root) throws IOException {
+        // Maven model inheritance: the child doesn't declare its own
+        // <sourceDirectory>, so it inherits the parent's. The inherited path
+        // is resolved relative to the child's basedir.
+        Path childDir = Files.createDirectories(root.resolve("child"));
+        writeJava(childDir.resolve("inherit-src/com/x/Inherited.java"), "com.x", "Inherited");
+        Files.writeString(root.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>parent</artifactId><version>1</version>"
+                        + "<build><sourceDirectory>inherit-src</sourceDirectory></build>"
+                        + "</project>");
+        Files.writeString(childDir.resolve("pom.xml"),
+                "<?xml version=\"1.0\"?><project xmlns=\"http://maven.apache.org/POM/4.0.0\">"
+                        + "<modelVersion>4.0.0</modelVersion>"
+                        + "<groupId>x</groupId><artifactId>child</artifactId><version>1</version>"
+                        + "<parent><groupId>x</groupId><artifactId>parent</artifactId>"
+                        + "<version>1</version></parent>"
+                        + "</project>");
+
+        List<Path> sources = ProjectLoader.collectSources(childDir, false);
+        assertTrue(sources.stream().anyMatch(p -> p.toString().endsWith("Inherited.java")),
+                "inherited sourceDirectory must be indexed, got: " + sources);
+    }
+
+    @Test
     void includesPomDeclaredTestSourceDirectoryWhenRequested(@TempDir Path root) throws IOException {
         writeJava(root.resolve("src/test-java/com/x/HelperTest.java"), "com.x", "HelperTest");
         Files.writeString(root.resolve("pom.xml"),

@@ -91,7 +91,12 @@ public final class MavenClasspathResolver {
             for (Future<?> f : futures) {
                 try {
                     f.get();
-                } catch (ExecutionException | InterruptedException e) {
+                } catch (ExecutionException e) {
+                    // best-effort: a single bad walk shouldn't break the rest
+                } catch (InterruptedException e) {
+                    // Preserve the interrupt status so the caller (and any
+                    // enclosing cancellation path) observes the request to stop.
+                    Thread.currentThread().interrupt();
                     // best-effort: a single bad walk shouldn't break the rest
                 }
             }

@@ -307,6 +307,8 @@ class McpServerTest {
         JsonNode err = readOne();
         assertEquals(-32700, err.path("error").path("code").asInt(),
                 "expected Parse error (-32700), got: " + err);
+        assertTrue(err.path("id").isNull(),
+                "error response must carry a null id member, got: " + err);
     }
 
     @Test
@@ -392,6 +394,14 @@ class McpServerTest {
                 "{\"r\":nulll}",    // full unrecognized token
                 "{\"r\":.5}",       // leading-dot number
                 "{\"r\":+1}",       // plus-sign number
+                // Partial keyword/number followed by a structural character:
+                // the token is a prefix of null/true/false (or a partial
+                // number), but the following char is already in the buffer,
+                // so more bytes can never make it valid.
+                "{\"a\":n}}",
+                "{\"r\":n-1}",
+                "{\"r\":1.}",
+                "{\"r\":1e}",
         };
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         for (String input : invalid) {
@@ -405,6 +415,36 @@ class McpServerTest {
                             + input + "', got: " + err);
             outBuf.reset();
         }
+    }
+
+    @Test
+    void malformedKeywordFollowedByStructuralCharDoesNotWedgeServer() throws Exception {
+        // Regression: `{"a":n}}` has a valid first byte but the token `n`
+        // is a prefix of `null` followed by `}`. The message-only heuristic
+        // used to classify this as "streaming incomplete", so the buffer
+        // was preserved and the server waited forever — every later chunk
+        // reproduced the same error and no request was ever dispatched.
+        // The parse-location discriminator (offset inside the buffer =>
+        // structural error) now resets the buffer and emits -32700, and a
+        // subsequent valid request is still processed.
+        McpServer s = new McpServer();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write("{\"a\":n}}".getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "malformed object should be consumed (parse error fired)");
+        JsonNode err = readOne();
+        assertEquals(-32700, err.path("error").path("code").asInt(),
+                "expected Parse error (-32700), got: " + err);
+        assertEquals(0, buf.size(), "buffer should be reset after a parse error");
+        outBuf.reset();
+
+        buf.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+                .getBytes(StandardCharsets.UTF_8));
+        assertTrue(s.tryParseAndDispatch(buf),
+                "a valid request after the malformed one must still dispatch");
+        JsonNode resp = readOne();
+        assertEquals(1, resp.path("id").asInt(),
+                "expected the ping response to be dispatched, got: " + resp);
     }
 
     @Test

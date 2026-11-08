@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -337,7 +338,19 @@ public final class ProjectLoader {
                         .forEach(out::add);
             }
         }
-        return out;
+        // Overlapping source roots (a pom-declared directory that contains a
+        // walk-discovered one, or the same directory reached via both paths)
+        // would otherwise yield the same file twice; the indexer would then
+        // record duplicate declarations and call sites for it. De-duplicate
+        // on the normalized path but keep the original path objects so the
+        // caller's relative/absolute shape is preserved (JdtIndexer
+        // relativizes against the root it is given).
+        Set<String> seen = new java.util.HashSet<>();
+        List<Path> deduped = new ArrayList<>(out.size());
+        for (Path p : out) {
+            if (seen.add(p.toAbsolutePath().normalize().toString())) deduped.add(p);
+        }
+        return deduped;
     }
 
     /** Every src/&lt;...&gt;/main/java directory under the project root (plus src/&lt;...&gt;/test/java when {@code includeTests}). */
@@ -379,7 +392,16 @@ public final class ProjectLoader {
             // best-effort
         }
         out.addAll(pomDeclaredSourceRoots(projectRoot, includeTests));
-        return out;
+        // A pom-declared source directory is often the same as a
+        // walk-discovered one (e.g. <sourceDirectory>src/main/java</sourceDirectory>);
+        // de-duplicate so collectSources doesn't walk it twice. Keep the
+        // original path objects (see collectSources).
+        Set<String> seen = new java.util.HashSet<>();
+        List<Path> deduped = new ArrayList<>(out.size());
+        for (Path p : out) {
+            if (seen.add(p.toAbsolutePath().normalize().toString())) deduped.add(p);
+        }
+        return deduped;
     }
 
     /**
@@ -407,15 +429,51 @@ public final class ProjectLoader {
     private static void addDeclaredRoots(List<Path> out, Path pom, boolean includeTests) {
         Path moduleDir = pom.getParent();
         if (moduleDir == null) return;
+        // Normalize to absolute so ${project.basedir} substitution yields an
+        // absolute path; a relative project root would otherwise double the
+        // prefix when addIfDirectory resolves the declared root.
+        moduleDir = moduleDir.toAbsolutePath().normalize();
         try (InputStream in = new FileInputStream(pom.toFile())) {
             Model model = new MavenXpp3Reader().read(in);
             Build build = model.getBuild();
-            if (build == null) return;
+            String sourceDir = build != null ? build.getSourceDirectory() : null;
+            String testSourceDir = build != null ? build.getTestSourceDirectory() : null;
+            // Maven model inheritance: a child inherits the parent's build
+            // settings when it doesn't declare its own. Walk the parent chain
+            // (bounded) to pick up an inherited source directory; the
+            // conventional src/main/java discovery still covers the default
+            // layout, so this only matters for custom layouts in multi-module
+            // projects.
+            if (sourceDir == null || (includeTests && testSourceDir == null)) {
+                Path current = moduleDir;
+                Path currentPom = pom;
+                for (int hop = 0; hop < MAX_PARENT_WALK_DEPTH; hop++) {
+                    Path parentDir = resolveParentDirectory(current, currentPom);
+                    if (parentDir == null) break;
+                    Path parentPom = parentDir.resolve("pom.xml");
+                    if (!Files.isRegularFile(parentPom)) break;
+                    try (InputStream pin = new FileInputStream(parentPom.toFile())) {
+                        Model parentModel = new MavenXpp3Reader().read(pin);
+                        Build parentBuild = parentModel.getBuild();
+                        if (parentBuild != null) {
+                            if (sourceDir == null) sourceDir = parentBuild.getSourceDirectory();
+                            if (includeTests && testSourceDir == null) {
+                                testSourceDir = parentBuild.getTestSourceDirectory();
+                            }
+                        }
+                    } catch (Exception e) {
+                        break;
+                    }
+                    current = parentDir;
+                    currentPom = parentPom;
+                    if (sourceDir != null && (!includeTests || testSourceDir != null)) break;
+                }
+            }
             addIfDirectory(out, moduleDir,
-                    resolveModelValue(model, build.getSourceDirectory(), moduleDir));
+                    resolveModelValue(model, sourceDir, moduleDir));
             if (includeTests) {
                 addIfDirectory(out, moduleDir,
-                        resolveModelValue(model, build.getTestSourceDirectory(), moduleDir));
+                        resolveModelValue(model, testSourceDir, moduleDir));
             }
         } catch (Exception e) {
             // best-effort: a malformed pom shouldn't break source discovery

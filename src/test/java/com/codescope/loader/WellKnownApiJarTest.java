@@ -1,8 +1,9 @@
-package com.codescope.index;
+package com.codescope.loader;
 
 import static org.junit.jupiter.api.Assertions.*;
 import com.codescope.analysis.CallChainAnalyzer;
-import com.codescope.loader.ProjectLoader;
+import com.codescope.index.JdtIndexer;
+import com.codescope.index.ProjectIndex;
 import com.codescope.model.MethodKey;
 import java.io.IOException;
 import java.nio.file.Files;

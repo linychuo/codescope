@@ -64,7 +64,7 @@ public final class FindCallSitesTool extends AbstractMcpTool {
                         + "Mismatch with the on-disk declaration will be reported as a missing target."));
         props.put("project", Map.of(
                 "type", "string",
-                "description", "Absolute path to the Maven/Gradle project root. "
+                "description", "Absolute path to the Maven project root. "
                         + "Required unless the MCP host advertises a workspace root via `roots`. "
                         + "By default only main source roots (src/<...>/main/java) are indexed; "
                         + "pass `include_tests=true` to also index src/test/java."));

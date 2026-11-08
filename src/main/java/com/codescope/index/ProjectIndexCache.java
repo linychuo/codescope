@@ -11,7 +11,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
@@ -58,13 +57,16 @@ public final class ProjectIndexCache {
                 }
             });
     /**
-     * Per-key locks so two different projects can build concurrently. The
-     * {@code entries} map stays globally locked for its short LRU
-     * operations; only the slow build happens outside it. One lock is
-     * retained per distinct key for the cache's lifetime — small, but
-     * unbounded in a server that indexes many projects.
+     * Fixed-size lock strip for per-key build serialization. Bounded so a
+     * long-lived server that indexes many distinct projects does not retain
+     * one lock per project forever; distinct keys that hash to the same
+     * stripe serialize, which is safe (the cache holds at most
+     * {@link #MAX_CACHED_PROJECTS} entries, so stripe contention is rare).
+     * The {@code entries} map stays globally locked for its short LRU
+     * operations; only the slow build happens outside it.
      */
-    private final Map<IndexCacheKey, ReentrantLock> keyLocks = new ConcurrentHashMap<>();
+    private static final int LOCK_STRIPES = 64;
+    private final ReentrantLock[] keyLocks = new ReentrantLock[LOCK_STRIPES];
 
     public ProjectIndexCache() {
         this(new JdtIndexer());
@@ -72,6 +74,11 @@ public final class ProjectIndexCache {
 
     ProjectIndexCache(JdtIndexer indexer) {
         this.indexer = indexer;
+        for (int i = 0; i < LOCK_STRIPES; i++) keyLocks[i] = new ReentrantLock();
+    }
+
+    private ReentrantLock lockFor(IndexCacheKey key) {
+        return keyLocks[Math.floorMod(key.hashCode(), LOCK_STRIPES)];
     }
 
     /**
@@ -88,7 +95,7 @@ public final class ProjectIndexCache {
      */
     public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh, boolean includeTests) {
         IndexCacheKey key = new IndexCacheKey(projectRoot, includeTests);
-        ReentrantLock lock = keyLocks.computeIfAbsent(key, k -> new ReentrantLock());
+        ReentrantLock lock = lockFor(key);
         lock.lock();
         try {
             synchronized (entries) {

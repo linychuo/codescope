@@ -2,6 +2,7 @@ package com.codescope.dependency;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,25 +67,34 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
             pb.redirectErrorStream(true);
             Process process = pb.start();
             // Drain stdout on a separate virtual thread: a chatty Maven must
-            // not fill the pipe and deadlock us while we wait for exit.
+            // not fill the pipe and deadlock us while we wait for exit. The
+            // try-with-resources closes the pipe when the drain finishes (or
+            // when the process is killed and the blocked read unblocks).
             CompletableFuture<String> stdoutFuture = new CompletableFuture<>();
             Thread.ofVirtual().name("mvn-stdout").start(() -> {
-                try {
-                    stdoutFuture.complete(new String(
-                            process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                try (InputStream in = process.getInputStream()) {
+                    stdoutFuture.complete(new String(in.readAllBytes(), StandardCharsets.UTF_8));
                 } catch (IOException e) {
                     stdoutFuture.complete("");
                 }
             });
+            IOException failure = null;
             try {
                 if (!process.waitFor(timeoutSeconds(), TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                    throw new IOException("mvn dependency:build-classpath timed out after "
+                    failure = new IOException("mvn dependency:build-classpath timed out after "
                             + timeoutSeconds() + "s");
                 }
             } catch (InterruptedException e) {
+                failure = new IOException("mvn process was interrupted", e);
                 Thread.currentThread().interrupt();
-                throw new IOException("mvn process was interrupted", e);
+            }
+            if (failure != null) {
+                // Kill the whole descendant tree (destroyForcibly only signals
+                // the direct child; on Windows mvn.cmd doesn't exec, so the
+                // java.exe running Maven would otherwise survive) and wait for
+                // it to die before the finally block deletes the output file.
+                destroyTreeAndAwait(process);
+                throw failure;
             }
             String stdout = stdoutFuture.join();
             int exitCode = process.exitValue();
@@ -102,6 +112,34 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
             } catch (IOException e) {
                 // best-effort cleanup
             }
+        }
+    }
+
+    /**
+     * Destroy the whole descendant tree of {@code process} and wait briefly
+     * for termination. {@code Process.destroyForcibly()} only signals the
+     * direct child; on Windows (and for wrappers that don't {@code exec}),
+     * the JVM running Maven survives unless its parent is killed too. The
+     * bounded wait keeps the caller from hanging if a descendant ignores
+     * the signal; the OS reaps whatever is left. The caller's interrupt
+     * status is preserved across the wait.
+     */
+    private static void destroyTreeAndAwait(Process process) {
+        try {
+            process.toHandle().descendants().forEach(p -> {
+                try { p.destroyForcibly(); } catch (Exception ignored) { }
+            });
+        } catch (Exception ignored) {
+            // descendant enumeration can fail on some platforms
+        }
+        process.destroyForcibly();
+        boolean wasInterrupted = Thread.interrupted();   // clear so waitFor can run
+        try {
+            process.waitFor(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            // Spurious wakeup; the process has already been signalled.
+        } finally {
+            if (wasInterrupted) Thread.currentThread().interrupt();
         }
     }
 

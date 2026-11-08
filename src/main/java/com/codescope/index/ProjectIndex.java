@@ -65,6 +65,17 @@ public final class ProjectIndex {
     // on one would surface callers of the other. See
     // JdtIndexer.repairMethodHierarchyViaTypeHierarchy.
     private final Map<MethodKey, Integer> declarationModifiers = new ConcurrentHashMap<>();
+    // Constructors are not virtual dispatch: they must never participate in
+    // the method-hierarchy walk (a constructor's name is the class simple
+    // name, so a same-named superclass method would otherwise be linked as
+    // an override). Recorded so the repair pass can skip them too.
+    private final Set<MethodKey> constructors = ConcurrentHashMap.newKeySet();
+    // Declaring package per method, recorded at declaration time. The
+    // method-hierarchy repair pass needs it to tell whether a package-
+    // private method is visible across packages (it must not be linked as
+    // an override then). The FQN alone can't disambiguate the package for
+    // nested types (`a.Outer.Inner` vs `a.Outer` as a package name).
+    private final Map<MethodKey, String> declaringPackages = new ConcurrentHashMap<>();
     // Method-hierarchy index: for each MethodKey M, the set of other
     // MethodKeys in M's hierarchy group (the methods M overrides in a
     // supertype, plus the methods that implement M in subtypes). Both
@@ -194,6 +205,26 @@ public final class ProjectIndex {
      */
     public void recordMethodDeclarationModifiers(MethodKey method, int modifiers) {
         declarationModifiers.putIfAbsent(method, modifiers);
+    }
+
+    /** Records that {@code method} is a constructor (not virtual dispatch). */
+    public void recordConstructor(MethodKey method) {
+        constructors.add(method);
+    }
+
+    /** True if {@code method} was recorded as a constructor. */
+    public boolean isConstructor(MethodKey method) {
+        return constructors.contains(method);
+    }
+
+    /** Records the package that declares {@code method}. */
+    public void recordDeclaringPackage(MethodKey method, String pkg) {
+        declaringPackages.putIfAbsent(method, pkg == null ? "" : pkg);
+    }
+
+    /** The package that declares {@code method}, or null if not recorded. */
+    public String declaringPackageOf(MethodKey method) {
+        return declaringPackages.get(method);
     }
 
     /**
@@ -717,6 +748,38 @@ public final class ProjectIndex {
         for (MethodKey m : declarations.keySet()) {
             if (m.declaringClass.equals(className) && m.methodName.equals(methodName)) {
                 out.add(m);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Lists every declared method with the given name visible from
+     * {@code className}, including inherited ones (walks the ancestor
+     * hierarchy). Used for ambiguity diagnostics where the overloads may
+     * be declared on a supertype rather than the queried class itself —
+     * e.g. {@code Child extends Parent} with two {@code Parent#foo}
+     * overloads: the ambiguity is thrown from the ancestor walk, but the
+     * overloads live on {@code Parent}, not {@code Child}.
+     */
+    public List<MethodKey> findOverloadsInHierarchy(String className, String methodName) {
+        List<MethodKey> out = new ArrayList<>();
+        Set<String> visited = new java.util.HashSet<>();
+        java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+        queue.addLast(className);
+        visited.add(className);
+        while (!queue.isEmpty()) {
+            String cls = queue.removeFirst();
+            for (MethodKey m : declarations.keySet()) {
+                if (m.declaringClass.equals(cls) && m.methodName.equals(methodName)) {
+                    out.add(m);
+                }
+            }
+            Set<String> parents = supertypesOf(cls);
+            if (parents != null) {
+                for (String p : parents) {
+                    if (visited.add(p)) queue.addLast(p);
+                }
             }
         }
         return out;

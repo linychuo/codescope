@@ -20,11 +20,11 @@
 ### Task 1: DependencyResolver interface
 
 **Files:**
-- Create: `src/main/java/com/codescope/DependencyResolver.java`
+- Create: `src/main/java/com/codescope/dependency/DependencyResolver.java`
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `com.codescope.DependencyResolver` interface with single method `List<String> resolve(Path projectRoot) throws IOException`
+- Produces: `com.codescope.dependency.DependencyResolver` interface with single method `List<String> resolve(Path projectRoot) throws IOException`
 
 - [ ] **Step 1: Create the interface**
 
@@ -43,7 +43,7 @@ public interface DependencyResolver {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add src/main/java/com/codescope/DependencyResolver.java
+git add src/main/java/com/codescope/dependency/DependencyResolver.java
 git commit -m "feat: add DependencyResolver interface"
 ```
 
@@ -52,8 +52,8 @@ git commit -m "feat: add DependencyResolver interface"
 ### Task 2: MvnCliDependencyResolver
 
 **Files:**
-- Create: `src/main/java/com/codescope/MvnCliDependencyResolver.java`
-- Test: `src/test/java/com/codescope/MvnCliDependencyResolverTest.java`
+- Create: `src/main/java/com/codescope/dependency/MvnCliDependencyResolver.java`
+- Test: `src/test/java/com/codescope/dependency/MvnCliDependencyResolverTest.java`
 
 **Interfaces:**
 - Consumes: `DependencyResolver` (from Task 1)
@@ -237,7 +237,7 @@ Expected: unit tests pass (the `resolvesInFixtureProject` integration test may b
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/java/com/codescope/MvnCliDependencyResolver.java src/test/java/com/codescope/MvnCliDependencyResolverTest.java
+git add src/main/java/com/codescope/dependency/MvnCliDependencyResolver.java src/test/java/com/codescope/dependency/MvnCliDependencyResolverTest.java
 git commit -m "feat: add MvnCliDependencyResolver using mvn dependency:build-classpath"
 ```
 
@@ -246,8 +246,8 @@ git commit -m "feat: add MvnCliDependencyResolver using mvn dependency:build-cla
 ### Task 3: DependencyResolverFactory
 
 **Files:**
-- Create: `src/main/java/com/codescope/DependencyResolverFactory.java`
-- Test: `src/test/java/com/codescope/DependencyResolverFactoryTest.java`
+- Create: `src/main/java/com/codescope/dependency/DependencyResolverFactory.java`
+- Test: `src/test/java/com/codescope/dependency/DependencyResolverFactoryTest.java`
 
 **Interfaces:**
 - Consumes: `DependencyResolver`, `MvnCliDependencyResolver` (from Tasks 1-2)
@@ -357,7 +357,7 @@ Expected: all tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/java/com/codescope/DependencyResolverFactory.java src/test/java/com/codescope/DependencyResolverFactoryTest.java
+git add src/main/java/com/codescope/dependency/DependencyResolverFactory.java src/test/java/com/codescope/dependency/DependencyResolverFactoryTest.java
 git commit -m "feat: add DependencyResolverFactory with auto-detection"
 ```
 
@@ -366,7 +366,7 @@ git commit -m "feat: add DependencyResolverFactory with auto-detection"
 ### Task 4: Wire into ProjectLoader
 
 **Files:**
-- Modify: `src/main/java/com/codescope/ProjectLoader.java` (line 49)
+- Modify: `src/main/java/com/codescope/loader/ProjectLoader.java` (line 49)
 
 **Interfaces:**
 - Consumes: `DependencyResolverFactory.create()` (from Task 3)
@@ -405,7 +405,7 @@ Check the actual test failures and apply the minimal fix.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/main/java/com/codescope/ProjectLoader.java
+git add src/main/java/com/codescope/loader/ProjectLoader.java
 git commit -m "refactor: wire DependencyResolverFactory into ProjectLoader"
 ```
 

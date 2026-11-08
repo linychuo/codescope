@@ -1,6 +1,5 @@
-package com.codescope.analysis;
+package com.codescope.index;
 
-import com.codescope.index.ProjectIndex;
 import com.codescope.model.MethodKey;
 import java.util.ArrayList;
 import java.util.List;
@@ -99,7 +98,11 @@ public final class MethodHierarchyExtractor {
      */
     public static String fqnFromBinding(ITypeBinding tb) {
         if (tb == null) return null;
-        if (tb.isAnonymous()) {
+        if (tb.isAnonymous() || tb.isLocal()) {
+            // Local classes (declared inside a method body) report an empty
+            // getQualifiedName() just like anonymous classes; getBinaryName()
+            // (e.g. "p.Outer$1Local") is the only reliable identity on both
+            // the declaration and call sides.
             String bin = tb.getBinaryName();
             return bin == null ? null : bin.replace('$', '.');
         }
@@ -118,6 +121,10 @@ public final class MethodHierarchyExtractor {
      */
     public void recordMethodHierarchy(IMethodBinding b) {
         if (b == null) return;
+        // Constructors are not virtual dispatch: their name is the class
+        // simple name, so a same-named superclass method would otherwise be
+        // linked as an override.
+        if (b.isConstructor()) return;
         ITypeBinding dc = b.getDeclaringClass();
         if (dc == null) return;
         MethodKey myKey = methodKeyOf(b);
@@ -175,16 +182,27 @@ public final class MethodHierarchyExtractor {
                 // drops the early return.
                 int mMods = m.getModifiers();
                 if (Modifier.isPrivate(mMods) || Modifier.isStatic(mMods)) continue;
+                // Package-private methods are only visible within the same
+                // package; linking them across packages would create
+                // phantom overrides (javac rejects @Override on such a
+                // method, so they are unrelated).
+                if (!Modifier.isPublic(mMods) && !Modifier.isProtected(mMods)) {
+                    if (!java.util.Objects.equals(st.getPackage().getName(),
+                            dc.getPackage().getName())) continue;
+                }
                 if (!m.getName().equals(myName)) continue;
                 if (m.getParameterTypes().length != myArity) continue;
-                // Name + arity is necessary but not sufficient for
-                // an override — a class that declares both m(String)
-                // and m(int) overloads has two unrelated methods, not
-                // one override target. The repair pass applies the
-                // same check, so callers see a consistent hierarchy.
+                // Name + arity is necessary but not sufficient for an
+                // override — a class that declares both m(String) and
+                // m(int) overloads has two unrelated methods, not one
+                // override target. JDT's overrides() resolves generic
+                // substitution (e.g. Impl.bar(String) overrides I.bar(T)
+                // through I<String>), which the exact parameter-type
+                // comparison below cannot; keep the exact check as the
+                // fallback for cases overrides() doesn't cover.
                 MethodKey parentKey = methodKeyOf(m);
                 if (parentKey == null) continue;
-                if (!parentKey.parameterTypes.equals(myKey.parameterTypes)) continue;
+                if (!b.overrides(m) && !parentKey.parameterTypes.equals(myKey.parameterTypes)) continue;
                 index.recordHierarchy(myKey, parentKey);
             }
             // Recurse into this supertype's own supertypes — captures
@@ -230,6 +248,7 @@ public final class MethodHierarchyExtractor {
             if (mMods == 0) continue;
             if (org.eclipse.jdt.core.dom.Modifier.isPrivate(mMods)) continue;
             if (org.eclipse.jdt.core.dom.Modifier.isStatic(mMods)) continue;
+            if (index.isConstructor(m)) continue;
             java.util.Set<String> visited = new java.util.HashSet<>();
             java.util.Deque<String> queue = new java.util.ArrayDeque<>();
             queue.addLast(m.declaringClass);
@@ -248,6 +267,15 @@ public final class MethodHierarchyExtractor {
                         if (cMods == 0) continue;
                         if (org.eclipse.jdt.core.dom.Modifier.isPrivate(cMods)) continue;
                         if (org.eclipse.jdt.core.dom.Modifier.isStatic(cMods)) continue;
+                        if (index.isConstructor(candidate)) continue;
+                        // Package-private supertype methods are only
+                        // visible to subtypes in the same package.
+                        if (!org.eclipse.jdt.core.dom.Modifier.isPublic(mMods)
+                                && !org.eclipse.jdt.core.dom.Modifier.isProtected(mMods)) {
+                            if (!java.util.Objects.equals(
+                                    index.declaringPackageOf(m),
+                                    index.declaringPackageOf(candidate))) continue;
+                        }
                         // Same (name, arity) in a class can match an
                         // overload with different parameter types, not
                         // an override. parameterTypes equality gates the

@@ -1,6 +1,5 @@
 package com.codescope.index;
 
-import com.codescope.analysis.MethodHierarchyExtractor;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -101,12 +100,16 @@ public final class JdtIndexer {
         char[] content;
         try {
             content = Files.readString(src, StandardCharsets.UTF_8).toCharArray();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // RuntimeException (SecurityException, a buggy FileSystemProvider,
+            // ...) must be recorded too: build() only rethrows Errors from
+            // parseFile, so an uncaught RuntimeException here would silently
+            // drop the file with no skipped-files diagnostic.
             index.recordSkippedFile(src.toString(), "read error: " + e.getMessage());
             return;
         }
 
-        ASTParser parser = ASTParser.newParser(AST.JLS_Latest);
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
         parser.setSource(content);
         parser.setUnitName(src.toString());
         parser.setEnvironment(cp, sp, encodingNames, true);

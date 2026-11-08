@@ -10,8 +10,8 @@ com.codescope
 ├── cli/                     Cli
 ├── mcp/                     McpServer、Tool、AbstractMcpTool + 三个 Tool
 ├── service/                 TraceCallersService、FindCallSitesService、FindSymbolsService
-├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache
-├── analysis/                CallChainAnalyzer、CallNode、MethodHierarchyExtractor、MethodResolver
+├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache、MethodHierarchyExtractor
+├── analysis/                CallChainAnalyzer、CallNode、MethodResolver
 ├── model/                   MethodKey
 ├── dependency/              DependencyResolver(+Factory)、MvnCliDependencyResolver、MavenClasspathResolver、MavenSettings
 └── loader/                  ProjectLoader
@@ -105,7 +105,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |
-| shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8;每个 key 一把 `ReentrantLock`,构建在缓存锁外进行 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果;per-key 锁让不同 project 并发构建,LRU 的读写仍在全局锁内保持正确 |
+| shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8;固定大小的锁条(64 条 `ReentrantLock`)按 key 哈希分配,构建在缓存锁外进行 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果;锁条让不同 project 并发构建且内存有界,LRU 的读写仍在全局锁内保持正确 |
 | `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
 | `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
 | `ProjectLoader.collectSourceRoots0` | 匹配 `src/<...>/main/java`(test 视 `includeTests`),并并入每个 pom 的 `<build><sourceDirectory>`/`<testSourceDirectory>` | 测试代码默认不参与调用链;Maven 允许自定义源码目录,不读 pom 会漏掉这些文件 |
@@ -129,6 +129,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 
 - **`analysis.CallChainAnalyzerTest`** — fixture Maven 项目(`src/test/resources/fixture-project`)上的端到端:传递调用、重载、ambiguity、cycle、test 排除、enum/record/annotation 兼容
 - **`analysis.EdgeCaseTest`** — 边界:深链(>2000 层不爆栈)、钻石 vs 环、library target、50 000 节点截断、并发写、坏源文件
+- **`analysis.HierarchyEdgeCaseTest`** — 方法层级边界:local class 方法、package-private 跨包不链接、record 紧凑构造器、泛型类型变量 override、自递归诊断
 - **`mcp.McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
 - **`mcp.McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
 - **`dependency.MavenClasspathResolverTest` / `dependency.MavenSettingsTest`** — pom 解析各自的边界(旧实现,保留作 offline fallback)

@@ -22,15 +22,15 @@
 ### Task 1: Extract `matchStrictThenSuffix` in `ProjectIndex`
 
 **Files:**
-- Modify: `src/main/java/com/codescope/ProjectIndex.java:548-606` (resolveTarget passes), `ProjectIndex.java:622-700` (resolveTargetViaAncestors), `ProjectIndex.java:718-739` (findInvokedKeys initial pass), `ProjectIndex.java:748-779` (findInvokedKeys ancestor walk — the bug-fix site)
-- Test: `src/test/java/com/codescope/ProjectIndexStrictSuffixTest.java` (NEW)
+- Modify: `src/main/java/com/codescope/index/ProjectIndex.java:548-606` (resolveTarget passes), `ProjectIndex.java:622-700` (resolveTargetViaAncestors), `ProjectIndex.java:718-739` (findInvokedKeys initial pass), `ProjectIndex.java:748-779` (findInvokedKeys ancestor walk — the bug-fix site)
+- Test: `src/test/java/com/codescope/index/ProjectIndexStrictSuffixTest.java` (NEW)
 
 **Interfaces:**
 - Produces: package-private static helper `List<MethodKey> matchStrictThenSuffix(Iterable<MethodKey> candidates, String cls, String methodName, Integer arity, List<String> paramTypes)` on `ProjectIndex`. Iterates `candidates` with strict equality; iff strict added nothing AND `paramTypes != null`, iterates again with FQN-suffix equality. Returns the union.
 
 - [x] **Step 1: Write the failing test**
 
-Create `src/test/java/com/codescope/ProjectIndexStrictSuffixTest.java`:
+Create `src/test/java/com/codescope/index/ProjectIndexStrictSuffixTest.java`:
 
 ```java
 package com.codescope;
@@ -227,7 +227,7 @@ Expected: `Tests run: 225, Failures: 0` (219 baseline + 6 new).
 - [x] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/codescope/ProjectIndex.java src/test/java/com/codescope/ProjectIndexStrictSuffixTest.java
+git add src/main/java/com/codescope/index/ProjectIndex.java src/test/java/com/codescope/index/ProjectIndexStrictSuffixTest.java
 git commit -m "$(cat <<'EOF'
 refactor(projectindex): extract matchStrictThenSuffix helper
 
@@ -252,10 +252,10 @@ EOF
 ### Task 2: Extract `MethodResolver` helper
 
 **Files:**
-- Create: `src/main/java/com/codescope/MethodResolver.java` (NEW)
-- Modify: `src/main/java/com/codescope/TraceCallersService.java:46-130`
-- Modify: `src/main/java/com/codescope/FindCallSitesService.java:48-150` (the trace_callers-mirror block)
-- Test: `src/test/java/com/codescope/MethodResolverTest.java` (NEW)
+- Create: `src/main/java/com/codescope/analysis/MethodResolver.java` (NEW)
+- Modify: `src/main/java/com/codescope/service/TraceCallersService.java:46-130`
+- Modify: `src/main/java/com/codescope/service/FindCallSitesService.java:48-150` (the trace_callers-mirror block)
+- Test: `src/test/java/com/codescope/analysis/MethodResolverTest.java` (NEW)
 
 **Interfaces:**
 - Produces: top-level `MethodResolver` class with:
@@ -268,7 +268,7 @@ EOF
 
 - [x] **Step 1: Write the failing test**
 
-Create `src/test/java/com/codescope/MethodResolverTest.java`:
+Create `src/test/java/com/codescope/analysis/MethodResolverTest.java`:
 
 ```java
 package com.codescope;
@@ -405,7 +405,7 @@ Expected: `cannot find symbol` for `MethodResolver`.
 
 - [x] **Step 3: Create MethodResolver**
 
-Create `src/main/java/com/codescope/MethodResolver.java`:
+Create `src/main/java/com/codescope/analysis/MethodResolver.java`:
 
 ```java
 package com.codescope;
@@ -515,7 +515,7 @@ Expected: `Tests run: 8, Failures: 0, Errors: 0, Skipped: 0`. (7 if you dropped 
 
 - [x] **Step 5: Rewrite TraceCallersService to use MethodResolver**
 
-In `src/main/java/com/codescope/TraceCallersService.java`, replace lines 50-116 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with:
+In `src/main/java/com/codescope/service/TraceCallersService.java`, replace lines 50-116 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with:
 
 ```java
 MethodResolver.Result res;
@@ -565,7 +565,7 @@ try {
 
 - [x] **Step 6: Rewrite FindCallSitesService to use MethodResolver**
 
-In `src/main/java/com/codescope/FindCallSitesService.java`, replace lines 52-110 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with the analogous pattern. Look at the file for the exact current shape; the rewrite is:
+In `src/main/java/com/codescope/service/FindCallSitesService.java`, replace lines 52-110 (the resolveTarget / AmbiguousMethodException / findInvokedKeys block) with the analogous pattern. Look at the file for the exact current shape; the rewrite is:
 
 ```java
 MethodResolver.Result res;
@@ -627,10 +627,10 @@ Expected: `Tests run: 232, Failures: 0` (225 from Task 1 + 7 new MethodResolver 
 - [x] **Step 8: Commit**
 
 ```bash
-git add src/main/java/com/codescope/MethodResolver.java \
-       src/main/java/com/codescope/TraceCallersService.java \
-       src/main/java/com/codescope/FindCallSitesService.java \
-       src/test/java/com/codescope/MethodResolverTest.java
+git add src/main/java/com/codescope/analysis/MethodResolver.java \
+       src/main/java/com/codescope/service/TraceCallersService.java \
+       src/main/java/com/codescope/service/FindCallSitesService.java \
+       src/test/java/com/codescope/analysis/MethodResolverTest.java
 git commit -m "$(cat <<'EOF'
 refactor: extract MethodResolver, dedupe target-resolution across services
 
@@ -662,9 +662,9 @@ EOF
 ### Task 3: Split JdtIndexer into orchestrator + CallSiteVisitor + MethodHierarchyExtractor
 
 **Files:**
-- Create: `src/main/java/com/codescope/CallSiteVisitor.java` (NEW — promoted from inner class)
-- Create: `src/main/java/com/codescope/MethodHierarchyExtractor.java` (NEW)
-- Modify: `src/main/java/com/codescope/JdtIndexer.java` (becomes ~150 lines)
+- Create: `src/main/java/com/codescope/index/CallSiteVisitor.java` (NEW — promoted from inner class)
+- Create: `src/main/java/com/codescope/index/MethodHierarchyExtractor.java` (NEW)
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java` (becomes ~150 lines)
 - (No new test file — the existing CallChainAnalyzerTest, EdgeCaseTest, CliTest, McpServerTest cover the full behavior. Behavior-preservation is verified by the full test suite passing.)
 
 **Interfaces:**
@@ -677,7 +677,7 @@ This task has three sub-tasks, each independently commit-able:
 
 - [x] **Step 1: Identify the outer-class state used by CallSiteVisitor**
 
-Run: `grep -n "private.*\\(\\|private final\|private static" src/main/java/com/codescope/JdtIndexer.java | grep -v "^[0-9]*:    private " | head -30` (or just read the outer class definition)
+Run: `grep -n "private.*\\(\\|private final\|private static" src/main/java/com/codescope/index/JdtIndexer.java | grep -v "^[0-9]*:    private " | head -30` (or just read the outer class definition)
 
 The fields CallSiteVisitor reads from `JdtIndexer` outer-class scope:
 - (None — CallSiteVisitor is `private static`, so it has no enclosing-instance access. It does however take constructor args `ProjectIndex index, String file` — and that's already explicit. So promotion is purely a "move class to its own file" operation.)
@@ -688,7 +688,7 @@ Re-read 267-1110 to identify the helpers. They are all on `CallSiteVisitor` itse
 
 - [x] **Step 2: Move the inner class to a top-level file**
 
-Create `src/main/java/com/codescope/CallSiteVisitor.java` containing the entire `private static final class CallSiteVisitor extends ASTVisitor { ... }` block (lines 267-1110 of `JdtIndexer.java`), with changes:
+Create `src/main/java/com/codescope/index/CallSiteVisitor.java` containing the entire `private static final class CallSiteVisitor extends ASTVisitor { ... }` block (lines 267-1110 of `JdtIndexer.java`), with changes:
 - Class declaration: `public final class CallSiteVisitor extends ASTVisitor` (drop `private static`, drop nested status, change to public final).
 - Add `package com.codescope;` at the top.
 - Add imports for `org.eclipse.jdt.core.dom.*`, `java.util.*`, etc. — copy the existing `import` block from `JdtIndexer.java`.
@@ -706,7 +706,7 @@ Expected: `Tests run: 225, Failures: 0` (219 baseline + 6 from Task 1).
 - [x] **Step 4: Commit**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java src/main/java/com/codescope/CallSiteVisitor.java
+git add src/main/java/com/codescope/index/JdtIndexer.java src/main/java/com/codescope/index/CallSiteVisitor.java
 git commit -m "$(cat <<'EOF'
 refactor(jdtindexer): promote CallSiteVisitor to top-level class
 
@@ -738,7 +738,7 @@ Both belong in the new `MethodHierarchyExtractor`. The first runs after `build()
 
 - [x] **Step 2: Create MethodHierarchyExtractor**
 
-Create `src/main/java/com/codescope/MethodHierarchyExtractor.java`:
+Create `src/main/java/com/codescope/index/MethodHierarchyExtractor.java`:
 
 ```java
 package com.codescope;
@@ -827,9 +827,9 @@ Expected: `Tests run: 225, Failures: 0`.
 - [x] **Step 5: Commit**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java \
-       src/main/java/com/codescope/CallSiteVisitor.java \
-       src/main/java/com/codescope/MethodHierarchyExtractor.java
+git add src/main/java/com/codescope/index/JdtIndexer.java \
+       src/main/java/com/codescope/index/CallSiteVisitor.java \
+       src/main/java/com/codescope/index/MethodHierarchyExtractor.java
 git commit -m "$(cat <<'EOF'
 refactor(jdtindexer): extract MethodHierarchyExtractor
 
@@ -853,16 +853,16 @@ EOF
 ### Task 4: Lift the LRU ProjectIndexCache to a single owner per entry point
 
 **Files:**
-- Modify: `src/main/java/com/codescope/TraceCallersService.java` (add `(ProjectIndexCache)` constructor)
-- Modify: `src/main/java/com/codescope/FindCallSitesService.java` (same)
-- Modify: `src/main/java/com/codescope/FindSymbolsService.java` (same)
-- Modify: `src/main/java/com/codescope/TraceCallersTool.java` (constructor takes `ProjectIndexCache`)
-- Modify: `src/main/java/com/codescope/FindCallSitesTool.java` (same)
-- Modify: `src/main/java/com/codescope/FindSymbolsTool.java` (same)
-- Modify: `src/main/java/com/codescope/McpServer.java` (constructor takes `ProjectIndexCache`)
+- Modify: `src/main/java/com/codescope/service/TraceCallersService.java` (add `(ProjectIndexCache)` constructor)
+- Modify: `src/main/java/com/codescope/service/FindCallSitesService.java` (same)
+- Modify: `src/main/java/com/codescope/service/FindSymbolsService.java` (same)
+- Modify: `src/main/java/com/codescope/mcp/TraceCallersTool.java` (constructor takes `ProjectIndexCache`)
+- Modify: `src/main/java/com/codescope/mcp/FindCallSitesTool.java` (same)
+- Modify: `src/main/java/com/codescope/mcp/FindSymbolsTool.java` (same)
+- Modify: `src/main/java/com/codescope/mcp/McpServer.java` (constructor takes `ProjectIndexCache`)
 - Modify: `src/main/java/com/codescope/Main.java` (passes the shared cache into both McpServer and Tools)
-- Modify: `src/main/java/com/codescope/Cli.java` (single static cache, services get it)
-- Test: `src/test/java/com/codescope/SharedIndexCacheTest.java` (NEW)
+- Modify: `src/main/java/com/codescope/cli/Cli.java` (single static cache, services get it)
+- Test: `src/test/java/com/codescope/index/SharedIndexCacheTest.java` (NEW)
 
 **Interfaces:**
 - Produces: each `*Service` has TWO constructors: a no-arg one (default-constructs a cache) for backward compatibility, and a `(ProjectIndexCache cache)` one. No-arg behavior unchanged.
@@ -871,7 +871,7 @@ EOF
 
 - [x] **Step 1: Write the failing test**
 
-Create `src/test/java/com/codescope/SharedIndexCacheTest.java`:
+Create `src/test/java/com/codescope/index/SharedIndexCacheTest.java`:
 
 ```java
 package com.codescope;
@@ -1129,16 +1129,16 @@ to:
 - [x] **Step 11: Commit**
 
 ```bash
-git add src/main/java/com/codescope/TraceCallersService.java \
-       src/main/java/com/codescope/FindCallSitesService.java \
-       src/main/java/com/codescope/FindSymbolsService.java \
-       src/main/java/com/codescope/TraceCallersTool.java \
-       src/main/java/com/codescope/FindCallSitesTool.java \
-       src/main/java/com/codescope/FindSymbolsTool.java \
-       src/main/java/com/codescope/McpServer.java \
+git add src/main/java/com/codescope/service/TraceCallersService.java \
+       src/main/java/com/codescope/service/FindCallSitesService.java \
+       src/main/java/com/codescope/service/FindSymbolsService.java \
+       src/main/java/com/codescope/mcp/TraceCallersTool.java \
+       src/main/java/com/codescope/mcp/FindCallSitesTool.java \
+       src/main/java/com/codescope/mcp/FindSymbolsTool.java \
+       src/main/java/com/codescope/mcp/McpServer.java \
        src/main/java/com/codescope/Main.java \
-       src/main/java/com/codescope/Cli.java \
-       src/test/java/com/codescope/SharedIndexCacheTest.java \
+       src/main/java/com/codescope/cli/Cli.java \
+       src/test/java/com/codescope/index/SharedIndexCacheTest.java \
        docs/architecture.md
 git commit -m "$(cat <<'EOF'
 refactor: share ProjectIndexCache across services in one session

@@ -55,8 +55,7 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + "method and a `Validator` class."));
         props.put("kind", Map.of(
                 "type", "string",
-                "enum", List.of("class", "interface", "enum", "record", "annotation",
-                        "method", "constructor", "field", "synthetic"),
+                "enum", List.copyOf(FindSymbolsService.VALID_KINDS),
                 "description", "Optional filter. If set, only symbols of this kind are returned. "
                         + "Useful for distinguishing a class named `equals` from the "
                         + "Object#equals method, or finding only fields when many classes share "
@@ -65,7 +64,7 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + "blocks, field initializers, and enum constant args."));
         props.put("project", Map.of(
                 "type", "string",
-                "description", "Absolute path to the Maven/Gradle project root. "
+                "description", "Absolute path to the Maven project root. "
                         + "Required unless the MCP host advertises a workspace root via `roots`. "
                         + "By default only main source roots (src/<...>/main/java) are indexed; "
                         + "pass `include_tests=true` to also index src/test/java."));

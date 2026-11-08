@@ -22,9 +22,9 @@
 
 | File | Change | Responsibility |
 |---|---|---|
-| `src/main/java/com/codescope/ProjectIndex.java` | Modify | Add `NameArity` record, `bySignature` field, `methodsWithSignature()` method, extend `putDeclaration` to maintain the index |
-| `src/main/java/com/codescope/JdtIndexer.java` | Modify | Repair-loop inner scan → `methodsWithSignature` lookup (1 line of effective change) |
-| `src/test/java/com/codescope/ProjectIndexSignatureIndexTest.java` | Create | Direct in-memory tests of `methodsWithSignature` and write-through semantics |
+| `src/main/java/com/codescope/index/ProjectIndex.java` | Modify | Add `NameArity` record, `bySignature` field, `methodsWithSignature()` method, extend `putDeclaration` to maintain the index |
+| `src/main/java/com/codescope/index/JdtIndexer.java` | Modify | Repair-loop inner scan → `methodsWithSignature` lookup (1 line of effective change) |
+| `src/test/java/com/codescope/index/ProjectIndexSignatureIndexTest.java` | Create | Direct in-memory tests of `methodsWithSignature` and write-through semantics |
 
 No other files touched. `knownMethods()` / `hierarchy` / `typeHierarchy` / `calls` / `callSites` / `symbols` all stay as-is. `CallChainAnalyzer` and downstream services untouched.
 
@@ -33,9 +33,9 @@ No other files touched. `knownMethods()` / `hierarchy` / `typeHierarchy` / `call
 ## Task 1: ProjectIndex 写时维护 bySignature 索引
 
 **Files:**
-- Modify: `src/main/java/com/codescope/ProjectIndex.java:158-160` (extend `putDeclaration`)
-- Modify: `src/main/java/com/codescope/ProjectIndex.java:75-89` (add new field in the index field cluster)
-- Create: `src/test/java/com/codescope/ProjectIndexSignatureIndexTest.java`
+- Modify: `src/main/java/com/codescope/index/ProjectIndex.java:158-160` (extend `putDeclaration`)
+- Modify: `src/main/java/com/codescope/index/ProjectIndex.java:75-89` (add new field in the index field cluster)
+- Create: `src/test/java/com/codescope/index/ProjectIndexSignatureIndexTest.java`
 
 **Interfaces:**
 - Consumes: existing `putDeclaration(MethodKey, SourceLoc)` API
@@ -43,7 +43,7 @@ No other files touched. `knownMethods()` / `hierarchy` / `typeHierarchy` / `call
 
 - [ ] **Step 1: 写失败测试**
 
-Create `src/test/java/com/codescope/ProjectIndexSignatureIndexTest.java`:
+Create `src/test/java/com/codescope/index/ProjectIndexSignatureIndexTest.java`:
 
 ```java
 package com.codescope;
@@ -145,7 +145,7 @@ Expected: COMPILATION FAILURE — `methodsWithSignature` and `NameArity` do not 
 
 - [ ] **Step 3: 在 ProjectIndex 加 NameArity record 和 bySignature 字段**
 
-In `src/main/java/com/codescope/ProjectIndex.java`, after the existing index fields block (right after the `typeHierarchy` declaration around line 89), add:
+In `src/main/java/com/codescope/index/ProjectIndex.java`, after the existing index fields block (right after the `typeHierarchy` declaration around line 89), add:
 
 ```java
 // Signature index: for each (methodName, arity) pair, the set of
@@ -165,7 +165,7 @@ record NameArity(String name, int arity) {}
 
 - [ ] **Step 4: 在 putDeclaration 末尾追加写时维护**
 
-In `src/main/java/com/codescope/ProjectIndex.java`, change the `putDeclaration` method body (currently at line 158-160) to:
+In `src/main/java/com/codescope/index/ProjectIndex.java`, change the `putDeclaration` method body (currently at line 158-160) to:
 
 ```java
 public void putDeclaration(MethodKey method, SourceLoc loc) {
@@ -179,7 +179,7 @@ public void putDeclaration(MethodKey method, SourceLoc loc) {
 
 - [ ] **Step 5: 加 methodsWithSignature 公共方法**
 
-In `src/main/java/com/codescope/ProjectIndex.java`, immediately after the `knownMethods()` method (currently at line 403-405), add:
+In `src/main/java/com/codescope/index/ProjectIndex.java`, immediately after the `knownMethods()` method (currently at line 403-405), add:
 
 ```java
 /**
@@ -220,8 +220,8 @@ Expected: All 181+ existing tests still pass (plus 7 from the new test file).
 - [ ] **Step 8: 提交**
 
 ```bash
-git add src/main/java/com/codescope/ProjectIndex.java \
-        src/test/java/com/codescope/ProjectIndexSignatureIndexTest.java
+git add src/main/java/com/codescope/index/ProjectIndex.java \
+        src/test/java/com/codescope/index/ProjectIndexSignatureIndexTest.java
 git commit -m "$(cat <<'EOF'
 feat(projectindex): add (name, arity) signature index via putDeclaration
 
@@ -241,7 +241,7 @@ EOF
 ## Task 2: 修复 pass 内层循环改用新 API
 
 **Files:**
-- Modify: `src/main/java/com/codescope/JdtIndexer.java:173-182` (replace inner scan with `methodsWithSignature` lookup)
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java:173-182` (replace inner scan with `methodsWithSignature` lookup)
 
 **Interfaces:**
 - Consumes: `ProjectIndex.methodsWithSignature(String, int)` from Task 1
@@ -249,7 +249,7 @@ EOF
 
 - [ ] **Step 1: 改 JdtIndexer 的 repair loop 内层循环**
 
-In `src/main/java/com/codescope/JdtIndexer.java`, find the inner loop inside `repairMethodHierarchyViaTypeHierarchy` (the one starting `for (MethodKey candidate : index.knownMethods())`, around line 173-182). Replace it with:
+In `src/main/java/com/codescope/index/JdtIndexer.java`, find the inner loop inside `repairMethodHierarchyViaTypeHierarchy` (the one starting `for (MethodKey candidate : index.knownMethods())`, around line 173-182). Replace it with:
 
 ```java
                             for (MethodKey candidate : index.methodsWithSignature(m.methodName, m.arity)) {
@@ -277,7 +277,7 @@ Expected: All 188+ tests pass (181 prior + 7 from Task 1). No new failures.
 - [ ] **Step 4: 提交**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java
+git add src/main/java/com/codescope/index/JdtIndexer.java
 git commit -m "$(cat <<'EOF'
 perf(jdtindexer): route repair pass inner scan through signature index
 

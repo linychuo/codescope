@@ -6,7 +6,7 @@ import java.util.List;
 
 public final class DependencyResolverFactory {
 
-    private static List<String> mavenExtraArgs = List.of();
+    private static volatile List<String> mavenExtraArgs = List.of();
 
     private DependencyResolverFactory() {}
 

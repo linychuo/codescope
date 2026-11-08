@@ -24,15 +24,15 @@
 ### Task 1: Add `synthetic` kind to find_symbols
 
 **Files:**
-- Modify: `src/main/java/com/codescope/FindSymbolsService.java:30-32` (add `"synthetic"` to `VALID_KINDS`)
-- Modify: `src/main/java/com/codescope/FindSymbolsTool.java:32-34` (update description to mention `synthetic`)
+- Modify: `src/main/java/com/codescope/service/FindSymbolsService.java:30-32` (add `"synthetic"` to `VALID_KINDS`)
+- Modify: `src/main/java/com/codescope/mcp/FindSymbolsTool.java:32-34` (update description to mention `synthetic`)
 
 **Interfaces:**
 - Produces: `FindSymbolsService.VALID_KINDS` now includes `"synthetic"`. Tasks 2-4 record symbols with `kind="synthetic"`.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/test/java/com/codescope/FindSymbolsServiceTest.java` (inside the existing test class, before the final closing brace):
+Add to `src/test/java/com/codescope/service/FindSymbolsServiceTest.java` (inside the existing test class, before the final closing brace):
 
 ```java
 @Test
@@ -57,7 +57,7 @@ Expected: FAIL with `kind "synthetic" not in VALID_KINDS` error message embedded
 
 - [ ] **Step 3: Add `"synthetic"` to `VALID_KINDS`**
 
-Edit `src/main/java/com/codescope/FindSymbolsService.java` lines 30-32:
+Edit `src/main/java/com/codescope/service/FindSymbolsService.java` lines 30-32:
 
 ```java
 static final Set<String> VALID_KINDS = Set.of(
@@ -67,7 +67,7 @@ static final Set<String> VALID_KINDS = Set.of(
 
 - [ ] **Step 4: Update `FindSymbolsTool` description**
 
-Edit `src/main/java/com/codescope/FindSymbolsTool.java` — find the `kind` parameter description in `inputSchema()` (around line 49-56 based on audit) and add `synthetic` to the list of valid kinds:
+Edit `src/main/java/com/codescope/mcp/FindSymbolsTool.java` — find the `kind` parameter description in `inputSchema()` (around line 49-56 based on audit) and add `synthetic` to the list of valid kinds:
 
 ```java
 // existing: "class" / "interface" / "enum" / "record" / "annotation" / "method" / "constructor" / "field"
@@ -89,7 +89,7 @@ Expected: All 125 existing tests + the new test pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/main/java/com/codescope/FindSymbolsService.java src/main/java/com/codescope/FindSymbolsTool.java src/test/java/com/codescope/FindSymbolsServiceTest.java
+git add src/main/java/com/codescope/service/FindSymbolsService.java src/main/java/com/codescope/mcp/FindSymbolsTool.java src/test/java/com/codescope/service/FindSymbolsServiceTest.java
 git commit -m "feat(find-symbols): accept kind=synthetic for upcoming synthetic methods"
 ```
 
@@ -98,16 +98,16 @@ git commit -m "feat(find-symbols): accept kind=synthetic for upcoming synthetic 
 ### Task 2: Index static and instance initializer blocks (`static {}` and `{}`)
 
 **Files:**
-- Modify: `src/main/java/com/codescope/JdtIndexer.java` (add `visit(Initializer)` and `endVisit(Initializer)` overrides inside `CallSiteVisitor`, near the existing `visit(MethodDeclaration)` at line 489)
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java`
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java` (add `visit(Initializer)` and `endVisit(Initializer)` overrides inside `CallSiteVisitor`, near the existing `visit(MethodDeclaration)` at line 489)
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java`
 
 **Interfaces:**
-- Consumes: `MethodContext` record (`JdtIndexer.java:989`), `MethodKey` (`com.codescope.MethodKey`), `ProjectIndex.putDeclaration` / `recordSymbol` / `recordInvocation` / `recordCallSite`.
+- Consumes: `MethodContext` record (`JdtIndexer.java:989`), `MethodKey` (`com.codescope.model.MethodKey`), `ProjectIndex.putDeclaration` / `recordSymbol` / `recordInvocation` / `recordCallSite`.
 - Produces: When `visit(Initializer)` is entered, a synthetic `MethodContext` is on `methodStack` so calls inside the block attribute to `<clinit>/0` (static) or `<class-init>/0` (instance). The synthetic has a declaration recorded and a `find_symbols` Symbol with `kind="synthetic"`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java` (before the final closing brace of the test class):
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java` (before the final closing brace of the test class):
 
 ```java
 @Test
@@ -167,7 +167,7 @@ Expected: FAIL — `callers` is empty because the calls are dropped at `recordCa
 
 - [ ] **Step 3: Implement `visit(Initializer)` and `endVisit(Initializer)`**
 
-Add inside `CallSiteVisitor` in `src/main/java/com/codescope/JdtIndexer.java`, near the existing `visit(MethodDeclaration)` (after `endVisit(MethodDeclaration)` around line 551):
+Add inside `CallSiteVisitor` in `src/main/java/com/codescope/index/JdtIndexer.java`, near the existing `visit(MethodDeclaration)` (after `endVisit(MethodDeclaration)` around line 551):
 
 ```java
 @Override
@@ -219,7 +219,7 @@ Expected: All existing tests + the 2 new tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java src/test/java/com/codescope/EdgeCaseTest.java
+git add src/main/java/com/codescope/index/JdtIndexer.java src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "feat(index): attribute static/instance init block calls to <clinit>/<class-init>"
 ```
 
@@ -228,8 +228,8 @@ git commit -m "feat(index): attribute static/instance init block calls to <clini
 ### Task 3: Index static and instance field initializers
 
 **Files:**
-- Modify: `src/main/java/com/codescope/JdtIndexer.java:554-575` (change `visit(FieldDeclaration)` to descend and push synthetic)
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java`
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java:554-575` (change `visit(FieldDeclaration)` to descend and push synthetic)
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java`
 
 **Interfaces:**
 - Consumes: Same as Task 2.
@@ -237,7 +237,7 @@ git commit -m "feat(index): attribute static/instance init block calls to <clini
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java`:
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java`:
 
 ```java
 @Test
@@ -292,7 +292,7 @@ Expected: FAIL — `callers` is empty because `visit(FieldDeclaration)` returns 
 
 - [ ] **Step 3: Modify `visit(FieldDeclaration)`**
 
-Edit `src/main/java/com/codescope/JdtIndexer.java:554-575`. Replace the existing `visit(FieldDeclaration)`:
+Edit `src/main/java/com/codescope/index/JdtIndexer.java:554-575`. Replace the existing `visit(FieldDeclaration)`:
 
 ```java
 @Override
@@ -352,7 +352,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java src/test/java/com/codescope/EdgeCaseTest.java
+git add src/main/java/com/codescope/index/JdtIndexer.java src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "feat(index): attribute field initializer calls to <clinit>/<class-init>"
 ```
 
@@ -361,8 +361,8 @@ git commit -m "feat(index): attribute field initializer calls to <clinit>/<class
 ### Task 4: Index enum constant constructor arguments
 
 **Files:**
-- Modify: `src/main/java/com/codescope/JdtIndexer.java` (add `visit(EnumConstantDeclaration)` and `endVisit(EnumConstantDeclaration)` inside `CallSiteVisitor`)
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java`
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java` (add `visit(EnumConstantDeclaration)` and `endVisit(EnumConstantDeclaration)` inside `CallSiteVisitor`)
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java`
 
 **Interfaces:**
 - Consumes: Same as Tasks 2-3. `EnumConstantDeclaration` is in `org.eclipse.jdt.core.dom`.
@@ -370,7 +370,7 @@ git commit -m "feat(index): attribute field initializer calls to <clinit>/<class
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java`:
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java`:
 
 ```java
 @Test
@@ -409,7 +409,7 @@ Expected: FAIL — `callers` is empty because there's no `visit(EnumConstantDecl
 
 - [ ] **Step 3: Add `visit(EnumConstantDeclaration)` and `endVisit`**
 
-Add inside `CallSiteVisitor` in `src/main/java/com/codescope/JdtIndexer.java`, near the existing `visit(EnumDeclaration)` (around line 370):
+Add inside `CallSiteVisitor` in `src/main/java/com/codescope/index/JdtIndexer.java`, near the existing `visit(EnumDeclaration)` (around line 370):
 
 ```java
 @Override
@@ -452,7 +452,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java src/test/java/com/codescope/EdgeCaseTest.java
+git add src/main/java/com/codescope/index/JdtIndexer.java src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "feat(index): attribute enum constant arg calls to <clinit>"
 ```
 
@@ -461,7 +461,7 @@ git commit -m "feat(index): attribute enum constant arg calls to <clinit>"
 ### Task 5: F6 mixed integration test
 
 **Files:**
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java`
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java`
 
 **Interfaces:**
 - Consumes: All F6 work from Tasks 1-4.
@@ -469,7 +469,7 @@ git commit -m "feat(index): attribute enum constant arg calls to <clinit>"
 
 - [ ] **Step 1: Write the integration test**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java`:
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java`:
 
 ```java
 @Test
@@ -537,7 +537,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/test/java/com/codescope/EdgeCaseTest.java
+git add src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "test(index): mixed main/init calls integration test for F6"
 ```
 
@@ -546,12 +546,12 @@ git commit -m "test(index): mixed main/init calls integration test for F6"
 ### Task 6: Migrate `ProjectIndexCache` key + add `includeTests` to `ProjectLoader`
 
 **Files:**
-- Modify: `src/main/java/com/codescope/ProjectIndexCache.java` (introduce `IndexCacheKey` record, widen `loadOrRebuild` + `validateAndLoad` + `buildIndex`)
-- Modify: `src/main/java/com/codescope/ProjectLoader.java:325-358` (widen `collectSourceRoots`, `collectSourceRoots0`, `collectSources`, and `load` to accept `includeTests`)
-- Modify: `src/main/java/com/codescope/TraceCallersService.java` (pass `false` to `validateAndLoad`)
-- Modify: `src/main/java/com/codescope/FindCallSitesService.java` (pass `false` to `validateAndLoad`)
-- Modify: `src/main/java/com/codescope/FindSymbolsService.java` (pass `false` to `validateAndLoad`)
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java` (no new test — existing tests must pass)
+- Modify: `src/main/java/com/codescope/index/ProjectIndexCache.java` (introduce `IndexCacheKey` record, widen `loadOrRebuild` + `validateAndLoad` + `buildIndex`)
+- Modify: `src/main/java/com/codescope/loader/ProjectLoader.java:325-358` (widen `collectSourceRoots`, `collectSourceRoots0`, `collectSources`, and `load` to accept `includeTests`)
+- Modify: `src/main/java/com/codescope/service/TraceCallersService.java` (pass `false` to `validateAndLoad`)
+- Modify: `src/main/java/com/codescope/service/FindCallSitesService.java` (pass `false` to `validateAndLoad`)
+- Modify: `src/main/java/com/codescope/service/FindSymbolsService.java` (pass `false` to `validateAndLoad`)
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java` (no new test — existing tests must pass)
 
 **Interfaces:**
 - Consumes: existing `ProjectIndexCache.loadOrRebuild(Path, boolean)` API.
@@ -564,7 +564,7 @@ Expected: All existing tests pass (125 + new F6 tests from Tasks 1-5).
 
 - [ ] **Step 2: Add `IndexCacheKey` record and widen cache API**
 
-Edit `src/main/java/com/codescope/ProjectIndexCache.java`. Add the record near the top of the class (after the existing `private final Map<Path, ProjectIndex> entries` field — change its type too):
+Edit `src/main/java/com/codescope/index/ProjectIndexCache.java`. Add the record near the top of the class (after the existing `private final Map<Path, ProjectIndex> entries` field — change its type too):
 
 ```java
 record IndexCacheKey(Path projectRoot, boolean includeTests) {
@@ -650,7 +650,7 @@ public static <E extends Exception> ProjectIndex validateAndLoad(
 
 - [ ] **Step 3: Widen `ProjectLoader.load` and `collectSourceRoots` to accept `includeTests`**
 
-Edit `src/main/java/com/codescope/ProjectLoader.java`. Add `includeTests` parameter to `load`, `collectSources`, `collectSourceRoots`, and `collectSourceRoots0`:
+Edit `src/main/java/com/codescope/loader/ProjectLoader.java`. Add `includeTests` parameter to `load`, `collectSources`, `collectSourceRoots`, and `collectSourceRoots0`:
 
 ```java
 public LoadResult load(Path projectRoot, boolean includeTests) throws IOException {
@@ -733,7 +733,7 @@ Expected: All existing tests pass. No behavior change — `includeTests=false` e
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/codescope/ProjectIndexCache.java src/main/java/com/codescope/ProjectLoader.java src/main/java/com/codescope/TraceCallersService.java src/main/java/com/codescope/FindCallSitesService.java src/main/java/com/codescope/FindSymbolsService.java
+git add src/main/java/com/codescope/index/ProjectIndexCache.java src/main/java/com/codescope/loader/ProjectLoader.java src/main/java/com/codescope/service/TraceCallersService.java src/main/java/com/codescope/service/FindCallSitesService.java src/main/java/com/codescope/service/FindSymbolsService.java
 git commit -m "refactor(cache): widen ProjectIndexCache key to (projectRoot, includeTests)"
 ```
 
@@ -742,9 +742,9 @@ git commit -m "refactor(cache): widen ProjectIndexCache key to (projectRoot, inc
 ### Task 7: Wire `include_tests` through `trace_callers`
 
 **Files:**
-- Modify: `src/main/java/com/codescope/TraceCallersTool.java` (add `include_tests` to `inputSchema`)
-- Modify: `src/main/java/com/codescope/TraceCallersService.java` (widen `traceCallersJson` signature)
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java` (or `CallChainAnalyzerTest.java` if it has a more suitable fixture)
+- Modify: `src/main/java/com/codescope/mcp/TraceCallersTool.java` (add `include_tests` to `inputSchema`)
+- Modify: `src/main/java/com/codescope/service/TraceCallersService.java` (widen `traceCallersJson` signature)
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java` (or `CallChainAnalyzerTest.java` if it has a more suitable fixture)
 
 **Interfaces:**
 - Consumes: Task 6's widened `validateAndLoad(..., includeTests, ...)`.
@@ -752,7 +752,7 @@ git commit -m "refactor(cache): widen ProjectIndexCache key to (projectRoot, inc
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java`:
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java`:
 
 ```java
 @Test
@@ -800,7 +800,7 @@ Expected: FAIL — the method signature doesn't have `includeTests` yet (compile
 
 - [ ] **Step 3: Widen `TraceCallersService.traceCallersJson`**
 
-Edit `src/main/java/com/codescope/TraceCallersService.java:40-44`. Add `boolean includeTests` as the last parameter:
+Edit `src/main/java/com/codescope/service/TraceCallersService.java:40-44`. Add `boolean includeTests` as the last parameter:
 
 ```java
 public String traceCallersJson(String className, String methodName,
@@ -826,7 +826,7 @@ public String traceCallersJson(String className, String methodName,
 
 - [ ] **Step 4: Add `include_tests` to `TraceCallersTool.inputSchema`**
 
-Edit `src/main/java/com/codescope/TraceCallersTool.java` — find the `inputSchema()` method and add an `include_tests` property. Match the existing pattern for `refresh` (a boolean property with default `false`). Add to both the `properties` map and the `description`:
+Edit `src/main/java/com/codescope/mcp/TraceCallersTool.java` — find the `inputSchema()` method and add an `include_tests` property. Match the existing pattern for `refresh` (a boolean property with default `false`). Add to both the `properties` map and the `description`:
 
 ```java
 // In the properties map:
@@ -863,7 +863,7 @@ Expected: All tests pass (existing tests use the deprecated 6-arg overload, whic
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/main/java/com/codescope/TraceCallersTool.java src/main/java/com/codescope/TraceCallersService.java src/test/java/com/codescope/EdgeCaseTest.java
+git add src/main/java/com/codescope/mcp/TraceCallersTool.java src/main/java/com/codescope/service/TraceCallersService.java src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "feat(trace-callers): add include_tests parameter to opt test sources in"
 ```
 
@@ -872,9 +872,9 @@ git commit -m "feat(trace-callers): add include_tests parameter to opt test sour
 ### Task 8: Wire `include_tests` through `find_call_sites`
 
 **Files:**
-- Modify: `src/main/java/com/codescope/FindCallSitesTool.java`
-- Modify: `src/main/java/com/codescope/FindCallSitesService.java:42`
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java` (or `FindCallSitesServiceTest.java`)
+- Modify: `src/main/java/com/codescope/mcp/FindCallSitesTool.java`
+- Modify: `src/main/java/com/codescope/service/FindCallSitesService.java:42`
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java` (or `FindCallSitesServiceTest.java`)
 
 **Interfaces:**
 - Consumes: Task 6's widened `validateAndLoad`.
@@ -882,7 +882,7 @@ git commit -m "feat(trace-callers): add include_tests parameter to opt test sour
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java` (or `FindCallSitesServiceTest.java` — match the existing pattern of the file you choose):
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java` (or `FindCallSitesServiceTest.java` — match the existing pattern of the file you choose):
 
 ```java
 @Test
@@ -926,7 +926,7 @@ Expected: FAIL — compile error or test failure.
 
 - [ ] **Step 3: Widen `FindCallSitesService.findCallSitesJson`**
 
-Edit `src/main/java/com/codescope/FindCallSitesService.java:42`. Add `boolean includeTests` as the last parameter, pass it to `validateAndLoad`:
+Edit `src/main/java/com/codescope/service/FindCallSitesService.java:42`. Add `boolean includeTests` as the last parameter, pass it to `validateAndLoad`:
 
 ```java
 public String findCallSitesJson(String className, String methodName,
@@ -963,7 +963,7 @@ Expected: All tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/main/java/com/codescope/FindCallSitesTool.java src/main/java/com/codescope/FindCallSitesService.java src/test/java/com/codescope/EdgeCaseTest.java
+git add src/main/java/com/codescope/mcp/FindCallSitesTool.java src/main/java/com/codescope/service/FindCallSitesService.java src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "feat(find-call-sites): add include_tests parameter to opt test sources in"
 ```
 
@@ -972,9 +972,9 @@ git commit -m "feat(find-call-sites): add include_tests parameter to opt test so
 ### Task 9: Wire `include_tests` through `find_symbols`
 
 **Files:**
-- Modify: `src/main/java/com/codescope/FindSymbolsTool.java`
-- Modify: `src/main/java/com/codescope/FindSymbolsService.java:54`
-- Test: `src/test/java/com/codescope/FindSymbolsServiceTest.java`
+- Modify: `src/main/java/com/codescope/mcp/FindSymbolsTool.java`
+- Modify: `src/main/java/com/codescope/service/FindSymbolsService.java:54`
+- Test: `src/test/java/com/codescope/service/FindSymbolsServiceTest.java`
 
 **Interfaces:**
 - Consumes: Task 6's widened `validateAndLoad`.
@@ -982,7 +982,7 @@ git commit -m "feat(find-call-sites): add include_tests parameter to opt test so
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/test/java/com/codescope/FindSymbolsServiceTest.java`:
+Add to `src/test/java/com/codescope/service/FindSymbolsServiceTest.java`:
 
 ```java
 @Test
@@ -1016,7 +1016,7 @@ Expected: FAIL — compile error (5-arg signature doesn't exist yet).
 
 - [ ] **Step 3: Widen `FindSymbolsService.findSymbolsJson`**
 
-Edit `src/main/java/com/codescope/FindSymbolsService.java:54`:
+Edit `src/main/java/com/codescope/service/FindSymbolsService.java:54`:
 
 ```java
 public String findSymbolsJson(String query, String kind,
@@ -1053,7 +1053,7 @@ Expected: All tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/main/java/com/codescope/FindSymbolsTool.java src/main/java/com/codescope/FindSymbolsService.java src/test/java/com/codescope/FindSymbolsServiceTest.java
+git add src/main/java/com/codescope/mcp/FindSymbolsTool.java src/main/java/com/codescope/service/FindSymbolsService.java src/test/java/com/codescope/service/FindSymbolsServiceTest.java
 git commit -m "feat(find-symbols): add include_tests parameter to opt test sources in"
 ```
 
@@ -1062,7 +1062,7 @@ git commit -m "feat(find-symbols): add include_tests parameter to opt test sourc
 ### Task 10: Verify cache key distinguishes `include_tests`
 
 **Files:**
-- Test: `src/test/java/com/codescope/EdgeCaseTest.java`
+- Test: `src/test/java/com/codescope/analysis/EdgeCaseTest.java`
 
 **Interfaces:**
 - Consumes: All X1 work from Tasks 6-9.
@@ -1070,7 +1070,7 @@ git commit -m "feat(find-symbols): add include_tests parameter to opt test sourc
 
 - [ ] **Step 1: Write the test**
 
-Add to `src/test/java/com/codescope/EdgeCaseTest.java`:
+Add to `src/test/java/com/codescope/analysis/EdgeCaseTest.java`:
 
 ```java
 @Test
@@ -1132,7 +1132,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/test/java/com/codescope/EdgeCaseTest.java
+git add src/test/java/com/codescope/analysis/EdgeCaseTest.java
 git commit -m "test(cache): verify cache key distinguishes include_tests"
 ```
 

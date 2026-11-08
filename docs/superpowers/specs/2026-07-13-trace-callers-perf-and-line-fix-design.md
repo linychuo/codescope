@@ -29,7 +29,7 @@ BFS 处理 50000 帧（MAX_NODES）= 50B 操作。在 10ns/op 的速度下 = 500
 
 ### Fix #1: `JdtIndexer` 用方法名行号
 
-`src/main/java/com/codescope/JdtIndexer.java` 第 555 行：
+`src/main/java/com/codescope/index/JdtIndexer.java` 第 555 行：
 
 ```java
 // Before
@@ -52,7 +52,7 @@ int line = node instanceof AbstractTypeDeclaration atd && atd.getName() != null
 
 ### Fix #2: BFS 加 per-frame fan-out 上限
 
-`src/main/java/com/codescope/CallChainAnalyzer.java` BFS 内层循环（第 92-132 行）。
+`src/main/java/com/codescope/analysis/CallChainAnalyzer.java` BFS 内层循环（第 92-132 行）。
 
 **当前行为**：对每个 BFS 帧 f，先 `relatedMethods(f.key)` 得到 R 个相关方法，再对每个调 `callersOf(relatedKey)` 收集 C 个调用者。完全展开到 MAX_NODES。
 
@@ -74,7 +74,7 @@ int line = node instanceof AbstractTypeDeclaration atd && atd.getName() != null
 
 ### Fix #3: 避免 `List.copyOf` 开销
 
-`src/main/java/com/codescope/ProjectIndex.java` 新增方法：
+`src/main/java/com/codescope/index/ProjectIndex.java` 新增方法：
 
 ```java
 /**
@@ -103,14 +103,14 @@ public Set<MethodKey> callersOfSet(MethodKey target) {
 
 | 操作 | 文件 |
 |---|---|
-| **修改** | `src/main/java/com/codescope/JdtIndexer.java`（1 行：第 555 行） |
-| **修改** | `src/main/java/com/codescope/CallNode.java`（新增 hiddenCallerCount 字段、truncation 工厂、toJson 输出 truncatedCallers） |
-| **修改** | `src/main/java/com/codescope/CallChainAnalyzer.java`（BFS 内层循环重构，加 MAX_CALLERS_PER_FRAME 常量） |
-| **修改** | `src/main/java/com/codescope/ProjectIndex.java`（新增 callersOfSet 方法） |
-| **新增** | `src/test/java/com/codescope/CallNodeTruncationTest.java`（CallNode 新字段的序列化） |
-| **新增** | `src/test/java/com/codescope/MethodLineFixTest.java`（带 Javadoc 的方法，line 指向签名行） |
-| **新增** | `src/test/java/com/codescope/CallChainFanoutCapTest.java`（fan-out cap 行为） |
-| **新增** | `src/test/java/com/codescope/ProjectIndexCallersOfSetTest.java`（callersOfSet 与 callersOf 内容一致） |
+| **修改** | `src/main/java/com/codescope/index/JdtIndexer.java`（1 行：第 555 行） |
+| **修改** | `src/main/java/com/codescope/analysis/CallNode.java`（新增 hiddenCallerCount 字段、truncation 工厂、toJson 输出 truncatedCallers） |
+| **修改** | `src/main/java/com/codescope/analysis/CallChainAnalyzer.java`（BFS 内层循环重构，加 MAX_CALLERS_PER_FRAME 常量） |
+| **修改** | `src/main/java/com/codescope/index/ProjectIndex.java`（新增 callersOfSet 方法） |
+| **新增** | `src/test/java/com/codescope/analysis/CallNodeTruncationTest.java`（CallNode 新字段的序列化） |
+| **新增** | `src/test/java/com/codescope/index/MethodLineFixTest.java`（带 Javadoc 的方法，line 指向签名行） |
+| **新增** | `src/test/java/com/codescope/analysis/CallChainFanoutCapTest.java`（fan-out cap 行为） |
+| **新增** | `src/test/java/com/codescope/index/ProjectIndexCallersOfSetTest.java`（callersOfSet 与 callersOf 内容一致） |
 
 ## 测试策略
 

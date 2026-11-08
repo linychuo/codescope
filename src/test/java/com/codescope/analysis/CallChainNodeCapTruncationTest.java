@@ -68,9 +68,9 @@ class CallChainNodeCapTruncationTest {
         ProjectIndex index = new JdtIndexer().build(
                 sources, List.of(), List.of(srcDir.getParent().getParent().toString()), tmp);
 
-        // maxNodes=5: a chain of 7 will hit the cap after expanding
-        // through the fifth caller (E). The BFS adds F as the sixth
-        // node and bails immediately, leaving tree A→B→C→D→E→F behind.
+        // maxNodes=5: a chain of 7 stops once the tree holds 5 nodes
+        // (A→B→C→D→E); the check is `nodes >= maxNodes`, so the node that
+        // would exceed the cap is not added.
         MethodKey a = new MethodKey("com.example.A", "entry", 0, List.of());
         CallChainAnalyzer.Result r = new CallChainAnalyzer(5).traceCallers(index, a);
 

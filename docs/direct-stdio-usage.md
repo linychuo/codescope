@@ -62,7 +62,7 @@ mvn package
 ```bash
 printf '%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"shell","version":"0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.codescope.McpServer","method":"writeLine","project":"C:/projects/codescope"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.codescope.mcp.McpServer","method":"writeLine","project":"C:/projects/codescope"}}}' \
   | java -jar target/codescope.jar \
   | jq -r 'select(.id==2) | .result.content[0].text | fromjson'
 ```
@@ -72,7 +72,7 @@ printf '%s\n%s\n' \
 ```powershell
 $req = @'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"shell","version":"0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.codescope.McpServer","method":"writeLine","project":"C:/projects/codescope"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.codescope.mcp.McpServer","method":"writeLine","project":"C:/projects/codescope"}}}
 '@
 $req | java -jar target/codescope.jar | jq -r 'select(.id==2) | .result.content[0].text | fromjson'
 ```

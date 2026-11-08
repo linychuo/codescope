@@ -18,7 +18,7 @@ Issue #6 的两个根因之一（评论明确指出，2026-07-14）：
 
 ### Fix: ProjectIndex 加 (name, arity) 二级索引
 
-`src/main/java/com/codescope/ProjectIndex.java` 新增字段，紧挨着 `hierarchy` / `typeHierarchy` 等已有索引（line 75-89 附近）：
+`src/main/java/com/codescope/index/ProjectIndex.java` 新增字段，紧挨着 `hierarchy` / `typeHierarchy` 等已有索引（line 75-89 附近）：
 
 ```java
 // Signature index: for each (methodName, arity) pair, the set of
@@ -123,9 +123,9 @@ for (MethodKey candidate : index.methodsWithSignature(m.methodName, m.arity)) {
 
 | 操作 | 文件 |
 |---|---|
-| **修改** | `src/main/java/com/codescope/ProjectIndex.java`（新 NameArity record、bySignature 字段、putDeclaration 写时维护、methodsWithSignature 方法、javadoc） |
-| **修改** | `src/main/java/com/codescope/JdtIndexer.java`（修复 pass 内层循环改两行） |
-| **新增** | `src/test/java/com/codescope/ProjectIndexSignatureIndexTest.java`（methodsWithSignature 行为 + 写时可见性） |
+| **修改** | `src/main/java/com/codescope/index/ProjectIndex.java`（新 NameArity record、bySignature 字段、putDeclaration 写时维护、methodsWithSignature 方法、javadoc） |
+| **修改** | `src/main/java/com/codescope/index/JdtIndexer.java`（修复 pass 内层循环改两行） |
+| **新增** | `src/test/java/com/codescope/index/ProjectIndexSignatureIndexTest.java`（methodsWithSignature 行为 + 写时可见性） |
 
 预计 +40 行生产代码（含 javadoc）、+60 行测试。
 

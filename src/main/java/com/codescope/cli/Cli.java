@@ -6,6 +6,7 @@ import com.codescope.service.FindSymbolsService;
 import com.codescope.service.TraceCallersService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -136,7 +137,17 @@ public final class Cli {
             switch (a) {
                 case "--project" -> {
                     requireValue(args, i, "--project");
-                    p.project = Paths.get(args[++i]).toAbsolutePath();
+                    String raw = args[++i];
+                    try {
+                        p.project = Paths.get(raw).toAbsolutePath();
+                    } catch (InvalidPathException e) {
+                        // A path with a NUL byte (or another invalid sequence)
+                        // would otherwise escape parseArgs as a runtime
+                        // exception and produce a stack trace instead of a
+                        // clean usage error.
+                        throw new UsageException(
+                                "--project is not a valid path: '" + raw + "'");
+                    }
                     i++;
                 }
                 case "--arity" -> {

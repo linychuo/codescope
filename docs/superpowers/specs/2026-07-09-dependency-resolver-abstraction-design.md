@@ -161,9 +161,9 @@ public final class GradleDependencyResolver implements DependencyResolver {
 
 | 操作 | 文件 |
 |---|---|
-| **新增** | `src/main/java/com/codescope/DependencyResolver.java` |
-| **新增** | `src/main/java/com/codescope/MvnCliDependencyResolver.java` |
-| **新增** | `src/main/java/com/codescope/DependencyResolverFactory.java` |
-| **修改** | `src/main/java/com/codescope/ProjectLoader.java`（1 行） |
-| **新增** | `src/test/java/com/codescope/MvnCliDependencyResolverTest.java` |
-| **新增** | `src/test/java/com/codescope/DependencyResolverFactoryTest.java` |
+| **新增** | `src/main/java/com/codescope/dependency/DependencyResolver.java` |
+| **新增** | `src/main/java/com/codescope/dependency/MvnCliDependencyResolver.java` |
+| **新增** | `src/main/java/com/codescope/dependency/DependencyResolverFactory.java` |
+| **修改** | `src/main/java/com/codescope/loader/ProjectLoader.java`（1 行） |
+| **新增** | `src/test/java/com/codescope/dependency/MvnCliDependencyResolverTest.java` |
+| **新增** | `src/test/java/com/codescope/dependency/DependencyResolverFactoryTest.java` |

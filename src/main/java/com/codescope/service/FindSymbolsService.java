@@ -35,7 +35,7 @@ public final class FindSymbolsService {
      * {@code Set.of}: the latter's iteration order is randomized per JVM
      * run, which made the "Valid: ..." diagnostics nondeterministic.
      */
-    static final Set<String> VALID_KINDS = Collections.unmodifiableSet(
+    public static final Set<String> VALID_KINDS = Collections.unmodifiableSet(
             new LinkedHashSet<>(List.of(
                     "class", "interface", "enum", "record", "annotation",
                     "method", "constructor", "field", "synthetic")));

@@ -74,7 +74,7 @@ public final class MethodResolver {
     public static String overloadsHint(ProjectIndex index,
                                        String className, String methodName,
                                        ProjectIndex.AmbiguousMethodException cause) {
-        List<MethodKey> projectOverloads = index.findOverloads(className, methodName);
+        List<MethodKey> projectOverloads = index.findOverloadsInHierarchy(className, methodName);
         if (projectOverloads.isEmpty()) {
             return cause.getMessage() + " no overloads are visible in this project's sources "
                     + "(the class is likely from a library); pass `paramTypes` with the FQN types "

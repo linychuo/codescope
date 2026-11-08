@@ -303,7 +303,7 @@ public final class McpServer {
             //     of null/true/false — partial keyword (e.g. `{"r":n`
             //     could still become `{"r":null}`)
             //   * everything else — structural error
-            if (isStreamingIncomplete(e)) return -1;
+            if (isStreamingIncomplete(e, bytes.length)) return -1;
             return bytes.length;
         }
     }
@@ -315,15 +315,26 @@ public final class McpServer {
      * above for the rationale; the messages checked here are the ones
      * Jackson 2.17 emits for streaming-incomplete inputs.
      */
-    private static boolean isStreamingIncomplete(IOException e) {
+    private static boolean isStreamingIncomplete(IOException e, int bufferLength) {
         if (e instanceof JsonEOFException) return true;
         if (!(e instanceof JsonParseException jpe)) return false;
         String msg = jpe.getOriginalMessage();
         if (msg == null) return false;
         if (msg.contains("end-of-input")) return true;
-        if (msg.contains("Decimal point not followed by a digit")) return true;
-        if (msg.contains("Exponent indicator not followed by a digit")) return true;
+        long loc = jpe.getLocation() != null ? jpe.getLocation().getByteOffset() : -1;
+        if (msg.contains("Decimal point not followed by a digit")
+                || msg.contains("Exponent indicator not followed by a digit")) {
+            // The parser names the offending character. Only a trailing
+            // decimal point (e.g. `{"r":1.` at EOF) can be extended by more
+            // digits; any other character (`}`, `e`, a second `.`, space,
+            // ...) is a mismatch that more bytes cannot fix.
+            return ".".equals(extractQuotedToken(msg)) && loc == bufferLength - 1;
+        }
         if (msg.startsWith("Unrecognized token")) {
+            // Only a token that ends at the buffer end could be extended
+            // into a valid keyword; a token followed by any other character
+            // is a mismatch that more bytes cannot fix.
+            if (loc >= 0 && loc < bufferLength) return false;
             String token = extractQuotedToken(msg);
             return token != null && isPrefixOfValidKeyword(token);
         }
@@ -550,7 +561,14 @@ public final class McpServer {
             if (roots == null || !roots.isArray() || roots.isEmpty()) return;
             String uri = roots.get(0).path("uri").asText(null);
             if (uri == null || uri.isBlank() || !uri.startsWith("file://")) return;
-            String path = java.net.URI.create(uri).getPath();
+            String path;
+            try {
+                // Paths.get(URI) handles the Windows drive form
+                // (file:///C:/...) that URI.getPath() mangles into /C:/...
+                path = java.nio.file.Paths.get(java.net.URI.create(uri)).toString();
+            } catch (IllegalArgumentException e) {
+                return;
+            }
             Consumer<String> sink = defaultProjectRootSink;
             if (sink != null) sink.accept(path);
         } catch (Exception e) {
@@ -686,7 +704,9 @@ public final class McpServer {
             err.put("message", message);
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("jsonrpc", "2.0");
-            if (id != null) resp.put("id", id);
+            // JSON-RPC 2.0 requires the id member in error responses; null is
+            // the legal value when the request id couldn't be determined.
+            resp.put("id", id);
             resp.put("error", err);
             writeLine(json.writeValueAsBytes(resp));
         } catch (IOException e) {

@@ -89,6 +89,9 @@ public final class CallChainAnalyzer {
         // under the root, not twice. Shared across all root frames
         // (multiple seeds) so the multi-seed library case still dedups.
         Set<MethodKey> directCallersSeen = new HashSet<>();
+        // Shared across root frames so the fan-out cap applies to the union
+        // of all seeds, not per seed (the root CallNode is shared too).
+        Set<MethodKey> rootCollected = new LinkedHashSet<>();
         for (MethodKey seed : seeds) {
             queue.addLast(new PathFrame(seed, root, seedAncestors, 1, true));
         }
@@ -121,7 +124,7 @@ public final class CallChainAnalyzer {
             // Per-frame fan-out: collect into a single ordered set so the
             // visible children are stable and the cap is enforced on the
             // union, not per relatedKey.
-            LinkedHashSet<MethodKey> collected = new LinkedHashSet<>();
+            Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
             int hidden = 0;
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
                 for (MethodKey caller : index.callersOfSet(relatedKey)) {
@@ -131,10 +134,14 @@ public final class CallChainAnalyzer {
                     // cap below bounds the callers the BFS expands, not
                     // the markers it emits. Checking this first also keeps
                     // `hidden` an accurate count of omitted callers rather
-                    // than folding cycle markers into it.
+                    // than folding cycle markers into it. Dedup via
+                    // localCallersSeen so the same ancestor reached through
+                    // two related keys yields one marker, not two.
                     if (f.ancestors.contains(caller)) {
-                        f.node.addChild(CallNode.cycleMarker(
-                                caller.declaringClass, caller.methodName, caller.arity));
+                        if (f.localCallersSeen.add(caller)) {
+                            f.node.addChild(CallNode.cycleMarker(
+                                    caller.declaringClass, caller.methodName, caller.arity));
+                        }
                         continue;
                     }
                     if (collected.size() >= MAX_CALLERS_PER_FRAME) {
@@ -167,7 +174,7 @@ public final class CallChainAnalyzer {
                     childAncestors.addAll(f.ancestors);
                     queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
                     nodes++;
-                    if (nodes > maxNodes) {
+                    if (nodes >= maxNodes) {
                         root.markNodeCapTruncated();
                         return new Result(root, true,
                                 "Truncated at " + maxNodes + " nodes to prevent runaway expansion. "
@@ -180,7 +187,11 @@ public final class CallChainAnalyzer {
                         f.key.declaringClass, f.key.methodName, f.key.arity, hidden));
             }
         }
-        if (seenInTree.isEmpty()) {
+        // Base the diagnostic on the tree's children, not seenInTree: a
+        // pure self-recursion produces only a cycle marker (which is not
+        // added to seenInTree), and reporting "No callers found" for it
+        // would be wrong — the cycle IS the answer.
+        if (root.callers.isEmpty()) {
             return new Result(root, true,
                     "No callers found for '" + displayTarget.declaringClass + "#"
                             + displayTarget.methodName + "/" + displayTarget.arity

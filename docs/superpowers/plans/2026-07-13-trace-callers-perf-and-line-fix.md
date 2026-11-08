@@ -20,22 +20,22 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/java/com/codescope/JdtIndexer.java` | Fix #1: use `cuLine(node.getName())` for method declaration line. |
-| `src/main/java/com/codescope/CallNode.java` | Fix #2: add `fanoutTruncated`, `hiddenCallerCount` fields; add `fanoutMarker` factory; extend `toJson()` to emit `truncatedCallers`. |
-| `src/main/java/com/codescope/CallChainAnalyzer.java` | Fix #2: BFS loop refactor + `MAX_CALLERS_PER_FRAME` constant. |
-| `src/main/java/com/codescope/ProjectIndex.java` | Fix #3: add `callersOfSet(MethodKey)` returning the live `Set`. |
-| `src/test/java/com/codescope/MethodLineFixTest.java` | NEW — Fix #1 test. |
-| `src/test/java/com/codescope/CallNodeTruncationTest.java` | NEW — Fix #2 `CallNode` serialization test. |
-| `src/test/java/com/codescope/CallChainFanoutCapTest.java` | NEW — Fix #2 BFS behavior test. |
-| `src/test/java/com/codescope/ProjectIndexCallersOfSetTest.java` | NEW — Fix #3 test. |
+| `src/main/java/com/codescope/index/JdtIndexer.java` | Fix #1: use `cuLine(node.getName())` for method declaration line. |
+| `src/main/java/com/codescope/analysis/CallNode.java` | Fix #2: add `fanoutTruncated`, `hiddenCallerCount` fields; add `fanoutMarker` factory; extend `toJson()` to emit `truncatedCallers`. |
+| `src/main/java/com/codescope/analysis/CallChainAnalyzer.java` | Fix #2: BFS loop refactor + `MAX_CALLERS_PER_FRAME` constant. |
+| `src/main/java/com/codescope/index/ProjectIndex.java` | Fix #3: add `callersOfSet(MethodKey)` returning the live `Set`. |
+| `src/test/java/com/codescope/index/MethodLineFixTest.java` | NEW — Fix #1 test. |
+| `src/test/java/com/codescope/analysis/CallNodeTruncationTest.java` | NEW — Fix #2 `CallNode` serialization test. |
+| `src/test/java/com/codescope/analysis/CallChainFanoutCapTest.java` | NEW — Fix #2 BFS behavior test. |
+| `src/test/java/com/codescope/index/ProjectIndexCallersOfSetTest.java` | NEW — Fix #3 test. |
 
 ---
 
 ## Task 1: Method declaration line points at name token (Fix #1)
 
 **Files:**
-- Modify: `src/main/java/com/codescope/JdtIndexer.java:555`
-- Test: `src/test/java/com/codescope/MethodLineFixTest.java` (new)
+- Modify: `src/main/java/com/codescope/index/JdtIndexer.java:555`
+- Test: `src/test/java/com/codescope/index/MethodLineFixTest.java` (new)
 
 **Interfaces:**
 - Consumes: existing `private static int cuLine(ASTNode n)` helper in `JdtIndexer.java` (maps `n.getStartPosition()` via `cu.getLineNumber(pos)`).
@@ -43,7 +43,7 @@
 
 ### Step 1: Write the failing test
 
-Create `src/test/java/com/codescope/MethodLineFixTest.java`:
+Create `src/test/java/com/codescope/index/MethodLineFixTest.java`:
 
 ```java
 package com.codescope;
@@ -109,7 +109,7 @@ Expected: FAIL with message containing "should be the method signature line" and
 
 ### Step 3: Fix the bug
 
-In `src/main/java/com/codescope/JdtIndexer.java`, change line 555 from:
+In `src/main/java/com/codescope/index/JdtIndexer.java`, change line 555 from:
 
 ```java
             int line = cuLine(node);
@@ -133,7 +133,7 @@ Expected: PASS
 ### Step 5: Commit
 
 ```bash
-git add src/main/java/com/codescope/JdtIndexer.java src/test/java/com/codescope/MethodLineFixTest.java
+git add src/main/java/com/codescope/index/JdtIndexer.java src/test/java/com/codescope/index/MethodLineFixTest.java
 git commit -m "fix(jdtindexer): record method declaration line at name token"
 ```
 
@@ -142,8 +142,8 @@ git commit -m "fix(jdtindexer): record method declaration line at name token"
 ## Task 2: Add fan-out marker fields to CallNode (Fix #2 part A)
 
 **Files:**
-- Modify: `src/main/java/com/codescope/CallNode.java`
-- Test: `src/test/java/com/codescope/CallNodeTruncationTest.java` (new)
+- Modify: `src/main/java/com/codescope/analysis/CallNode.java`
+- Test: `src/test/java/com/codescope/analysis/CallNodeTruncationTest.java` (new)
 
 **Interfaces:**
 - Consumes: existing `cycle`, `truncated` (depth-cap) marker fields and `cycleMarker`/`depthMarker` factories.
@@ -151,7 +151,7 @@ git commit -m "fix(jdtindexer): record method declaration line at name token"
 
 ### Step 1: Write the failing test
 
-Create `src/test/java/com/codescope/CallNodeTruncationTest.java`:
+Create `src/test/java/com/codescope/analysis/CallNodeTruncationTest.java`:
 
 ```java
 package com.codescope;
@@ -200,7 +200,7 @@ Expected: FAIL with "cannot find symbol: method fanoutMarker".
 
 ### Step 3: Extend CallNode
 
-In `src/main/java/com/codescope/CallNode.java`, make the following changes:
+In `src/main/java/com/codescope/analysis/CallNode.java`, make the following changes:
 
 1. Add two `public final` fields after `truncated`:
 
@@ -291,7 +291,7 @@ Expected: PASS for all (the new fields default to `false, 0`, so existing `CallN
 ### Step 6: Commit
 
 ```bash
-git add src/main/java/com/codescope/CallNode.java src/test/java/com/codescope/CallNodeTruncationTest.java
+git add src/main/java/com/codescope/analysis/CallNode.java src/test/java/com/codescope/analysis/CallNodeTruncationTest.java
 git commit -m "feat(callnode): add fan-out marker fields and factory"
 ```
 
@@ -300,8 +300,8 @@ git commit -m "feat(callnode): add fan-out marker fields and factory"
 ## Task 3: Add `callersOfSet` to ProjectIndex (Fix #3)
 
 **Files:**
-- Modify: `src/main/java/com/codescope/ProjectIndex.java` (after line 360, the existing `callersOf` method)
-- Test: `src/test/java/com/codescope/ProjectIndexCallersOfSetTest.java` (new)
+- Modify: `src/main/java/com/codescope/index/ProjectIndex.java` (after line 360, the existing `callersOf` method)
+- Test: `src/test/java/com/codescope/index/ProjectIndexCallersOfSetTest.java` (new)
 
 **Interfaces:**
 - Consumes: existing `private final Map<MethodKey, Set<MethodKey>> calls` (each value is a `LinkedHashSet` populated by `recordInvocation`).
@@ -309,7 +309,7 @@ git commit -m "feat(callnode): add fan-out marker fields and factory"
 
 ### Step 1: Write the failing test
 
-Create `src/test/java/com/codescope/ProjectIndexCallersOfSetTest.java`:
+Create `src/test/java/com/codescope/index/ProjectIndexCallersOfSetTest.java`:
 
 ```java
 package com.codescope;
@@ -385,7 +385,7 @@ Expected: FAIL with "cannot find symbol: method callersOfSet".
 
 ### Step 3: Add the method to ProjectIndex
 
-In `src/main/java/com/codescope/ProjectIndex.java`, immediately after the existing `callersOf` method (line 360) and before the `callSitesOf` javadoc, insert:
+In `src/main/java/com/codescope/index/ProjectIndex.java`, immediately after the existing `callersOf` method (line 360) and before the `callSitesOf` javadoc, insert:
 
 ```java
     /**
@@ -415,7 +415,7 @@ Expected: PASS
 ### Step 5: Commit
 
 ```bash
-git add src/main/java/com/codescope/ProjectIndex.java src/test/java/com/codescope/ProjectIndexCallersOfSetTest.java
+git add src/main/java/com/codescope/index/ProjectIndex.java src/test/java/com/codescope/index/ProjectIndexCallersOfSetTest.java
 git commit -m "feat(projectindex): add callersOfSet for direct BFS iteration"
 ```
 
@@ -424,8 +424,8 @@ git commit -m "feat(projectindex): add callersOfSet for direct BFS iteration"
 ## Task 4: Refactor BFS to use callersOfSet + per-frame fan-out cap (Fix #2 part B)
 
 **Files:**
-- Modify: `src/main/java/com/codescope/CallChainAnalyzer.java` (lines 47-152, the `traceCallers` method body and surrounding field block)
-- Test: `src/test/java/com/codescope/CallChainFanoutCapTest.java` (new)
+- Modify: `src/main/java/com/codescope/analysis/CallChainAnalyzer.java` (lines 47-152, the `traceCallers` method body and surrounding field block)
+- Test: `src/test/java/com/codescope/analysis/CallChainFanoutCapTest.java` (new)
 
 **Interfaces:**
 - Consumes: `MAX_NODES` (existing, `50_000`), `MAX_DEPTH` (existing, `500`). `index.callersOfSet(MethodKey)` from Task 3. `CallNode.fanoutMarker(...)` from Task 2. `LinkedHashSet<MethodKey>` (preserves insertion order so the tree output is stable).
@@ -433,7 +433,7 @@ git commit -m "feat(projectindex): add callersOfSet for direct BFS iteration"
 
 ### Step 1: Write the failing test
 
-Create `src/test/java/com/codescope/CallChainFanoutCapTest.java`:
+Create `src/test/java/com/codescope/analysis/CallChainFanoutCapTest.java`:
 
 ```java
 package com.codescope;
@@ -528,7 +528,7 @@ Expected: FAIL with `expected at most 500 caller children after fan-out cap, got
 
 ### Step 3: Add the MAX_CALLERS_PER_FRAME constant
 
-In `src/main/java/com/codescope/CallChainAnalyzer.java`, immediately after the existing `private static final int MAX_DEPTH = 500;` (line 164), add:
+In `src/main/java/com/codescope/analysis/CallChainAnalyzer.java`, immediately after the existing `private static final int MAX_DEPTH = 500;` (line 164), add:
 
 ```java
     /**
@@ -686,7 +686,7 @@ Expected: PASS for all (cap doesn't fire for the smaller fixture trees).
 ### Step 8: Commit
 
 ```bash
-git add src/main/java/com/codescope/CallChainAnalyzer.java src/test/java/com/codescope/CallChainFanoutCapTest.java
+git add src/main/java/com/codescope/analysis/CallChainAnalyzer.java src/test/java/com/codescope/analysis/CallChainFanoutCapTest.java
 git commit -m "perf(tracecallers): cap per-frame fan-out and drop List.copyOf overhead"
 ```
 
