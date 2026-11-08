@@ -1,5 +1,12 @@
 package com.codescope;
 
+import com.codescope.cli.Cli;
+import com.codescope.index.ProjectIndexCache;
+import com.codescope.mcp.FindCallSitesTool;
+import com.codescope.mcp.FindSymbolsTool;
+import com.codescope.mcp.McpServer;
+import com.codescope.mcp.TraceCallersTool;
+
 /** Entry point: starts the MCP server on stdio, or the CLI front-end if args are present. */
 public final class Main {
     public static void main(String[] args) throws Exception {

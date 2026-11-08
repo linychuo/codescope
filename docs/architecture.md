@@ -2,6 +2,23 @@
 
 一页纸说清代码组织。读完应该能(1) 找到改 bug 该动的文件,(2) 理解为什么索引要反向存,(3) 知道哪儿是性能/正确性的关键路径。
 
+## 包结构
+
+```
+com.codescope
+├── Main                     入口:无参起 MCP server,有参走 CLI
+├── cli/                     Cli
+├── mcp/                     McpServer、Tool、AbstractMcpTool + 三个 Tool
+├── service/                 TraceCallersService、FindCallSitesService、FindSymbolsService
+├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache
+├── analysis/                CallChainAnalyzer、CallNode、MethodHierarchyExtractor、MethodResolver
+├── model/                   MethodKey
+├── dependency/              DependencyResolver(+Factory)、MvnCliDependencyResolver、MavenClasspathResolver、MavenSettings
+└── loader/                  ProjectLoader
+```
+
+测试包镜像主包结构(如 `McpServerTest` 在 `mcp`,`ProjectIndex*Test` 在 `index`,`CallChain*Test` 在 `analysis`),这样 package-private 的协议/算法内部仍能被直接测试,不必为了跨包访问而扩大 public 表面。
+
 ## 请求流(从 stdio 进来一路向下)
 
 `Main.main` 是唯一入口,按 `args` 分流:
@@ -97,22 +114,25 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 
 | 想做的事 | 改哪儿 |
 |----------|--------|
-| 加一个新的 MCP 工具 | 新建一个 `XxxTool implements Tool`,在 `Main` 里 `new McpServer().register(new XxxTool())` |
-| 给 CLI 加一个子命令(不动 MCP) | `Cli.dispatch` 添一个 `case`,参数复用对应 `*Service` |
-| 修改 `trace_callers` 的入参/出参 schema | `TraceCallersTool.inputSchema()`(对外)+ `TraceCallersService`(业务)+ `McpServerTest`/`CallChainAnalyzerTest`(测试) |
-| 改 JSON-RPC 协议层行为(分帧、错误码、cancellation) | `McpServer.java` 一处,改动会反映在 `McpServerTest` |
-| 改 JDT 解析(支持新的 AST 节点类型) | `CallSiteVisitor` 里的 `visit(Xxx)` 方法 |
-| 改 BFS/cycle 算法 | `CallChainAnalyzer.bfs`,`EdgeCaseTest` 是它的回归网 |
-| 改依赖解析(支持 Gradle、自定义 settings.xml 等) | `DependencyResolver`(接口) + `MvnCliDependencyResolver`(Maven CLI 实现) + `DependencyResolverFactory`(自动检测),测试在 `MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest` |
-| 修并发 bug | `ProjectIndex`(`ConcurrentHashMap` 外层 + `synchronized(set)` 保护 `LinkedHashSet`),`EdgeCaseTest.projectIndexIsThreadSafe*` 是直接覆盖 |
+| 加一个新的 MCP 工具 | 在 `com.codescope.mcp` 新建一个 `XxxTool extends AbstractMcpTool`,在 `Main` 里 `new McpServer(shared).register(new XxxTool(shared))` |
+| 给 CLI 加一个子命令(不动 MCP) | `com.codescope.cli.Cli.dispatch` 添一个 `case`,参数复用对应 `*Service` |
+| 修改 `trace_callers` 的入参/出参 schema | `mcp.TraceCallersTool.inputSchema()`(对外)+ `service.TraceCallersService`(业务)+ `mcp.McpServerTest`/`analysis.CallChainAnalyzerTest`(测试) |
+| 改 JSON-RPC 协议层行为(分帧、错误码、cancellation) | `mcp.McpServer.java` 一处,改动会反映在 `mcp.McpServerTest` |
+| 改 JDT 解析(支持新的 AST 节点类型) | `index.CallSiteVisitor` 里的 `visit(Xxx)` 方法 |
+| 改 BFS/cycle 算法 | `analysis.CallChainAnalyzer.bfs`,`analysis.EdgeCaseTest` 是它的回归网 |
+| 改依赖解析(支持 Gradle、自定义 settings.xml 等) | `dependency.DependencyResolver`(接口) + `dependency.MvnCliDependencyResolver`(Maven CLI 实现) + `dependency.DependencyResolverFactory`(自动检测),测试在 `dependency.MvnCliDependencyResolverTest` / `dependency.DependencyResolverFactoryTest` |
+| 修并发 bug | `index.ProjectIndex`(`ConcurrentHashMap` 外层 + `synchronized(set)` 保护 `LinkedHashSet`),`analysis.EdgeCaseTest.projectIndexIsThreadSafe*` 是直接覆盖 |
 
 ## 测试怎么组织的
 
-- **`CallChainAnalyzerTest`** — fixture Maven 项目(`src/test/resources/fixture-project`)上的端到端:传递调用、重载、ambiguity、cycle、test 排除、enum/record/annotation 兼容
-- **`EdgeCaseTest`** — 边界:深链(>2000 层不爆栈)、钻石 vs 环、library target、50 000 节点截断、并发写、坏源文件
-- **`McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
-- **`McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
-- **`MavenClasspathResolverTest` / `MavenSettingsTest` / `MultiModuleTest`** — pom 解析各自的边界(旧实现,保留作 offline fallback)
+测试包镜像主包结构(见上):`mcp.*Test` 在 `com.codescope.mcp`,`index.*Test` 在 `com.codescope.index`,`analysis.*Test` 在 `com.codescope.analysis`,依此类推。
+
+- **`analysis.CallChainAnalyzerTest`** — fixture Maven 项目(`src/test/resources/fixture-project`)上的端到端:传递调用、重载、ambiguity、cycle、test 排除、enum/record/annotation 兼容
+- **`analysis.EdgeCaseTest`** — 边界:深链(>2000 层不爆栈)、钻石 vs 环、library target、50 000 节点截断、并发写、坏源文件
+- **`mcp.McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
+- **`mcp.McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
+- **`dependency.MavenClasspathResolverTest` / `dependency.MavenSettingsTest`** — pom 解析各自的边界(旧实现,保留作 offline fallback)
+- **`loader.MultiModuleTest`** — 多模块 Maven:跨模块 binding、子模块项目根回退到 aggregator、缓存相对路径
 - **`MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest`** — 依赖解析抽象层:解析 `mvn dependency:build-classpath` 输出、错误处理、构建工具自动检测
 - **`CliTest`** — CLI 前端(`java -jar codescope.jar <command>`)的协议测试:`Cli.run` 直驱(不触发 `System.exit`),覆盖子命令分发、必填 `--project`、缺位置参数、未知 option / kind、退出码 0/1/2、三个子命令在 codescope 自身上的 happy path。`Cli.dispatch` 改完直接看红绿
 - **`FindCallSitesServiceTest`** — `find_call_sites` 服务层:单/多调用点、library target 多 overload union、no-callers / unknown target / ambiguity 诊断、缓存 + `refresh` 在新文件加入后能拾到新调用点
