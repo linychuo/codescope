@@ -2,6 +2,7 @@ package com.codescope.service;
 
 import com.codescope.index.ProjectIndex;
 import com.codescope.index.ProjectIndexCache;
+import com.codescope.index.SourceSnippet;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -10,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -76,6 +78,23 @@ public final class FindSymbolsService {
                                   Path projectRoot, boolean refresh,
                                   boolean includeTests, int limit)
             throws FindSymbolsException {
+        return findSymbolsJson(query, kind, projectRoot, refresh, includeTests, limit, false);
+    }
+
+    /**
+     * As {@link #findSymbolsJson(String, String, Path, boolean, boolean, int)},
+     * with an optional typo-tolerant fuzzy pass and a match annotation on
+     * every hit (issue #9).
+     *
+     * @param fuzzy when true, names within a small Levenshtein distance of
+     *              the query also match (see
+     *              {@link ProjectIndex#searchSymbols(String, String, int, boolean)})
+     * @throws FindSymbolsException with a user-facing error message
+     */
+    public String findSymbolsJson(String query, String kind,
+                                  Path projectRoot, boolean refresh,
+                                  boolean includeTests, int limit, boolean fuzzy)
+            throws FindSymbolsException {
         if (query == null || query.isBlank()) {
             throw new FindSymbolsException("Missing or blank required argument: query");
         }
@@ -88,8 +107,9 @@ public final class FindSymbolsService {
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, FindSymbolsException::new);
 
-        ProjectIndex.SymbolSearchResult result = index.searchSymbols(query, kind, effectiveLimit);
-        List<ProjectIndex.Symbol> matches = result.matches();
+        ProjectIndex.SymbolMatchResult result =
+                index.searchSymbols(query, kind, effectiveLimit, fuzzy);
+        List<ProjectIndex.SymbolMatch> matches = result.matches();
         // Total reflects every match that existed before the limit was
         // applied; a strict greater-than check distinguishes "capped at
         // limit" from "happens to equal limit" without a second scan.
@@ -100,7 +120,7 @@ public final class FindSymbolsService {
         out.put("kind", kind);
         out.put("status", "ok");
         out.put("message", buildMessage(query, kind, matches, truncated, effectiveLimit));
-        out.put("symbols", buildSymbolsArray(matches));
+        out.put("symbols", buildSymbolsArray(query, matches, new SourceSnippet(projectRoot)));
         try {
             return json.writeValueAsString(out);
         } catch (JsonProcessingException e) {
@@ -109,7 +129,7 @@ public final class FindSymbolsService {
     }
 
     private static String buildMessage(String query, String kind,
-                                       List<ProjectIndex.Symbol> matches, boolean truncated,
+                                       List<ProjectIndex.SymbolMatch> matches, boolean truncated,
                                        int limit) {
         if (matches.isEmpty()) {
             String hint = kind == null
@@ -128,9 +148,11 @@ public final class FindSymbolsService {
                 : base;
     }
 
-    private static List<Map<String, Object>> buildSymbolsArray(List<ProjectIndex.Symbol> matches) {
+    private static List<Map<String, Object>> buildSymbolsArray(
+            String query, List<ProjectIndex.SymbolMatch> matches, SourceSnippet snippets) {
         List<Map<String, Object>> out = new ArrayList<>(matches.size());
-        for (ProjectIndex.Symbol s : matches) {
+        for (ProjectIndex.SymbolMatch m : matches) {
+            ProjectIndex.Symbol s = m.symbol();
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("name", s.name());
             entry.put("kind", s.kind());
@@ -139,9 +161,33 @@ public final class FindSymbolsService {
             entry.put("file", s.file());
             entry.put("line", s.line());
             entry.put("signature", s.signature());
+            entry.put("match", buildMatchJson(query, m));
+            // Issue #9: the declaration line, so a hit can be judged
+            // without opening the file.
+            String snippet = snippets.line(s.file(), s.line());
+            if (snippet != null) entry.put("snippet", snippet);
             out.add(entry);
         }
         return out;
+    }
+
+    /**
+     * Builds the issue #9 match annotation: how the hit matched, the text
+     * that matched (in the name's own casing), whether the case differs
+     * from the query, and the edit distance for fuzzy hits. This is the
+     * "标注差异" half of the feature — without it, a case-insensitive or
+     * fuzzy hit looked identical to an exact one.
+     */
+    private static Map<String, Object> buildMatchJson(String query, ProjectIndex.SymbolMatch m) {
+        Map<String, Object> match = new LinkedHashMap<>();
+        match.put("type", m.kind().name().toLowerCase(Locale.ROOT));
+        match.put("matched", m.matchedText());
+        boolean caseDiffers = m.kind() == ProjectIndex.MatchKind.CASE_INSENSITIVE
+                || (m.kind() == ProjectIndex.MatchKind.SUBSTRING
+                        && !m.matchedText().equals(query));
+        match.put("case_differs", caseDiffers);
+        match.put("distance", m.distance());
+        return match;
     }
 
     /** Thrown by {@link #findSymbolsJson} for user-facing error conditions. */

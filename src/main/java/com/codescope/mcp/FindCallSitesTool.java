@@ -82,6 +82,19 @@ public final class FindCallSitesTool extends AbstractMcpTool {
                         + "Default false: test sources are excluded (test code does not "
                         + "participate in the call-site index by default). When true, test "
                         + "methods surface as caller entries in find_call_sites results."));
+        props.put("offset", Map.of(
+                "type", "integer",
+                "minimum", 0,
+                "default", 0,
+                "description", "Number of call sites to skip, applied after the stable "
+                        + "(caller_file, caller_line, call_site.line) sort. Use with `limit` "
+                        + "to page through a large result set."));
+        props.put("limit", Map.of(
+                "type", "integer",
+                "minimum", 1,
+                "description", "Maximum number of call sites to return. Default: no cap "
+                        + "(every site). The response always carries `total` so you can "
+                        + "tell whether the window was truncated."));
         schema.put("properties", props);
         return schema;
     }
@@ -95,11 +108,14 @@ public final class FindCallSitesTool extends AbstractMcpTool {
         Path projectRoot = resolveProjectRoot(args);
         boolean refresh = optionalBool(args, "refresh");
         boolean includeTests = optionalBool(args, "include_tests");
+        int offset = optionalInt(args, "offset") == null ? 0 : optionalInt(args, "offset");
+        Integer limitArg = optionalInt(args, "limit");
+        int limit = limitArg == null ? FindCallSitesService.NO_LIMIT : limitArg;
 
         try {
             String json = service.findCallSitesJson(
                     className, methodName, arity, paramTypes,
-                    projectRoot, refresh, includeTests);
+                    projectRoot, refresh, includeTests, offset, limit);
             return ToolResult.text(json);
         } catch (FindCallSitesService.FindCallSitesException e) {
             return ToolResult.error(e.getMessage());

@@ -91,6 +91,15 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + FindSymbolsService.MAX_LIMIT + ". Large projects can match thousands "
                         + "of symbols on common names; lower this if you only need the first "
                         + "few hits."));
+        props.put("fuzzy", Map.of(
+                "type", "boolean",
+                "default", false,
+                "description", "If true, also match names within a small edit distance of "
+                        + "the query (typo tolerance: 1 edit for queries up to 7 characters, "
+                        + "2 beyond). Off by default because it is noisier than substring "
+                        + "matching. Every hit carries a `match` object saying how it matched "
+                        + "(exact / case_insensitive / substring / fuzzy, the matched text, "
+                        + "and the edit distance)."));
         schema.put("properties", props);
         return schema;
     }
@@ -103,10 +112,11 @@ public final class FindSymbolsTool extends AbstractMcpTool {
         boolean refresh = optionalBool(args, "refresh");
         boolean includeTests = optionalBool(args, "include_tests");
         int limit = optionalLimit(args);
+        boolean fuzzy = optionalBool(args, "fuzzy");
 
         try {
             String json = service.findSymbolsJson(
-                    query, kind, projectRoot, refresh, includeTests, limit);
+                    query, kind, projectRoot, refresh, includeTests, limit, fuzzy);
             return ToolResult.text(json);
         } catch (FindSymbolsService.FindSymbolsException e) {
             return ToolResult.error(e.getMessage());

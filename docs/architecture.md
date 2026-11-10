@@ -73,6 +73,7 @@ MCP server 路径:
    │  - symbols: name → List<Symbol>     │  ← find_symbols 用(子串检索)
    │  - skippedFiles: List<String>       │   解析失败的文件名+原因
    └─────────────────────────────────────┘
+   (callSites 的 Loc 现在是 ProjectIndex.CallSite：file + line + receiverType，后者用于 issue #7/#8 的继承过滤)
 ```
 
 ## 反向索引 — 为什么是反向的
@@ -102,6 +103,10 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `McpServer.dispatchAsync` | 只有 `tools/call` 丢到 worker 线程,读循环不阻塞 | 大项目索引耗时数秒;阻塞读循环会收不到 `notifications/cancelled` 和后续请求,`stop()` 也中断不了在飞的工具 |
 | `McpServer.sendRequestAwait` | server→client 的反向 RPC 用 `CompletableFuture<JsonNode>` 关联,`pending: id → Future` 先注册再写请求避免被极快响应甩掉,`notifications/cancelled` 直接 cancel | JSON-RPC 2.0 §6.1;响应可能超时、可能带 `error` 字段、可能极快到达,三种都得能正确结束 |
 | `CallChainAnalyzer.bfs` | 用 per-path ancestor set 而不是全局 `visited` | 钻石调用 `a→b→d, a→c→d` 不能误标成环;只有当前路径上出现过的祖先才算 cycle |
+| `CallSiteVisitor.recordCall` 记 receiver 静态类型 + `CallChainAnalyzer` 按 `isSubtypeOf` 过滤 | call site 带 `CallSite.receiverType()`;BFS 向**祖先**方法(`ChildA#save → Parent#save`)扩展时,只保留 receiver 类型是目标类超型的调用点 | issue #7/#8:否则兄弟子类(`ChildB#save` 调 `super.save`)和"继承方法 + 兄弟 receiver"的调用点会被错误地算作目标方法的 caller |
+| `CallChainAnalyzer.maxDepth`(实例字段,默认 500) | BFS 按 caller 层数截断,根帧深度 0;被截断的分支挂 `truncated: true` 标记 | issue #9 深度控制;`toJson` 是迭代的,但 Jackson 序列化是递归的,层级无上限会 StackOverflow |
+| `SourceSnippet` | 按 project root 解析索引里的相对路径,逐文件缓存行 | issue #9 源码片段;文件不可读时返回 null(省略 `snippet` 字段),不在结果格式化路径上抛异常 |
+| `ProjectIndex.searchSymbols(..., fuzzy)` | 子串匹配失败后再做一次 Levenshtein(阈值 `len<=7 ? 1 : 2`),每个命中带 `SymbolMatch` 注释 | issue #9 模糊匹配 + 标注差异;`match_type`/`matched`/`case_differs`/`distance` 让 case-insensitive 或 fuzzy 命中不再和 exact 长得一样 |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |

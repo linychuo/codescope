@@ -49,6 +49,10 @@ class FindCallSitesServiceTest {
         JsonNode callSite = entry.path("call_site");
         assertEquals("src/main/java/com/example/Mid.java", callSite.path("file").asText());
         assertEquals(7, callSite.path("line").asInt(), "call_site.line is the call expression, not the declaration");
+        // Issue #9: the call-site line text, so the actual call expression
+        // is visible without re-opening the file.
+        assertEquals("        target.leaf();", callSite.path("snippet").asText(),
+                "call_site.snippet should be the call expression's line, got: " + callSite);
     }
 
     @Test
@@ -104,6 +108,70 @@ class FindCallSitesServiceTest {
         } finally {
             deleteRecursively(tmp);
         }
+    }
+
+    @Test
+    void offsetAndLimitPageTheFlatList() throws Exception {
+        // Issue #9: find_call_sites had no pagination — a target with many
+        // callers returned one unbounded array. The window applies after the
+        // stable sort, and `total` lets the caller see the full size.
+        Path tmp = Files.createTempDirectory("codescope-fcs-paging-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/PagerCaller.java"), """
+                    package com.example;
+                    public class PagerCaller {
+                        public void go() {
+                            new com.example.Target().leaf();
+                            new com.example.Target().leaf();
+                            new com.example.Target().leaf();
+                        }
+                    }
+                    """);
+            FindCallSitesService svc = new FindCallSitesService();
+            // 1 existing site (Mid#callsLeaf) + 3 new = 4 total.
+            String all = svc.findCallSitesJson("com.example.Target", "leaf",
+                    null, null, tmp, true, false);
+            JsonNode allTree = new ObjectMapper().readTree(all);
+            assertEquals(4, allTree.path("total").asInt(),
+                    "total must count every site before the window, got: " + allTree);
+            assertEquals(4, allTree.path("call_sites").size());
+
+            String page1 = svc.findCallSitesJson("com.example.Target", "leaf",
+                    null, null, tmp, false, false, 0, 2);
+            JsonNode p1 = new ObjectMapper().readTree(page1);
+            assertEquals(4, p1.path("total").asInt());
+            assertEquals(2, p1.path("call_sites").size());
+            assertTrue(p1.path("message").asText().contains("of 4"),
+                    "a truncated window must say so, got: " + p1.path("message").asText());
+
+            String page2 = svc.findCallSitesJson("com.example.Target", "leaf",
+                    null, null, tmp, false, false, 2, 2);
+            assertEquals(2, new ObjectMapper().readTree(page2).path("call_sites").size());
+
+            String page3 = svc.findCallSitesJson("com.example.Target", "leaf",
+                    null, null, tmp, false, false, 3, 2);
+            assertEquals(1, new ObjectMapper().readTree(page3).path("call_sites").size());
+
+            String beyond = svc.findCallSitesJson("com.example.Target", "leaf",
+                    null, null, tmp, false, false, 10, 2);
+            JsonNode beyondTree = new ObjectMapper().readTree(beyond);
+            assertEquals(0, beyondTree.path("call_sites").size());
+            assertEquals(4, beyondTree.path("total").asInt());
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
+    void invalidPagingWindowIsRejected() {
+        FindCallSitesService svc = new FindCallSitesService();
+        assertThrows(FindCallSitesService.FindCallSitesException.class,
+                () -> svc.findCallSitesJson("com.example.Target", "leaf", null, null,
+                        FIXTURE, false, false, -1, 10));
+        assertThrows(FindCallSitesService.FindCallSitesException.class,
+                () -> svc.findCallSitesJson("com.example.Target", "leaf", null, null,
+                        FIXTURE, false, false, 0, 0));
     }
 
     @Test
@@ -303,6 +371,66 @@ class FindCallSitesServiceTest {
         assertFalse(message.contains("library overloads"),
                 "project-target hierarchy union must not be labeled library overloads, got: "
                         + message);
+    }
+
+    @Test
+    void receiverStaticTypeFiltersSiblingAndInheritedCallSites() throws Exception {
+        // Issues #7 / #8 at the service layer: find_call_sites must apply
+        // the same receiver-static-type filter as the caller BFS.
+        // ReceiverChildA inherits save() (no override), so CallerA's
+        // `new ReceiverChildA().save("x")` binds to ReceiverParent#save on
+        // a ReceiverChildA receiver — it cannot dispatch to
+        // ReceiverChildB#save and must not be reported for it.
+        Path tmp = Files.createTempDirectory("codescope-fcs-receiver-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverParent.java"), """
+                    package com.example;
+                    public class ReceiverParent {
+                        public void save(String s) {}
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverChildA.java"), """
+                    package com.example;
+                    public class ReceiverChildA extends ReceiverParent { }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverChildB.java"), """
+                    package com.example;
+                    public class ReceiverChildB extends ReceiverParent {
+                        @Override public void save(String s) {}
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverCallerA.java"), """
+                    package com.example;
+                    public class ReceiverCallerA { void go() { new ReceiverChildA().save("x"); } }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverCallerB.java"), """
+                    package com.example;
+                    public class ReceiverCallerB { void go() { new ReceiverChildB().save("x"); } }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/ReceiverCallerP.java"), """
+                    package com.example;
+                    public class ReceiverCallerP { void go(ReceiverParent p) { p.save("x"); } }
+                    """);
+
+            FindCallSitesService svc = new FindCallSitesService();
+            String json = svc.findCallSitesJson("com.example.ReceiverChildB", "save",
+                    null, null, tmp, true, false);
+            JsonNode sites = new ObjectMapper().readTree(json).path("call_sites");
+            java.util.Set<String> callers = new java.util.HashSet<>();
+            for (JsonNode s : sites) callers.add(s.path("caller").asText());
+
+            assertTrue(callers.contains("com.example.ReceiverCallerB#go/0"),
+                    "direct caller must be reported, got: " + callers);
+            assertTrue(callers.contains("com.example.ReceiverCallerP#go/1"),
+                    "a ReceiverParent-typed receiver can hold a ReceiverChildB, so CallerP "
+                            + "must be reported, got: " + callers);
+            assertFalse(callers.contains("com.example.ReceiverCallerA#go/0"),
+                    "issue #8: CallerA's receiver is statically ReceiverChildA, which cannot "
+                            + "dispatch to ReceiverChildB#save, got: " + callers);
+        } finally {
+            deleteRecursively(tmp);
+        }
     }
 
     // --- helpers (mirror TraceCallersServiceTest) ---

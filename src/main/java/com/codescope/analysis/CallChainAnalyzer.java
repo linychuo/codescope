@@ -7,6 +7,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** Given a {@link ProjectIndex}, builds a tree of transitive callers of a target method. */
@@ -15,25 +16,51 @@ public final class CallChainAnalyzer {
     public record Result(CallNode root, boolean found, String message) {}
 
     /** Default {@link #maxNodes}, matching {@link ProjectIndexCache}'s JSON nesting depth. */
-    private static final int DEFAULT_MAX_NODES = 50_000;
+    public static final int DEFAULT_MAX_NODES = 50_000;
+
+    /**
+     * Default {@link #maxDepth}: the maximum number of caller levels the
+     * BFS expands. See {@link #maxDepth} for why this is a safety cap.
+     */
+    public static final int DEFAULT_MAX_DEPTH = 500;
 
     private final int maxNodes;
 
-    /** Production constructor — uses {@link #DEFAULT_MAX_NODES}. */
+    /**
+     * Maximum number of caller levels to expand: 0 keeps only the target,
+     * 1 adds direct callers, 2 adds their callers, and so on. This is a
+     * safety cap as much as a feature — {@link CallNode#toJson()} builds
+     * the tree iteratively, so depth is not bounded by the JVM stack, but
+     * Jackson's serializer recurses and a 2000-deep chain blows the
+     * default thread stack with {@code StackOverflowError}. The default
+     * (500) leaves headroom for production server stacks (default 512KB)
+     * and is well above any realistic caller-chain project.
+     */
+    private final int maxDepth;
+
+    /** Production constructor — uses {@link #DEFAULT_MAX_NODES} / {@link #DEFAULT_MAX_DEPTH}. */
     public CallChainAnalyzer() {
-        this(DEFAULT_MAX_NODES);
+        this(DEFAULT_MAX_NODES, DEFAULT_MAX_DEPTH);
     }
 
     /**
      * Test-friendly constructor that lets callers dial the node cap
      * down to a small number so a fixture doesn't need 50k+ real
-     * methods to exercise the truncation path. Intended for tests
-     * (and the eventual per-tool-call cap the public constructor
-     * {@link #CallChainAnalyzer()} was reserved for); production
-     * callers should use the no-arg form.
+     * methods to exercise the truncation path. Intended for tests;
+     * production callers should use the no-arg form.
      */
     CallChainAnalyzer(int maxNodes) {
+        this(maxNodes, DEFAULT_MAX_DEPTH);
+    }
+
+    /**
+     * Full-control constructor: {@code maxNodes} bounds the whole tree,
+     * {@code maxDepth} bounds how many caller levels are expanded
+     * (0 = the target only, 1 = direct callers, ...).
+     */
+    public CallChainAnalyzer(int maxNodes, int maxDepth) {
         this.maxNodes = maxNodes;
+        this.maxDepth = maxDepth;
     }
 
     /**
@@ -92,8 +119,12 @@ public final class CallChainAnalyzer {
         // Shared across root frames so the fan-out cap applies to the union
         // of all seeds, not per seed (the root CallNode is shared too).
         Set<MethodKey> rootCollected = new LinkedHashSet<>();
+        // Root frame depth is 0 (the target itself); each caller level
+        // increments it. The depth cap therefore reads naturally:
+        // maxDepth=1 keeps only direct callers, maxDepth=2 adds one more
+        // level, and so on.
         for (MethodKey seed : seeds) {
-            queue.addLast(new PathFrame(seed, root, seedAncestors, 1, true));
+            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true));
         }
 
         int nodes = 1;
@@ -104,10 +135,15 @@ public final class CallChainAnalyzer {
         Set<MethodKey> seenInTree = new HashSet<>();
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
-            // depth cap: see MAX_DEPTH javadoc.
-            if (f.depth >= MAX_DEPTH) {
-                f.node.addChild(CallNode.depthMarker(
-                        f.key.declaringClass, f.key.methodName, f.key.arity));
+            // Depth cap: stop expanding at maxDepth caller levels. The
+            // marker is only emitted when there is actually more to
+            // expand — a leaf sitting exactly on the boundary should not
+            // be reported as truncated.
+            if (f.depth >= maxDepth) {
+                if (hasAnyCaller(index, f.key)) {
+                    f.node.addChild(CallNode.depthMarker(
+                            f.key.declaringClass, f.key.methodName, f.key.arity));
+                }
                 continue;
             }
             // Cross interface boundaries: when f.key is a class method
@@ -127,7 +163,31 @@ public final class CallChainAnalyzer {
             Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
             int hidden = 0;
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
+                // Issue #7 / #8: when expanding to an *ancestor* method
+                // (a method the frame's key overrides), a recorded call
+                // site only counts if its receiver's static type is a
+                // supertype of the frame method's declaring class. Without
+                // this filter, expanding ChildA#save → Parent#save would
+                // also pick up every other caller of Parent#save —
+                // including ChildB#save, a sibling override that merely
+                // calls super.save() — merging the two siblings' callers.
+                // Descendant expansion (the frame key overrides the
+                // related key) is intentionally unfiltered: a call to an
+                // override is part of the same dispatch family.
+                boolean ancestor = !relatedKey.equals(f.key)
+                        && index.isSubtypeOf(f.key.declaringClass, relatedKey.declaringClass);
+                // Receiver types are only known when the indexer recorded
+                // call sites (production always does; a hand-built index
+                // that only called recordInvocation has none). Without
+                // site data there is nothing to filter on, so the caller
+                // is kept — the historical behavior.
+                Map<MethodKey, List<ProjectIndex.CallSite>> sitesByCaller =
+                        ancestor ? index.callSitesOfSet(relatedKey) : Map.of();
                 for (MethodKey caller : index.callersOfSet(relatedKey)) {
+                    if (ancestor) {
+                        List<ProjectIndex.CallSite> sites = sitesByCaller.get(caller);
+                        if (sites != null && !anySiteReaches(index, f.key, sites)) continue;
+                    }
                     // A true back-edge on the current path is a cycle
                     // marker, not an expandable caller. Markers carry no
                     // subtree, so they are always recorded — the fan-out
@@ -149,8 +209,8 @@ public final class CallChainAnalyzer {
                         continue;
                     }
                     // Direct-caller dedup ONLY applies at the root level
-                    // (depth 1, isRoot=true) when multiple seeds share the
-                    // same caller. Below the root each path has its own
+                    // (isRoot=true) when multiple seeds share the same
+                    // caller. Below the root each path has its own
                     // ancestors and we want the full subtree for diamonds.
                     if (f.isRoot && !directCallersSeen.add(caller)) continue;
                     // Per-frame dedup so the same caller discovered via
@@ -211,6 +271,47 @@ public final class CallChainAnalyzer {
     }
 
     /**
+     * True if at least one recorded call site of {@code target}'s caller
+     * reaches {@code target} through its receiver's static type — i.e.
+     * some site's receiver type is a supertype of
+     * {@code target.declaringClass} (issues #7 / #8).
+     *
+     * <p>The same caller can invoke the same callee from several
+     * expressions with different receiver static types (a
+     * {@code ChildA}-typed field and a {@code ChildB}-typed field, say).
+     * One compatible expression is enough to count the caller, so the
+     * per-site receiver type is OR-ed rather than required to be uniform.
+     * A null receiver type (unknown) passes — see
+     * {@link ProjectIndex#isSubtypeOf}.
+     */
+    private static boolean anySiteReaches(ProjectIndex index, MethodKey target,
+                                          List<ProjectIndex.CallSite> sites) {
+        for (ProjectIndex.CallSite site : sites) {
+            if (index.isSubtypeOf(target.declaringClass, site.receiverType())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * True if {@code key} has any recorded caller across its
+     * method-hierarchy group. Used to decide whether a frame sitting on
+     * the {@code maxDepth} boundary should emit a depth marker: a leaf on
+     * the boundary has nothing to truncate, so it must not be reported
+     * as truncated.
+     *
+     * <p>Deliberately unfiltered by receiver static type — this is a
+     * cheap "is there anything below us at all" probe, and a spurious
+     * marker on a fully-filtered frame is far less misleading than
+     * silently dropping the "chain continues" signal.
+     */
+    private static boolean hasAnyCaller(ProjectIndex index, MethodKey key) {
+        for (MethodKey relatedKey : index.relatedMethods(key)) {
+            if (!index.callersOfSet(relatedKey).isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /**
      * Builds a child node for {@code caller}: a full subtree node, or a
      * {@code dedupedMarker} when {@code deduped} is true (the method
      * already appears elsewhere in the tree). Both shapes carry the
@@ -230,16 +331,6 @@ public final class CallChainAnalyzer {
      * cap in {@link CallChainFanoutCapTest}). Only the whole-tree node
      * cap needs to be lowerable to exercise the truncation path. */
 
-
-    /**
-     * Safety cap on tree depth. {@link CallNode#toJson()} builds the tree
-     * iteratively, so depth is not bounded by the JVM stack — but
-     * Jackson's serializer recurses, and a 2000-deep chain blows the
-     * default thread stack with {@code StackOverflowError}. 500 leaves
-     * headroom for production server stacks (default 512KB) and is well
-     * under what any realistic caller-chain project would produce.
-     */
-    private static final int MAX_DEPTH = 500;
 
     /**
      * Safety cap on the number of direct callers expanded per BFS frame.

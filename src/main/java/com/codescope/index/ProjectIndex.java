@@ -27,6 +27,27 @@ public final class ProjectIndex {
     public record SourceLoc(String file, int line) {}
 
     /**
+     * One recorded call-site fact: where the call expression sits
+     * ({@code file} + {@code line}) and the static type of the receiver
+     * expression ({@code receiverType}, erased FQN).
+     *
+     * <p>{@code receiverType} exists for issues #7 / #8: a call site may
+     * only be counted as a caller of a target method {@code M} when
+     * {@code M.declaringClass} is a subtype of the receiver's static
+     * type — otherwise the receiver can never dispatch to {@code M}.
+     * Without it, expanding from {@code ChildA#save} to its ancestor
+     * {@code Parent#save} would also pull in {@code ChildB#save} (a
+     * sibling override that merely calls {@code super.save()}), because
+     * both are recorded as callers of the same ancestor.
+     *
+     * <p>{@code receiverType} is null when the receiver type could not be
+     * resolved (a binding failure, or a non-virtual call such as a
+     * constructor). {@link #isSubtypeOf} treats null as "unknown" and
+     * does not filter on it.
+     */
+    public record CallSite(String file, int line, String receiverType) {}
+
+    /**
      * A single declared symbol — a type (class/interface/enum/record/annotation),
      * a method, a constructor, or a field. Carries enough metadata for
      * {@code find_symbols} to render a useful search hit without re-walking
@@ -123,10 +144,11 @@ public final class ProjectIndex {
     // call-site positions. Populated eagerly at index time so that
     // find_call_sites can answer "on which line" without re-walking the AST.
     // Outer key: callee MethodKey. Inner key: caller MethodKey. Value:
-    // ordered list of SourceLoc (the call expression's source position).
-    // Same thread-safety pattern as `calls` (ConcurrentHashMap outer,
-    // synchronized inner).
-    private final Map<MethodKey, Map<MethodKey, List<SourceLoc>>> callSites
+    // ordered list of CallSite (the call expression's source position plus
+    // the receiver's static type, used for hierarchy filtering — see
+    // CallSite). Same thread-safety pattern as `calls` (ConcurrentHashMap
+    // outer, synchronized inner).
+    private final Map<MethodKey, Map<MethodKey, List<CallSite>>> callSites
             = new ConcurrentHashMap<>();
     // Flat symbol table populated by JdtIndexer. Outer key: lowercase simple
     // name (for case-insensitive lookup); inner: ordered list of matching
@@ -170,19 +192,26 @@ public final class ProjectIndex {
 
     /**
      * Records that {@code caller} invokes {@code callee} at source location
-     * {@code loc}. Multiple calls to this method for the same
-     * (caller, callee) pair append — they are NOT deduplicated, because
-     * two call expressions at different lines are distinct facts (a caller
-     * can invoke the same callee from many sites, and the user wants all
-     * of them).
+     * {@code loc}, on a receiver whose static type is {@code receiverType}
+     * (erased FQN, or null if unknown / not applicable). Multiple calls to
+     * this method for the same (caller, callee) pair append — they are NOT
+     * deduplicated, because two call expressions at different lines are
+     * distinct facts (a caller can invoke the same callee from many sites,
+     * and the user wants all of them).
+     *
+     * <p>{@code receiverType} is carried per site (not per edge) because the
+     * same caller can invoke the same callee on receivers of different
+     * static types from different expressions, and issue #7 / #8 filtering
+     * is per expression.
      */
-    public void recordCallSite(MethodKey caller, MethodKey callee, SourceLoc loc) {
-        Map<MethodKey, List<SourceLoc>> byCaller =
+    public void recordCallSite(MethodKey caller, MethodKey callee, SourceLoc loc,
+                               String receiverType) {
+        Map<MethodKey, List<CallSite>> byCaller =
                 callSites.computeIfAbsent(callee, k -> new ConcurrentHashMap<>());
-        List<SourceLoc> sites = byCaller.computeIfAbsent(caller, k ->
+        List<CallSite> sites = byCaller.computeIfAbsent(caller, k ->
                 Collections.synchronizedList(new ArrayList<>()));
         synchronized (sites) {
-            sites.add(loc);
+            sites.add(new CallSite(loc.file(), loc.line(), receiverType));
         }
     }
 
@@ -376,14 +405,48 @@ public final class ProjectIndex {
     }
 
     /**
+     * How a symbol matched the query, and the text that matched. Issue #9:
+     * {@code find_symbols} used to return a bare symbol list, so a
+     * case-insensitive or fuzzy hit gave no hint of where the query
+     * differed from the name — the caller had to re-derive it.
+     *
+     * <ul>
+     *   <li>{@link #EXACT} — {@code name.equals(query)}.</li>
+     *   <li>{@link #CASE_INSENSITIVE} — equal ignoring case, but not equal.</li>
+     *   <li>{@link #SUBSTRING} — case-insensitive substring (the historical
+     *       behavior); {@code matchedText} is the substring of the name
+     *       that matched, in the name's own casing.</li>
+     *   <li>{@link #FUZZY} — Levenshtein distance within the threshold;
+     *       only produced when the caller opts in. {@code distance} is the
+     *       edit distance.</li>
+     * </ul>
+     */
+    public enum MatchKind { EXACT, CASE_INSENSITIVE, SUBSTRING, FUZZY }
+
+    /**
+     * One {@code find_symbols} hit: the symbol plus the match annotation.
+     *
+     * @param symbol      the matched symbol
+     * @param kind        how it matched
+     * @param matchedText the part of the symbol name that matched (its own
+     *                    casing preserved), or the whole name for
+     *                    {@link MatchKind#EXACT}, {@link MatchKind#CASE_INSENSITIVE}
+     *                    and {@link MatchKind#FUZZY}
+     * @param distance    Levenshtein distance for {@link MatchKind#FUZZY},
+     *                    0 otherwise
+     */
+    public record SymbolMatch(Symbol symbol, MatchKind kind,
+                              String matchedText, int distance) {}
+
+    /**
      * Result of a {@link #searchSymbols} call: the sorted, capped list of
      * matches plus the total number of matches that existed before the
      * cap was applied. {@code matches.size()} may be less than
      * {@code totalCount} when the caller passed a finite {@code limit}
      * — callers use {@code totalCount > matches.size()} as the
-     * "capped/truncated" signal without needing a second pass.
+     * "capped/truncated" signal without a second pass.
      */
-    public record SymbolSearchResult(List<Symbol> matches, int totalCount) {}
+    public record SymbolMatchResult(List<SymbolMatch> matches, int totalCount) {}
 
     /**
      * Returns every recorded symbol whose simple name contains
@@ -391,7 +454,7 @@ public final class ProjectIndex {
      * filtered to a single kind. Results are sorted by (fqn, signature)
      * for stable output. {@code limit} caps the number of returned
      * symbols; pass {@link Integer#MAX_VALUE} for "no cap" (caller's
-     * responsibility). The returned {@link SymbolSearchResult#totalCount}
+     * responsibility). The returned {@link SymbolMatchResult#totalCount}
      * is the match count *before* the cap is applied, so a caller that
      * needs to know whether the result was truncated can do so without a
      * second scan over the index.
@@ -404,12 +467,30 @@ public final class ProjectIndex {
      * cheaper but returns a non-deterministic subset, which callers
      * cannot reason about.
      */
-    public SymbolSearchResult searchSymbols(String query, String kindFilter, int limit) {
+    public SymbolMatchResult searchSymbols(String query, String kindFilter, int limit) {
+        return searchSymbols(query, kindFilter, limit, false);
+    }
+
+    /**
+     * As {@link #searchSymbols(String, String, int)}, with an optional
+     * typo-tolerant fuzzy pass.
+     *
+     * @param fuzzy when true, also match names within a Levenshtein
+     *              distance of {@link #fuzzyThreshold(String)} (1 edit for
+     *              queries up to 7 characters, 2 beyond). Off by default
+     *              because it is inherently noisier than substring
+     *              matching; the match annotation
+     *              ({@link SymbolMatch#kind()}) tells the caller which
+     *              hits came from the fuzzy pass.
+     */
+    public SymbolMatchResult searchSymbols(String query, String kindFilter, int limit,
+                                           boolean fuzzy) {
         if (query == null || query.isEmpty()) {
-            return new SymbolSearchResult(List.of(), 0);
+            return new SymbolMatchResult(List.of(), 0);
         }
         String needle = query.toLowerCase(Locale.ROOT);
-        List<Symbol> hits = new ArrayList<>();
+        int maxDistance = fuzzyThreshold(query);
+        List<SymbolMatch> hits = new ArrayList<>();
         for (List<Symbol> bucket : symbols.values()) {
             List<Symbol> snap;
             synchronized (bucket) {
@@ -417,14 +498,15 @@ public final class ProjectIndex {
             }
             for (Symbol s : snap) {
                 if (kindFilter != null && !kindFilter.equals(s.kind)) continue;
-                if (s.name.toLowerCase(Locale.ROOT).contains(needle)) hits.add(s);
+                SymbolMatch m = matchSymbol(s, query, needle, fuzzy, maxDistance);
+                if (m != null) hits.add(m);
             }
         }
         hits.sort((a, b) -> {
-            int byFqn = a.fqn.compareTo(b.fqn);
+            int byFqn = a.symbol.fqn.compareTo(b.symbol.fqn);
             if (byFqn != 0) return byFqn;
-            String sa = a.signature == null ? "" : a.signature;
-            String sb = b.signature == null ? "" : b.signature;
+            String sa = a.symbol.signature == null ? "" : a.symbol.signature;
+            String sb = b.symbol.signature == null ? "" : b.symbol.signature;
             return sa.compareTo(sb);
         });
         int total = hits.size();
@@ -435,7 +517,77 @@ public final class ProjectIndex {
         if (hits.size() > effectiveLimit) {
             hits = new ArrayList<>(hits.subList(0, effectiveLimit));
         }
-        return new SymbolSearchResult(hits, total);
+        return new SymbolMatchResult(hits, total);
+    }
+
+    /**
+     * Matches one symbol against the query, returning the annotated hit or
+     * null. Order matters: exact, then case-insensitive equality, then
+     * substring, then (opt-in) fuzzy — the first that applies wins, so a
+     * name that is both an exact match and a substring is reported as
+     * {@link MatchKind#EXACT}.
+     */
+    private static SymbolMatch matchSymbol(Symbol s, String query, String needle,
+                                           boolean fuzzy, int maxDistance) {
+        String name = s.name;
+        if (name.equals(query)) {
+            return new SymbolMatch(s, MatchKind.EXACT, name, 0);
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.equals(needle)) {
+            return new SymbolMatch(s, MatchKind.CASE_INSENSITIVE, name, 0);
+        }
+        int idx = lower.indexOf(needle);
+        if (idx >= 0) {
+            // Lowercasing can change length for a few Unicode letters
+            // (e.g. U+0130); only slice when the fold is length-preserving,
+            // otherwise report the whole name.
+            String matched = lower.length() == name.length()
+                    ? name.substring(idx, idx + needle.length())
+                    : name;
+            return new SymbolMatch(s, MatchKind.SUBSTRING, matched, 0);
+        }
+        if (fuzzy && Math.abs(name.length() - query.length()) <= maxDistance) {
+            int distance = levenshtein(lower, needle);
+            if (distance <= maxDistance) {
+                return new SymbolMatch(s, MatchKind.FUZZY, name, distance);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Fuzzy distance threshold for a query: 1 edit for queries up to 7
+     * characters, 2 edits beyond that. Short names are too easy to
+     * confusable to allow more; long names tolerate the extra edit.
+     */
+    private static int fuzzyThreshold(String query) {
+        return query.length() <= 7 ? 1 : 2;
+    }
+
+    /**
+     * Levenshtein edit distance between two strings, O(n·m) time and
+     * O(min(n,m)) space via a two-row dynamic program. Both inputs are
+     * already lowercased by the caller.
+     */
+    private static int levenshtein(String a, String b) {
+        if (a.isEmpty()) return b.length();
+        if (b.isEmpty()) return a.length();
+        int[] prev = new int[b.length() + 1];
+        int[] curr = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) prev[j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            curr[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                curr[j] = Math.min(Math.min(curr[j - 1] + 1, prev[j] + 1),
+                        prev[j - 1] + cost);
+            }
+            int[] tmp = prev;
+            prev = curr;
+            curr = tmp;
+        }
+        return prev[b.length()];
     }
 
     public List<MethodKey> callersOf(MethodKey target) {
@@ -471,16 +623,73 @@ public final class ProjectIndex {
      * resolves to {@code target}). Returns an empty map if {@code target}
      * has no recorded call sites.
      */
-    public Map<MethodKey, List<SourceLoc>> callSitesOf(MethodKey target) {
-        Map<MethodKey, List<SourceLoc>> m = callSites.get(target);
+    public Map<MethodKey, List<CallSite>> callSitesOf(MethodKey target) {
+        Map<MethodKey, List<CallSite>> m = callSites.get(target);
         if (m == null) return Collections.emptyMap();
-        Map<MethodKey, List<SourceLoc>> snap = new java.util.LinkedHashMap<>(m.size());
-        for (Map.Entry<MethodKey, List<SourceLoc>> e : m.entrySet()) {
+        Map<MethodKey, List<CallSite>> snap = new java.util.LinkedHashMap<>(m.size());
+        for (Map.Entry<MethodKey, List<CallSite>> e : m.entrySet()) {
             synchronized (e.getValue()) {
                 snap.put(e.getKey(), List.copyOf(e.getValue()));
             }
         }
         return Collections.unmodifiableMap(snap);
+    }
+
+    /**
+     * Returns the raw call-site map for {@code target} without copying,
+     * mirroring {@link #callersOfSet}. Intended for the single-threaded
+     * read path (the BFS in {@link CallChainAnalyzer} and the service
+     * layer) after indexing is complete. Callers must not mutate the
+     * returned map or its lists.
+     *
+     * <p>Unlike {@link #callersOfSet}, which dedupes to the caller set,
+     * this exposes each call site's {@link CallSite#receiverType()} —
+     * required for the issue #7 / #8 receiver-static-type filter, which
+     * is per expression, not per caller.
+     */
+    public Map<MethodKey, List<CallSite>> callSitesOfSet(MethodKey target) {
+        Map<MethodKey, List<CallSite>> m = callSites.get(target);
+        return m == null ? Map.of() : m;
+    }
+
+    /**
+     * True if {@code subType} is {@code superType} or a (transitive)
+     * subtype of it, according to the project type hierarchy recorded by
+     * {@link #recordTypeHierarchy}. Used by the caller BFS to filter
+     * hierarchy expansion by receiver static type (issues #7 / #8):
+     * a call site on a receiver of static type {@code R} can only
+     * dispatch to a method declared in {@code R} or a subtype of {@code R}.
+     *
+     * <p><b>Conservative on unknowns:</b> a null {@code superType} (the
+     * receiver type could not be resolved at index time) or a null
+     * {@code subType} returns {@code true} — an unknown fact must not
+     * filter a real call site out. A non-null {@code superType} that is
+     * simply not reachable from {@code subType} through the recorded
+     * hierarchy returns {@code false}.
+     *
+     * <p>Only project-source type edges are recorded (library supertypes
+     * are skipped by the indexer), so a project type that extends a
+     * library type will not be reported as a subtype of that library
+     * type. That case cannot arise for the filter's intended use: the
+     * filter only runs when the callee is a project method, and a project
+     * method can only be the resolved callee of a call whose receiver
+     * type is the method's own class or a project supertype of it.
+     */
+    public boolean isSubtypeOf(String subType, String superType) {
+        if (subType == null || superType == null) return true;
+        if (subType.equals(superType)) return true;
+        Set<String> visited = new java.util.HashSet<>();
+        java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+        queue.addLast(subType);
+        visited.add(subType);
+        while (!queue.isEmpty()) {
+            String cls = queue.removeFirst();
+            for (String parent : supertypesOf(cls)) {
+                if (parent.equals(superType)) return true;
+                if (visited.add(parent)) queue.addLast(parent);
+            }
+        }
+        return false;
     }
 
     public SourceLoc declarationOf(MethodKey method) {

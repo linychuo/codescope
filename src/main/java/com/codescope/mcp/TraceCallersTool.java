@@ -1,5 +1,6 @@
 package com.codescope.mcp;
 
+import com.codescope.analysis.CallChainAnalyzer;
 import com.codescope.index.ProjectIndexCache;
 import com.codescope.service.TraceCallersService;
 import java.io.IOException;
@@ -79,6 +80,16 @@ public final class TraceCallersTool extends AbstractMcpTool {
                         + "Default false: test sources are excluded (test code does not "
                         + "participate in the call chain by default). When true, test "
                         + "methods appear as callers in trace_callers results."));
+        props.put("max_depth", Map.of(
+                "type", "integer",
+                "minimum", 0,
+                "maximum", TraceCallersService.MAX_DEPTH_LIMIT,
+                "default", CallChainAnalyzer.DEFAULT_MAX_DEPTH,
+                "description", "Maximum number of caller levels to expand: 0 returns only "
+                        + "the target, 1 adds direct callers, 2 adds their callers, and so on. "
+                        + "Use a small value to keep large responses bounded; branches that "
+                        + "are cut here carry a `truncated: true` marker. Default "
+                        + CallChainAnalyzer.DEFAULT_MAX_DEPTH + "."));
         schema.put("properties", props);
         return schema;
     }
@@ -92,11 +103,13 @@ public final class TraceCallersTool extends AbstractMcpTool {
         Path projectRoot = resolveProjectRoot(args);
         boolean refresh = optionalBool(args, "refresh");
         boolean includeTests = optionalBool(args, "include_tests");
+        Integer maxDepthArg = optionalInt(args, "max_depth");
+        int maxDepth = maxDepthArg == null ? CallChainAnalyzer.DEFAULT_MAX_DEPTH : maxDepthArg;
 
         try {
             String json = service.traceCallersJson(
                     className, methodName, arity, paramTypes,
-                    projectRoot, refresh, includeTests);
+                    projectRoot, refresh, includeTests, maxDepth);
             return ToolResult.text(json);
         } catch (TraceCallersService.TraceCallersException e) {
             return ToolResult.error(e.getMessage());

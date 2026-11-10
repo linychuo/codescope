@@ -3,6 +3,7 @@ package com.codescope.service;
 import com.codescope.analysis.MethodResolver;
 import com.codescope.index.ProjectIndex;
 import com.codescope.index.ProjectIndexCache;
+import com.codescope.index.SourceSnippet;
 import com.codescope.model.MethodKey;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,13 @@ import java.util.Map;
  * resolution.
  */
 public final class FindCallSitesService {
+
+    /**
+     * Sentinel for {@code limit} meaning "no cap": return every call site.
+     * The service treats it as {@link Integer#MAX_VALUE} rather than a
+     * separate boolean so the pagination arithmetic stays branch-free.
+     */
+    public static final int NO_LIMIT = Integer.MAX_VALUE;
 
     private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 
@@ -58,6 +66,32 @@ public final class FindCallSitesService {
                                     Integer arity, List<String> paramTypes,
                                     Path projectRoot, boolean refresh,
                                     boolean includeTests) throws FindCallSitesException {
+        return findCallSitesJson(className, methodName, arity, paramTypes, projectRoot,
+                refresh, includeTests, 0, NO_LIMIT);
+    }
+
+    /**
+     * As {@link #findCallSitesJson(String, String, Integer, List, Path, boolean, boolean)},
+     * with windowing over the flat call-site list.
+     *
+     * @param offset number of call sites to skip (0 = start from the first),
+     *               applied after the stable sort
+     * @param limit  maximum number of call sites to return; pass
+     *               {@link #NO_LIMIT} for "every site" (the default of the
+     *               7-arg overload)
+     * @throws FindCallSitesException with a user-facing error message
+     */
+    public String findCallSitesJson(String className, String methodName,
+                                    Integer arity, List<String> paramTypes,
+                                    Path projectRoot, boolean refresh,
+                                    boolean includeTests, int offset, int limit)
+            throws FindCallSitesException {
+        if (offset < 0) {
+            throw new FindCallSitesException("offset must be >= 0; got " + offset + ".");
+        }
+        if (limit < 1) {
+            throw new FindCallSitesException("limit must be >= 1; got " + limit + ".");
+        }
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, FindCallSitesException::new);
 
@@ -110,12 +144,8 @@ public final class FindCallSitesService {
             }
         }
 
-        Map<MethodKey, List<ProjectIndex.SourceLoc>> union;
-        if (ordered.size() == 1) {
-            union = index.callSitesOf(ordered.get(0));
-        } else {
-            union = unionCallSites(index, ordered);
-        }
+        Map<MethodKey, List<ProjectIndex.CallSite>> union =
+                collectCallSites(index, target, ordered);
 
         String message = buildMessage(className, methodName, arity, target, union, ordered);
         // The "(combined callers across N library overloads)" suffix is
@@ -130,6 +160,19 @@ public final class FindCallSitesService {
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
+        // Pagination applies to the fully-built, stably-sorted list so the
+        // window is deterministic across calls (the union's map iteration
+        // order is not part of the contract).
+        List<Map<String, Object>> allSites =
+                buildCallSitesArray(index, union, new SourceSnippet(projectRoot));
+        int total = allSites.size();
+        List<Map<String, Object>> page = paginate(allSites, offset, limit);
+        if (page.size() < total) {
+            message = message + " (showing " + (Math.min(offset + 1, total))
+                    + "-" + (offset + page.size()) + " of " + total
+                    + "; pass offset/limit to paginate)";
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         ProjectIndex.SourceLoc targetLoc = index.declarationOf(display);
         Map<String, Object> targetJson = new LinkedHashMap<>();
@@ -142,7 +185,8 @@ public final class FindCallSitesService {
         out.put("target", targetJson);
         out.put("status", "ok");
         out.put("message", message);
-        out.put("call_sites", buildCallSitesArray(index, union));
+        out.put("total", total);
+        out.put("call_sites", page);
         try {
             return json.writeValueAsString(out);
         } catch (JsonProcessingException e) {
@@ -151,31 +195,67 @@ public final class FindCallSitesService {
     }
 
     /**
-     * Unions call-site maps across multiple seeds (e.g. several
-     * library-method overloads). When the same caller appears under
-     * multiple seeds, we concatenate its site lists — they are
-     * line-specific facts and a caller of {@code println(String)} at
-     * line 10 is a different fact from a caller of {@code println(int)}
-     * at line 10. The caller key is a {@link MethodKey}, which is exact
-     * on parameter types, so different overloads of the same caller
-     * stay distinct.
+     * Unions call-site maps across the target's method-hierarchy group
+     * (or across a library target's overload seeds), applying the issue
+     * #7 / #8 receiver-static-type filter to ancestor expansion.
+     *
+     * <p>When the same caller appears under multiple keys, we concatenate
+     * its site lists — they are line-specific facts and a caller of
+     * {@code println(String)} at line 10 is a different fact from a caller
+     * of {@code println(int)} at line 10. The caller key is a
+     * {@link MethodKey}, which is exact on parameter types, so different
+     * overloads of the same caller stay distinct.
+     *
+     * <p>For a project target, a related key that is an <em>ancestor</em>
+     * of the target (the target overrides it) contributes only the sites
+     * whose receiver's static type is a supertype of the target's
+     * declaring class. Without that filter, a sibling override's
+     * {@code super} call would surface under the target too. Library
+     * targets ({@code target == null}) have no project hierarchy and are
+     * never filtered.
      */
-    private static Map<MethodKey, List<ProjectIndex.SourceLoc>> unionCallSites(
-            ProjectIndex index, List<MethodKey> seeds) {
-        Map<MethodKey, List<ProjectIndex.SourceLoc>> out = new LinkedHashMap<>();
-        for (MethodKey seed : seeds) {
-            Map<MethodKey, List<ProjectIndex.SourceLoc>> perSeed = index.callSitesOf(seed);
-            for (Map.Entry<MethodKey, List<ProjectIndex.SourceLoc>> e : perSeed.entrySet()) {
-                out.merge(e.getKey(), e.getValue(),
-                        (a, b) -> {
-                            List<ProjectIndex.SourceLoc> combined = new ArrayList<>(a.size() + b.size());
-                            combined.addAll(a);
-                            combined.addAll(b);
-                            return combined;
-                        });
+    private static Map<MethodKey, List<ProjectIndex.CallSite>> collectCallSites(
+            ProjectIndex index, MethodKey target, List<MethodKey> ordered) {
+        Map<MethodKey, List<ProjectIndex.CallSite>> out = new LinkedHashMap<>();
+        for (MethodKey key : ordered) {
+            boolean ancestor = target != null && !key.equals(target)
+                    && index.isSubtypeOf(target.declaringClass, key.declaringClass);
+            for (Map.Entry<MethodKey, List<ProjectIndex.CallSite>> e
+                    : index.callSitesOf(key).entrySet()) {
+                List<ProjectIndex.CallSite> sites = e.getValue();
+                if (ancestor) {
+                    List<ProjectIndex.CallSite> filtered = new ArrayList<>(sites.size());
+                    for (ProjectIndex.CallSite site : sites) {
+                        if (index.isSubtypeOf(target.declaringClass, site.receiverType())) {
+                            filtered.add(site);
+                        }
+                    }
+                    if (filtered.isEmpty()) continue;
+                    sites = filtered;
+                }
+                out.merge(e.getKey(), sites, (a, b) -> {
+                    List<ProjectIndex.CallSite> combined = new ArrayList<>(a.size() + b.size());
+                    combined.addAll(a);
+                    combined.addAll(b);
+                    return combined;
+                });
             }
         }
         return out;
+    }
+
+    /**
+     * Returns the {@code [offset, offset + limit)} window of {@code all},
+     * clamped to the list. {@code offset} beyond the end yields an empty
+     * list; {@code limit} is clamped with a {@code long} addition so
+     * {@link #NO_LIMIT} ({@code Integer.MAX_VALUE}) plus an offset cannot
+     * overflow.
+     */
+    private static List<Map<String, Object>> paginate(
+            List<Map<String, Object>> all, int offset, int limit) {
+        if (offset >= all.size()) return List.of();
+        int to = (int) Math.min((long) offset + limit, all.size());
+        return List.copyOf(all.subList(offset, to));
     }
 
     /**
@@ -185,7 +265,7 @@ public final class FindCallSitesService {
      */
     private static String buildMessage(String className, String methodName, Integer arity,
                                        MethodKey target,
-                                       Map<MethodKey, List<ProjectIndex.SourceLoc>> union,
+                                       Map<MethodKey, List<ProjectIndex.CallSite>> union,
                                        List<MethodKey> seeds) {
         int totalSites = union.values().stream().mapToInt(List::size).sum();
         int callerCount = union.size();
@@ -212,14 +292,15 @@ public final class FindCallSitesService {
      * itself a library method (rare but possible).
      */
     private static List<Map<String, Object>> buildCallSitesArray(
-            ProjectIndex index, Map<MethodKey, List<ProjectIndex.SourceLoc>> union) {
-        List<Map.Entry<MethodKey, ProjectIndex.SourceLoc>> flat = new ArrayList<>();
-        for (Map.Entry<MethodKey, List<ProjectIndex.SourceLoc>> e : union.entrySet()) {
-            for (ProjectIndex.SourceLoc loc : e.getValue()) {
+            ProjectIndex index, Map<MethodKey, List<ProjectIndex.CallSite>> union,
+            SourceSnippet snippets) {
+        List<Map.Entry<MethodKey, ProjectIndex.CallSite>> flat = new ArrayList<>();
+        for (Map.Entry<MethodKey, List<ProjectIndex.CallSite>> e : union.entrySet()) {
+            for (ProjectIndex.CallSite loc : e.getValue()) {
                 flat.add(Map.entry(e.getKey(), loc));
             }
         }
-        flat.sort(Comparator.<Map.Entry<MethodKey, ProjectIndex.SourceLoc>, String>comparing(
+        flat.sort(Comparator.<Map.Entry<MethodKey, ProjectIndex.CallSite>, String>comparing(
                         e -> {
                             ProjectIndex.SourceLoc decl = index.declarationOf(e.getKey());
                             return decl != null && decl.file() != null ? decl.file() : "";
@@ -232,11 +313,15 @@ public final class FindCallSitesService {
                 .thenComparingInt(e -> e.getValue().line()));
 
         List<Map<String, Object>> out = new ArrayList<>(flat.size());
-        for (Map.Entry<MethodKey, ProjectIndex.SourceLoc> e : flat) {
+        for (Map.Entry<MethodKey, ProjectIndex.CallSite> e : flat) {
             ProjectIndex.SourceLoc decl = index.declarationOf(e.getKey());
             Map<String, Object> callSite = new LinkedHashMap<>();
             callSite.put("file", e.getValue().file());
             callSite.put("line", e.getValue().line());
+            // Issue #9: the call-site line is the most actionable snippet —
+            // it shows the actual call expression in context.
+            String snippet = snippets.line(e.getValue().file(), e.getValue().line());
+            if (snippet != null) callSite.put("snippet", snippet);
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("caller", e.getKey().shortSignature());
             entry.put("caller_file", decl != null ? decl.file() : null);

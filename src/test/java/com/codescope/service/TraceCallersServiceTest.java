@@ -40,6 +40,50 @@ class TraceCallersServiceTest {
     }
 
     @Test
+    void traceTreeCarriesSourceSnippets() throws Exception {
+        // Issue #9: results used to carry only file + line. Every node now
+        // also carries the source line at its declaration, so a consumer
+        // can read the code without re-opening the file.
+        TraceCallersService svc = new TraceCallersService();
+        JsonNode tree = new ObjectMapper().readTree(svc.traceCallersJson(
+                "com.example.Target", "leaf", null, null, FIXTURE, false, false));
+        JsonNode target = tree.path("target");
+        assertEquals("    public void leaf() {", target.path("snippet").asText(),
+                "root node snippet should be the declaration line, got: " + target);
+        JsonNode caller = target.path("callers").get(0);
+        assertEquals("    public void callsLeaf() {", caller.path("snippet").asText(),
+                "caller node snippet should be the declaration line, got: " + caller);
+    }
+
+    @Test
+    void maxDepthIsHonouredByTheService() throws Exception {
+        // Issue #9: depth control, end to end through the service.
+        TraceCallersService svc = new TraceCallersService();
+        JsonNode tree = new ObjectMapper().readTree(svc.traceCallersJson(
+                "com.example.Target", "leaf", null, null, FIXTURE, false, false, 1));
+        JsonNode callers = tree.path("target").path("callers");
+        assertEquals(1, callers.size(), "maxDepth=1 keeps only direct callers: " + callers);
+        JsonNode direct = callers.get(0);
+        assertEquals("callsLeaf", direct.path("method").asText());
+        JsonNode marker = direct.path("callers");
+        assertEquals(1, marker.size(),
+                "the cut branch must leave one depth marker: " + direct);
+        assertTrue(marker.get(0).path("truncated").asBoolean(),
+                "the depth marker must be flagged as truncated");
+    }
+
+    @Test
+    void invalidMaxDepthIsRejected() {
+        TraceCallersService svc = new TraceCallersService();
+        assertThrows(TraceCallersService.TraceCallersException.class,
+                () -> svc.traceCallersJson("com.example.Target", "leaf", null, null,
+                        FIXTURE, false, false, -1));
+        assertThrows(TraceCallersService.TraceCallersException.class,
+                () -> svc.traceCallersJson("com.example.Target", "leaf", null, null,
+                        FIXTURE, false, false, TraceCallersService.MAX_DEPTH_LIMIT + 1));
+    }
+
+    @Test
     void refreshAfterFileEditPicksUpNewCallers() throws Exception {
         // Use a fresh service + tmp copy of the fixture so the first call's
         // cache doesn't carry over from another test.

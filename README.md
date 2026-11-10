@@ -40,11 +40,11 @@ java -jar target/codescope.jar
 
 | 工具 | 功能 |
 |------|------|
-| `trace_callers` | 目标方法的所有调用方嵌套树 |
-| `find_call_sites` | 目标方法的所有调用点（精确行号） |
-| `find_symbols` | 按名称子串搜索符号定义位置 |
+| `trace_callers` | 目标方法的所有调用方嵌套树，`max_depth` 控制展开层数 |
+| `find_call_sites` | 目标方法的所有调用点（精确行号），`offset`/`limit` 分页 |
+| `find_symbols` | 按名称子串搜索符号定义位置，可选 `fuzzy` 容错匹配 |
 
-三个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。
+三个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。结果附带源码行 `snippet`；`find_symbols` 附带 `match` 匹配说明，`find_call_sites` 附带 `total` 总数。
 
 详细参数见 [`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md) 或运行 `--help`。
 
@@ -82,5 +82,5 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 
 ```bash
 mvn test
-# 270 个测试
+# 290 个测试
 ```

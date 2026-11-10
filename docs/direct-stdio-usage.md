@@ -38,22 +38,36 @@ mvn package
 
 `trace_callers`:
 ```json
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope","max_depth":3}}}
 ```
 
 `find_call_sites`:
 ```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_call_sites","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_call_sites","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope","offset":0,"limit":100}}}
 ```
 
 `find_symbols`:
 ```json
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"find_symbols","arguments":{"query":"bar","project":"C:/projects/codescope","limit":50}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"find_symbols","arguments":{"query":"bar","project":"C:/projects/codescope","limit":50,"fuzzy":true}}}
 ```
 
 `project` 必须是**绝对路径**。**用正斜杠 `C:/projects/...` 即可**——Java 在 Windows 上两种分隔符都接受，避免在 JSON 字符串里写反斜杠转义。
 
 重载方法补 `arity` 和 `paramTypes` 消歧。
+
+### 可选参数（2026-11 新增）
+
+| 参数 | 工具 | 作用 |
+|---|---|---|
+| `max_depth` | trace_callers | 最多向上展开几层 caller：`0` 只返回目标，`1` 只含直接 caller，依此类推。默认 500（安全上限 1000）。被截断的分支带 `truncated: true` 标记。 |
+| `offset` / `limit` | find_call_sites | 对扁平结果分页（先稳定排序再开窗）。`limit` 缺省不封顶；响应始终带 `total`。 |
+| `fuzzy` | find_symbols | 开启容错匹配（编辑距离 ≤ 1，查询长度 >7 时 ≤ 2）。默认关闭。 |
+
+响应新增字段：
+
+- **snippet** — 结果节点附带源码行文本（`trace_callers` 的每个节点、`find_call_sites` 的每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
+- **match** — `find_symbols` 每个命中的匹配说明：`type`（`exact` / `case_insensitive` / `substring` / `fuzzy`）、`matched`（实际匹配文本，保留原始大小写）、`case_differs`、`distance`。
+- **total** — `find_call_sites` 窗口前的总调用点数。
 
 ### 3. 一行跑完
 

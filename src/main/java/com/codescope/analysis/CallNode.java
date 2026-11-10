@@ -121,6 +121,21 @@ public final class CallNode {
     }
 
     /**
+     * Resolves the source line text for a {@code (file, line)} pair, used
+     * to add a {@code snippet} field to each serialized node (issue #9:
+     * results used to carry only {@code file} + {@code line}). Returns
+     * null when the source is unavailable, in which case the key is
+     * omitted.
+     *
+     * <p>Implemented by {@link com.codescope.index.SourceSnippet} in
+     * production; the analyzer itself has no access to the project root.
+     */
+    @FunctionalInterface
+    public interface SnippetResolver {
+        String resolve(String file, int line);
+    }
+
+    /**
      * Serialize to a JSON-shaped map. Iterative (not recursive) so deep call
      * chains — up to {@code MAX_NODES} — don't blow the JVM stack.
      *
@@ -132,6 +147,15 @@ public final class CallNode {
      * signal that the method is reached from multiple paths.
      */
     public Map<String, Object> toJson() {
+        return toJson(null);
+    }
+
+    /**
+     * As {@link #toJson()}, adding a {@code "snippet"} key (the source line
+     * at the node's declaration location) when {@code snippetResolver} is
+     * non-null and can resolve it.
+     */
+    public Map<String, Object> toJson(SnippetResolver snippetResolver) {
         Map<String, Object> rootMap = new LinkedHashMap<>();
         Deque<Frame> stack = new ArrayDeque<>();
         stack.push(new Frame(this, rootMap));
@@ -139,6 +163,10 @@ public final class CallNode {
             Frame f = stack.pop();
             if (f.node.file != null) f.map.put("file", f.node.file);
             if (f.node.line > 0) f.map.put("line", f.node.line);
+            if (snippetResolver != null && f.node.file != null && f.node.line > 0) {
+                String snippet = snippetResolver.resolve(f.node.file, f.node.line);
+                if (snippet != null) f.map.put("snippet", snippet);
+            }
             f.map.put("class", f.node.className);
             f.map.put("method", f.node.methodName);
             f.map.put("arity", f.node.arity);

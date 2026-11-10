@@ -99,18 +99,23 @@ public final class Cli {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
                 yield new TraceCallersService(SHARED_CACHE).traceCallersJson(
-                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests,
+                        p.maxDepth);
             }
             case "find-call-sites" -> {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
+                // --limit is a page size here, not a hard cap: without it
+                // the whole (possibly large) result set is returned.
+                int limit = p.limitSet ? p.limit : Integer.MAX_VALUE;
                 yield new FindCallSitesService(SHARED_CACHE).findCallSitesJson(
-                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests);
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests,
+                        p.offset, limit);
             }
             case "find-symbols" -> {
                 String q = p.requirePos(0, "query");
                 yield new FindSymbolsService(SHARED_CACHE).findSymbolsJson(
-                        q, p.kind, p.project, p.refresh, p.includeTests, p.limit);
+                        q, p.kind, p.project, p.refresh, p.includeTests, p.limit, p.fuzzy);
             }
             default -> throw new UsageException("Unknown command: " + command
                     + ". Use trace-callers, find-call-sites, or find-symbols.");
@@ -166,6 +171,7 @@ public final class Cli {
                 }
                 case "--refresh" -> { p.refresh = true; i++; }
                 case "--include-tests" -> { p.includeTests = true; i++; }
+                case "--fuzzy" -> { p.fuzzy = true; p.fuzzySet = true; i++; }
                 case "--kind" -> {
                     requireValue(args, i, "--kind");
                     p.kind = args[++i];
@@ -176,6 +182,18 @@ public final class Cli {
                     requireValue(args, i, "--limit");
                     p.limit = parsePositiveInt(args[++i], "--limit");
                     p.limitSet = true;
+                    i++;
+                }
+                case "--max-depth" -> {
+                    requireValue(args, i, "--max-depth");
+                    p.maxDepth = parsePositiveInt(args[++i], "--max-depth");
+                    p.maxDepthSet = true;
+                    i++;
+                }
+                case "--offset" -> {
+                    requireValue(args, i, "--offset");
+                    p.offset = parsePositiveInt(args[++i], "--offset");
+                    p.offsetSet = true;
                     i++;
                 }
                 default -> {
@@ -197,13 +215,25 @@ public final class Cli {
      * like it applied a setting it did not.
      */
     private static void warnIfIrrelevant(ParsedArgs p, String command) {
-        boolean symbols = "find-symbols".equals(command);
-        if (!symbols) {
-            if (p.kindSet) warnIrrelevant("--kind", command);
-            if (p.limitSet) warnIrrelevant("--limit", command);
-        } else {
-            if (p.aritySet) warnIrrelevant("--arity", command);
-            if (p.paramTypesSet) warnIrrelevant("--param-types", command);
+        switch (command) {
+            case "find-symbols" -> {
+                if (p.aritySet) warnIrrelevant("--arity", command);
+                if (p.paramTypesSet) warnIrrelevant("--param-types", command);
+                if (p.maxDepthSet) warnIrrelevant("--max-depth", command);
+                if (p.offsetSet) warnIrrelevant("--offset", command);
+            }
+            case "trace-callers" -> {
+                if (p.kindSet) warnIrrelevant("--kind", command);
+                if (p.limitSet) warnIrrelevant("--limit", command);
+                if (p.offsetSet) warnIrrelevant("--offset", command);
+                if (p.fuzzySet) warnIrrelevant("--fuzzy", command);
+            }
+            case "find-call-sites" -> {
+                if (p.kindSet) warnIrrelevant("--kind", command);
+                if (p.maxDepthSet) warnIrrelevant("--max-depth", command);
+                if (p.fuzzySet) warnIrrelevant("--fuzzy", command);
+            }
+            default -> { /* unknown command: dispatch reports it */ }
         }
     }
 
@@ -271,7 +301,11 @@ public final class Cli {
                   --refresh                          Evict cached index and rebuild
                   --include-tests                    Include test sources in the index (src/test/java)
                   --kind <kind>                      Symbol kind: class|interface|enum|record|annotation|method|constructor|field
-                  --limit <n>                        Max results for find-symbols (default 100)
+                  --limit <n>                        Max results for find-symbols (default 100);
+                                                 page size for find-call-sites (default: all)
+                  --offset <n>                       Skip the first n call sites (find-call-sites)
+                  --max-depth <n>                    Max caller levels for trace-callers (default 500)
+                  --fuzzy                            Typo-tolerant matching for find-symbols
 
                 Exit codes:
                   0  success
@@ -291,9 +325,12 @@ public final class Cli {
         List<String> paramTypes;
         boolean refresh;
         boolean includeTests;
+        boolean fuzzy;
         String kind;
         int limit = 100;
-        boolean aritySet, paramTypesSet, kindSet, limitSet;
+        int maxDepth = com.codescope.analysis.CallChainAnalyzer.DEFAULT_MAX_DEPTH;
+        int offset;
+        boolean aritySet, paramTypesSet, kindSet, limitSet, maxDepthSet, offsetSet, fuzzySet;
         final List<String> positional = new ArrayList<>();
 
         String requirePos(int idx, String name) {

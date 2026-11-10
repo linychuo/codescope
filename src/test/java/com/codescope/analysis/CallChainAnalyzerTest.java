@@ -237,7 +237,7 @@ class CallChainAnalyzerTest {
 
     @Test
     void recordTypeIsSearchable() {
-        ProjectIndex.SymbolSearchResult res = index.searchSymbols("Point", "record", 100);
+        ProjectIndex.SymbolMatchResult res = index.searchSymbols("Point", "record", 100);
         assertEquals(1, res.totalCount(),
                 "the top-level record type should be indexed as kind=record");
     }
@@ -398,6 +398,58 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void maxDepthZeroReturnsOnlyTheTarget() {
+        // Issue #9: depth control. maxDepth=0 must not expand any caller
+        // level — the root is the whole tree, with a depth marker saying
+        // the chain continues.
+        MethodKey leaf = mustResolve(index, "com.example.Target", "leaf");
+        CallChainAnalyzer analyzer =
+                new CallChainAnalyzer(CallChainAnalyzer.DEFAULT_MAX_NODES, 0);
+        CallChainAnalyzer.Result r = analyzer.traceCallers(index, leaf);
+        assertTrue(r.found());
+        assertEquals(1, r.root().callers.size(),
+                "maxDepth=0 should emit exactly one depth marker, got: " + r.root().callers);
+        assertTrue(r.root().callers.get(0).truncated,
+                "the marker must be flagged as a depth truncation");
+    }
+
+    @Test
+    void maxDepthCountsCallerLevels() {
+        // Fixture chain: Target.leaf <- Mid.callsLeaf <- Top.entryPoint
+        //   <- SideBranch.branch
+        // maxDepth=1 keeps only direct callers; maxDepth=2 adds one more
+        // level; each cut branch carries a truncated marker.
+        MethodKey leaf = mustResolve(index, "com.example.Target", "leaf");
+
+        CallChainAnalyzer depth1 =
+                new CallChainAnalyzer(CallChainAnalyzer.DEFAULT_MAX_NODES, 1);
+        CallChainAnalyzer.Result r1 = depth1.traceCallers(index, leaf);
+        assertEquals(1, r1.root().callers.size(), "direct caller only: " + r1.root().callers);
+        CallNode direct = r1.root().callers.get(0);
+        assertEquals("callsLeaf", direct.methodName);
+        assertEquals(1, direct.callers.size(),
+                "the direct caller's own caller was cut, leaving a marker: " + direct.callers);
+        assertTrue(direct.callers.get(0).truncated,
+                "the marker must be flagged as a depth truncation");
+
+        CallChainAnalyzer depth2 =
+                new CallChainAnalyzer(CallChainAnalyzer.DEFAULT_MAX_NODES, 2);
+        CallChainAnalyzer.Result r2 = depth2.traceCallers(index, leaf);
+        CallNode mid = r2.root().callers.get(0);
+        assertEquals("callsLeaf", mid.methodName);
+        assertEquals(1, mid.callers.size(), "one more level: " + mid.callers);
+        assertEquals("entryPoint", mid.callers.get(0).methodName);
+
+        CallChainAnalyzer depth3 =
+                new CallChainAnalyzer(CallChainAnalyzer.DEFAULT_MAX_NODES, 3);
+        CallChainAnalyzer.Result r3 = depth3.traceCallers(index, leaf);
+        CallNode top = r3.root().callers.get(0).callers.get(0);
+        assertEquals("entryPoint", top.methodName);
+        assertEquals(1, top.callers.size(), "third level reaches SideBranch: " + top.callers);
+        assertEquals("branch", top.callers.get(0).methodName);
+    }
+
+    @Test
     void methodReferencesAreIndexedAsCallers() {
         // `this::aRef`, `u::bRef`, `MethodRefUser::cRef`, `MethodRefUser::new`
         // are all ExpressionMethodReference / CreationReference nodes.
@@ -440,7 +492,7 @@ class CallChainAnalyzerTest {
         // the call edge from `useCtorRef` IS recorded. We verify it
         // through find_call_sites on the ctor key, not trace_callers.
         MethodKey ctor = new MethodKey("com.example.MethodRefUser", "MethodRefUser", 0);
-        java.util.Map<MethodKey, java.util.List<ProjectIndex.SourceLoc>> sites =
+        java.util.Map<MethodKey, java.util.List<ProjectIndex.CallSite>> sites =
                 index.callSitesOf(ctor);
         boolean foundCtorRefSite = sites.keySet().stream()
                 .anyMatch(c -> "com.example.MethodRefUser".equals(c.declaringClass)

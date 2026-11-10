@@ -4,6 +4,7 @@ import com.codescope.analysis.CallChainAnalyzer;
 import com.codescope.analysis.MethodResolver;
 import com.codescope.index.ProjectIndex;
 import com.codescope.index.ProjectIndexCache;
+import com.codescope.index.SourceSnippet;
 import com.codescope.model.MethodKey;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,9 +21,15 @@ import java.util.Map;
  */
 public final class TraceCallersService {
 
-    private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
+    /**
+     * Hard ceiling on the caller-depth cap. The analyzer's default (500)
+     * is already chosen to keep Jackson's recursive serializer inside the
+     * default thread stack; callers may ask for more, but not without
+     * bound. {@link CallChainAnalyzer#DEFAULT_MAX_DEPTH} is the default.
+     */
+    public static final int MAX_DEPTH_LIMIT = 1_000;
 
-    private final CallChainAnalyzer analyzer = new CallChainAnalyzer();
+    private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 
     /**
      * Shared LRU + index builder. Centralized in {@link ProjectIndexCache}
@@ -57,6 +64,32 @@ public final class TraceCallersService {
                                    Integer arity, List<String> paramTypes,
                                    Path projectRoot, boolean refresh,
                                    boolean includeTests) throws TraceCallersException {
+        return traceCallersJson(className, methodName, arity, paramTypes, projectRoot,
+                refresh, includeTests, CallChainAnalyzer.DEFAULT_MAX_DEPTH);
+    }
+
+    /**
+     * As {@link #traceCallersJson(String, String, Integer, List, Path, boolean, boolean)},
+     * with an explicit caller-depth cap.
+     *
+     * @param maxDepth maximum number of caller levels to expand: 0 returns
+     *                 only the target node, 1 adds direct callers, 2 adds
+     *                 their callers, and so on. Values above
+     *                 {@link CallChainAnalyzer#DEFAULT_MAX_DEPTH} are
+     *                 accepted up to {@link #MAX_DEPTH_LIMIT}; the cap
+     *                 exists because the JSON tree is serialized with a
+     *                 recursive serializer.
+     * @throws TraceCallersException with a user-facing error message
+     */
+    public String traceCallersJson(String className, String methodName,
+                                   Integer arity, List<String> paramTypes,
+                                   Path projectRoot, boolean refresh,
+                                   boolean includeTests, int maxDepth)
+            throws TraceCallersException {
+        if (maxDepth < 0 || maxDepth > MAX_DEPTH_LIMIT) {
+            throw new TraceCallersException("maxDepth must be between 0 and " + MAX_DEPTH_LIMIT
+                    + "; got " + maxDepth + ".");
+        }
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, TraceCallersException::new);
 
@@ -85,6 +118,8 @@ public final class TraceCallersService {
             display = ls.display();
         }
 
+        CallChainAnalyzer analyzer = new CallChainAnalyzer(
+                CallChainAnalyzer.DEFAULT_MAX_NODES, maxDepth);
         CallChainAnalyzer.Result r = (target != null)
                 ? analyzer.traceCallers(index, target)
                 : analyzer.traceCallers(index, display, seeds);
@@ -98,7 +133,11 @@ public final class TraceCallersService {
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("target", r.root().toJson());
+        // Issue #9: attach the source line for each node's declaration
+        // location so a consumer can see the code without re-opening the
+        // file. Null/undeclared nodes simply omit the key.
+        SourceSnippet snippets = new SourceSnippet(projectRoot);
+        out.put("target", r.root().toJson(snippets::line));
         // Result.found is always true after the analyzer's contract change
         // (an empty chain with a "No callers" message is a valid answer,
         // not a miss). We still emit "status" as a stable, documented

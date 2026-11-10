@@ -16,6 +16,7 @@ import org.eclipse.jdt.core.dom.ConstructorInvocation;
 import org.eclipse.jdt.core.dom.CreationReference;
 import org.eclipse.jdt.core.dom.EnumConstantDeclaration;
 import org.eclipse.jdt.core.dom.EnumDeclaration;
+import org.eclipse.jdt.core.dom.Expression;
 import org.eclipse.jdt.core.dom.ExpressionMethodReference;
 import org.eclipse.jdt.core.dom.FieldDeclaration;
 import org.eclipse.jdt.core.dom.IMethodBinding;
@@ -493,31 +494,37 @@ final class CallSiteVisitor extends ASTVisitor {
 
     @Override
     public boolean visit(MethodInvocation node) {
-        recordCall(node.resolveMethodBinding(), node);
+        recordCall(node.resolveMethodBinding(), node, receiverTypeOf(node.getExpression()));
         return true;
     }
 
     @Override
     public boolean visit(SuperMethodInvocation node) {
-        recordCall(node.resolveMethodBinding(), node);
+        // `super.m(...)` dispatches on `this`, so the receiver's static
+        // type is the enclosing class — NOT the superclass that declares
+        // m. Recording the superclass would make every sibling override's
+        // super call look like a call on a sibling receiver (issue #7).
+        recordCall(node.resolveMethodBinding(), node, currentReceiverClass());
         return true;
     }
 
     @Override
     public boolean visit(ClassInstanceCreation node) {
-        recordCall(node.resolveConstructorBinding(), node);
+        // Constructor: not virtual dispatch, receiver type is irrelevant
+        // to the hierarchy filter. Pass null (unknown / not applicable).
+        recordCall(node.resolveConstructorBinding(), node, null);
         return true;
     }
 
     @Override
     public boolean visit(ConstructorInvocation node) {
-        recordCall(node.resolveConstructorBinding(), node);
+        recordCall(node.resolveConstructorBinding(), node, null);
         return true;
     }
 
     @Override
     public boolean visit(SuperConstructorInvocation node) {
-        recordCall(node.resolveConstructorBinding(), node);
+        recordCall(node.resolveConstructorBinding(), node, null);
         return true;
     }
 
@@ -527,34 +534,69 @@ final class CallSiteVisitor extends ASTVisitor {
         // resolved binding points at the target method, just like
         // MethodInvocation. recordCall uses the enclosing method
         // as the caller.
-        recordCall(node.resolveMethodBinding(), node);
+        recordCall(node.resolveMethodBinding(), node, receiverTypeOf(node.getExpression()));
         return true;
     }
 
     @Override
     public boolean visit(CreationReference node) {
         // `Type::new` — constructor reference. resolveMethodBinding
-        // returns the constructor as a method binding.
-        recordCall(node.resolveMethodBinding(), node);
+        // returns the constructor as a method binding. Not virtual
+        // dispatch, so the receiver type is not used by the filter.
+        recordCall(node.resolveMethodBinding(), node, null);
         return true;
     }
 
     @Override
     public boolean visit(SuperMethodReference node) {
-        // `super::m` — same shape as SuperMethodInvocation.
-        recordCall(node.resolveMethodBinding(), node);
+        // `super::m` — same shape as SuperMethodInvocation: dispatches on
+        // `this`, so the receiver's static type is the enclosing class.
+        recordCall(node.resolveMethodBinding(), node, currentReceiverClass());
         return true;
     }
 
     @Override
     public boolean visit(TypeMethodReference node) {
         // `Type<R>::m` — method reference on a parameterized type.
-        // resolveMethodBinding returns the target method.
-        recordCall(node.resolveMethodBinding(), node);
+        // resolveMethodBinding returns the target method. The receiver
+        // is an instance of the referenced type.
+        recordCall(node.resolveMethodBinding(), node, receiverTypeOfType(node.getType()));
         return true;
     }
 
-    private void recordCall(IMethodBinding binding, ASTNode node) {
+    /**
+     * Resolves the static type of a call's receiver expression to its
+     * erased FQN, for {@link ProjectIndex.CallSite#receiverType()}.
+     * A null expression means an implicit {@code this} receiver (a bare
+     * {@code m()} call), so the enclosing class is the receiver type.
+     * Returns null when the type cannot be resolved — the hierarchy
+     * filter treats null as "unknown, don't filter".
+     */
+    private String receiverTypeOf(Expression expr) {
+        if (expr == null) return currentReceiverClass();
+        ITypeBinding tb = expr.resolveTypeBinding();
+        if (tb == null) return null;
+        return eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(tb.getErasure()));
+    }
+
+    /** As {@link #receiverTypeOf(Expression)}, for a {@code Type::m} reference. */
+    private String receiverTypeOfType(org.eclipse.jdt.core.dom.Type type) {
+        if (type == null) return currentReceiverClass();
+        ITypeBinding tb = type.resolveBinding();
+        if (tb == null) return null;
+        return eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(tb.getErasure()));
+    }
+
+    /**
+     * The class that owns the call currently being visited: the enclosing
+     * method's declaring class. Used as the receiver type for implicit
+     * {@code this} and {@code super} calls.
+     */
+    private String currentReceiverClass() {
+        return methodStack.isEmpty() ? currentClass() : methodStack.peek().key.declaringClass;
+    }
+
+    private void recordCall(IMethodBinding binding, ASTNode node, String receiverType) {
         if (binding == null) return;
         if (methodStack.isEmpty()) return;
         MethodKey target = hierarchy.methodKeyOf(binding);
@@ -567,8 +609,10 @@ final class CallSiteVisitor extends ASTVisitor {
         // find_call_sites can answer "on which line is this called?".
         // cuLine(node) maps node.getStartPosition() to a 1-based line
         // via the CompilationUnit line table; same helper used for
-        // method declarations in visit(MethodDeclaration).
-        index.recordCallSite(caller, target, new ProjectIndex.SourceLoc(file, cuLine(node)));
+        // method declarations in visit(MethodDeclaration). The receiver's
+        // static type rides along for the issue #7 / #8 hierarchy filter.
+        index.recordCallSite(caller, target, new ProjectIndex.SourceLoc(file, cuLine(node)),
+                receiverType);
     }
 
     /**

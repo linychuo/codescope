@@ -649,25 +649,25 @@ class EdgeCaseTest {
         // statement written on a single line). Then a fourth site in a
         // different caller.
         index.recordCallSite(caller, target,
-                new ProjectIndex.SourceLoc("App.java", 10));
+                new ProjectIndex.SourceLoc("App.java", 10), null);
         index.recordCallSite(caller, target,
-                new ProjectIndex.SourceLoc("App.java", 20));
+                new ProjectIndex.SourceLoc("App.java", 20), null);
         index.recordCallSite(caller, target,
-                new ProjectIndex.SourceLoc("App.java", 30));
+                new ProjectIndex.SourceLoc("App.java", 30), null);
         index.recordCallSite(caller, target,
-                new ProjectIndex.SourceLoc("App.java", 20));   // duplicate line
+                new ProjectIndex.SourceLoc("App.java", 20), null);   // duplicate line
 
         MethodKey otherCaller = new MethodKey("com.example.Other", "use", 0);
         index.putDeclaration(otherCaller, new ProjectIndex.SourceLoc("Other.java", 5));
         index.recordCallSite(otherCaller, target,
-                new ProjectIndex.SourceLoc("Other.java", 8));
+                new ProjectIndex.SourceLoc("Other.java", 8), null);
 
-        Map<MethodKey, List<ProjectIndex.SourceLoc>> sites = index.callSitesOf(target);
+        Map<MethodKey, List<ProjectIndex.CallSite>> sites = index.callSitesOf(target);
         assertEquals(2, sites.size(), "expected 2 callers with sites, got: " + sites.keySet());
 
         // Same-caller's sites must be in insertion order, with the
         // duplicate preserved (NOT deduped to a Set).
-        List<ProjectIndex.SourceLoc> hotSites = sites.get(caller);
+        List<ProjectIndex.CallSite> hotSites = sites.get(caller);
         assertNotNull(hotSites);
         assertEquals(4, hotSites.size(), "duplicate-line site should NOT be deduped, got: " + hotSites);
         assertEquals(10, hotSites.get(0).line());
@@ -677,12 +677,12 @@ class EdgeCaseTest {
 
         // All sites carry their file too — important for the new tool's
         // output to attribute sites back to the source file.
-        for (ProjectIndex.SourceLoc loc : hotSites) {
+        for (ProjectIndex.CallSite loc : hotSites) {
             assertEquals("App.java", loc.file());
         }
 
         // Second caller's site is independent.
-        List<ProjectIndex.SourceLoc> otherSites = sites.get(otherCaller);
+        List<ProjectIndex.CallSite> otherSites = sites.get(otherCaller);
         assertNotNull(otherSites);
         assertEquals(1, otherSites.size());
         assertEquals(8, otherSites.get(0).line());
@@ -1065,13 +1065,12 @@ class EdgeCaseTest {
                 tmp);
 
         // find_symbols searches via ProjectIndex.searchSymbols — verify the synthetic is there.
-        // searchSymbols returns a SymbolSearchResult record (matches + totalCount).
-        ProjectIndex.SymbolSearchResult result = index.searchSymbols(
+        // searchSymbols returns a SymbolMatchResult record (matches + totalCount).
+        ProjectIndex.SymbolMatchResult result = index.searchSymbols(
                 "clinit", "synthetic", 100);
-        java.util.List<ProjectIndex.Symbol> matches = result.matches();
-        assertFalse(matches.isEmpty(),
-                "find_symbols kind=synthetic should return <clinit>, got: " + matches);
-        ProjectIndex.Symbol synth = matches.get(0);
+        assertFalse(result.matches().isEmpty(),
+                "find_symbols kind=synthetic should return <clinit>, got: " + result.matches());
+        ProjectIndex.Symbol synth = result.matches().get(0).symbol();
         assertEquals("com.example.Target.<clinit>/0", synth.fqn(),
                 "synthetic fqn should include /0 arity suffix");
         assertEquals("synthetic", synth.kind());

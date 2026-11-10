@@ -28,12 +28,12 @@ class ProjectIndexSearchSymbolsTest {
         }
         Collections.sort(allFqns);
 
-        ProjectIndex.SymbolSearchResult res = idx.searchSymbols("process", null, 100);
+        ProjectIndex.SymbolMatchResult res = idx.searchSymbols("process", null, 100);
         assertEquals(200, res.totalCount(), "total must count every match");
         assertEquals(100, res.matches().size(), "matches must be capped at limit");
 
         List<String> returned = res.matches().stream()
-                .map(ProjectIndex.Symbol::fqn)
+                .map(m -> m.symbol().fqn())
                 .toList();
         assertEquals(allFqns.subList(0, 100), returned,
                 "truncation must keep the first `limit` matches in sort order");
@@ -47,7 +47,7 @@ class ProjectIndexSearchSymbolsTest {
         ProjectIndex idx = new ProjectIndex();
         idx.recordSymbol(new ProjectIndex.Symbol("process", "method",
                 "com.example.C0#process/1", "com.example.C0", "C0.java", 1, "java.lang.String"));
-        ProjectIndex.SymbolSearchResult res = idx.searchSymbols("process", null, -1);
+        ProjectIndex.SymbolMatchResult res = idx.searchSymbols("process", null, -1);
         assertTrue(res.matches().isEmpty(),
                 "negative limit should yield no matches, got: " + res.matches());
         assertEquals(1, res.totalCount(), "total must still count every match");
@@ -64,7 +64,7 @@ class ProjectIndexSearchSymbolsTest {
             ProjectIndex idx = new ProjectIndex();
             idx.recordSymbol(new ProjectIndex.Symbol("TITLE", "class",
                     "com.x.TITLE", null, "TITLE.java", 1, null));
-            ProjectIndex.SymbolSearchResult res = idx.searchSymbols("title", null, 10);
+            ProjectIndex.SymbolMatchResult res = idx.searchSymbols("title", null, 10);
             assertEquals(1, res.totalCount(),
                     "search must be locale-independent (Turkish-I)");
         } finally {
@@ -80,7 +80,7 @@ class ProjectIndexSearchSymbolsTest {
                     "com.example.C" + i + "#process" + i + "/1",
                     "com.example.C" + i, "C" + i + ".java", 1, "java.lang.String"));
         }
-        ProjectIndex.SymbolSearchResult res = idx.searchSymbols("process", null, 100);
+        ProjectIndex.SymbolMatchResult res = idx.searchSymbols("process", null, 100);
         assertEquals(5, res.totalCount());
         assertEquals(5, res.matches().size());
     }

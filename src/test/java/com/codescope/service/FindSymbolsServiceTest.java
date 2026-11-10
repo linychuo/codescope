@@ -50,6 +50,12 @@ class FindSymbolsServiceTest {
         // the type-name line, not the Javadoc line.
         assertEquals(4, target.path("line").asInt());
         assertTrue(target.path("signature").isNull());
+        // Issue #9: the declaration line text.
+        assertEquals("public class Target {", target.path("snippet").asText(),
+                "symbol snippet should be the declaration line, got: " + target);
+        // Issue #9: the match annotation. "Target" is an exact match.
+        assertEquals("exact", target.path("match").path("type").asText());
+        assertFalse(target.path("match").path("case_differs").asBoolean());
     }
 
     @Test
@@ -61,6 +67,61 @@ class FindSymbolsServiceTest {
         JsonNode syms = new ObjectMapper().readTree(json).path("symbols");
         assertEquals(1, syms.size(), "case-insensitive substring failed: " + syms);
         assertEquals("com.example.Target", syms.get(0).path("fqn").asText());
+    }
+
+    @Test
+    void matchAnnotationMarksCaseDifference() throws Exception {
+        // Issue #9 (标注差异): "TARGET" matches the class Target only by
+        // case, and the annotation must say so rather than looking like an
+        // exact hit.
+        FindSymbolsService svc = new FindSymbolsService();
+        JsonNode syms = new ObjectMapper().readTree(
+                svc.findSymbolsJson("TARGET", "class", FIXTURE, false, false,
+                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+        assertEquals(1, syms.size(), "case-insensitive substring failed: " + syms);
+        JsonNode match = syms.get(0).path("match");
+        assertEquals("case_insensitive", match.path("type").asText());
+        assertEquals("Target", match.path("matched").asText(),
+                "matched text keeps the name's own casing");
+        assertTrue(match.path("case_differs").asBoolean());
+        assertEquals(0, match.path("distance").asInt());
+    }
+
+    @Test
+    void substringMatchAnnotatesTheMatchedText() throws Exception {
+        FindSymbolsService svc = new FindSymbolsService();
+        JsonNode syms = new ObjectMapper().readTree(
+                svc.findSymbolsJson("arget", "class", FIXTURE, false, false,
+                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+        assertEquals(1, syms.size(), "substring should match Target: " + syms);
+        JsonNode match = syms.get(0).path("match");
+        assertEquals("substring", match.path("type").asText());
+        assertEquals("arget", match.path("matched").asText());
+        assertFalse(match.path("case_differs").asBoolean());
+    }
+
+    @Test
+    void fuzzyMatchingIsOptInAndAnnotated() throws Exception {
+        // Issue #9 (模糊): typo tolerance is off by default and, when on,
+        // the hit is annotated with the edit distance.
+        FindSymbolsService svc = new FindSymbolsService();
+        JsonNode without = new ObjectMapper().readTree(
+                svc.findSymbolsJson("Targt", "class", FIXTURE, false, false,
+                        FindSymbolsService.DEFAULT_LIMIT)).path("symbols");
+        assertTrue(without.isEmpty(), "fuzzy must be off by default, got: " + without);
+
+        JsonNode with = new ObjectMapper().readTree(
+                svc.findSymbolsJson("Targt", "class", FIXTURE, false, false,
+                        FindSymbolsService.DEFAULT_LIMIT, true)).path("symbols");
+        boolean found = false;
+        for (JsonNode s : with) {
+            if ("com.example.Target".equals(s.path("fqn").asText())) {
+                found = true;
+                assertEquals("fuzzy", s.path("match").path("type").asText());
+                assertEquals(1, s.path("match").path("distance").asInt());
+            }
+        }
+        assertTrue(found, "fuzzy should match Target from 'Targt', got: " + with);
     }
 
     @Test
