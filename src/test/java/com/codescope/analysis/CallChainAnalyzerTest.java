@@ -158,6 +158,31 @@ class CallChainAnalyzerTest {
     }
 
     @Test
+    void entryPointLabelIsSurfacedInTheTree() {
+        // Issue #9: a chain that ends at a framework entry point carries
+        // the label on the node, so "nothing above this" is distinguishable
+        // from "we didn't look".
+        ProjectIndex index = new ProjectIndex();
+        MethodKey handler = new MethodKey("com.example.Ctrl", "handle", 0);
+        index.putDeclaration(handler, new ProjectIndex.SourceLoc("Ctrl.java", 1));
+        index.recordEntryPoint(handler, "spring-mvc");
+        MethodKey caller = new MethodKey("com.example.Caller", "go", 0);
+        index.putDeclaration(caller, new ProjectIndex.SourceLoc("Caller.java", 1));
+        index.recordEntryPoint(caller, "main");
+        index.recordInvocation(caller, handler);
+
+        CallChainAnalyzer.Result r = new CallChainAnalyzer().traceCallers(index, handler);
+        Map<String, Object> json = r.root().toJson();
+        assertEquals("spring-mvc", json.get("entryPoint"),
+                "root node must carry its entry-point label, got: " + json);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> callers = (List<Map<String, Object>>) json.get("callers");
+        assertEquals(1, callers.size());
+        assertEquals("main", callers.get(0).get("entryPoint"),
+                "caller node must carry its entry-point label, got: " + callers);
+    }
+
+    @Test
     void detectsCycle() {
         MethodKey a = mustResolve(index, "com.example.Cycle", "a");
         assertNotNull(a);

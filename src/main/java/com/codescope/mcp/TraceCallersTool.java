@@ -33,7 +33,10 @@ public final class TraceCallersTool extends AbstractMcpTool {
     public String description() {
         return "Find every method that calls the given method, transitively, in the project. "
                 + "Returns a nested tree (root = target method, children = direct callers, "
-                + "each child expanded with their own callers). Stops when no more callers exist.";
+                + "each child expanded with their own callers). Stops when no more callers exist. "
+                + "Each node carries the source `snippet`; framework entry points (Spring "
+                + "handlers, scheduled/event methods, JUnit/TestNG tests, main) are flagged "
+                + "with `entryPoint`.";
     }
 
     @Override

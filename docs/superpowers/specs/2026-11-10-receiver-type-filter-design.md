@@ -84,3 +84,52 @@ BFS 扩展 frame `K` 时，对每个 `relatedKey`：
 - `CallChainAnalyzerTest` / `TraceCallersServiceTest`：maxDepth 语义与标记。
 - `FindCallSitesServiceTest`：分页窗口、total、非法窗口。
 - `FindSymbolsServiceTest`：match 标注（exact / case_insensitive / substring / fuzzy）。
+
+## 4. 剩余四项（#9-1 ~ #9-4）
+
+### #9-1 接口多态未展开
+
+复现：receiver 是**项目接口**、且方法是从**类**超类继承时（`interface I extends AbsBase`、
+`interface MyList extends ArrayList<String>`），JDT 的 `ITypeBinding.getInterfaces()`
+不暴露类超类，`resolveMethodBinding()` 返回 null，调用边整条不进索引。
+
+两处修复：
+
+1. **类型层级记录库超类**（`CallSiteVisitor.recordSupertypesFromAst` /
+   `recordTypeHierarchyFromBinding` 去掉 `isFromSource` 门）。这样
+   `isSubtypeOf`、`resolveTargetViaAncestors`、`findInvokedKeys` 都能走到库类型。
+2. **unresolved-call 回退**：绑定为 null 时记 `UnresolvedCall(caller, receiverType,
+   name, arity, loc)`；查询时 `unresolvedCallersOf(target)` 按 name+arity 且
+   receiver 与目标类**层级可比**（`isSubtypeOf(t, r) || isSubtypeOf(r, t)`）归属。
+   兄弟类不可比，所以 #7/#8 的不串味约束仍然成立。
+
+### #9-2 trace_callees（向下）
+
+`ProjectIndex.recordInvocation` 写反向边时同步写 `invokes[caller]` 正向边；
+`CalleeChainAnalyzer` 沿正向边 BFS，按 `relatedMethods` 扩展（接口方法的树包含
+实现类的方法体），复用 `CallNode` 的 marker/截断语义，子数组序列化为 `callees`。
+新增 `TraceCalleesService` / `TraceCalleesTool` / CLI `trace-callees`。
+
+### #9-3 外部框架入口
+
+`EntryPoints` 在索引期检测方法注解（AST 注解 → `resolveAnnotationBinding` 拿 FQN；
+拿不到时用写下的简单名兜底）与 `main` 签名，记成 `ProjectIndex.entryPoints`。
+`CallChainAnalyzer` / `CalleeChainAnalyzer` 给节点打 `entryPoint` 标记
+（`spring-mvc` / `spring-scheduled` / `spring-event` / `spring-kafka` /
+`spring-rabbit` / `spring-jms` / `junit5` / `junit4` / `testng` / `main`）。
+
+### #9-4 mybatis xml
+
+`MapperXmlIndexer` 用 StAX 扫 `*.xml`（排除 target/hidden），根元素是
+`<mapper>` 就解析 `namespace` 和 `select/insert/update/delete/sql` 语句
+（嵌套动态 SQL 标签保留为文本，空白折叠成一行）。语句进 `mapperStatements`，
+并登记为 `mapper-statement` 符号（`find_symbols` 可按 id 搜）。
+`CalleeChainAnalyzer` 在 mapper 方法节点下挂 SQL 叶子（`sql: {type, text}`）。
+DTD/外部实体被禁用（XXE 防护）。
+
+## 5. 测试（剩余四项）
+
+- `InterfacePolymorphismTest`（3 个）：接口继承抽象类 / 库类、兄弟接口不串味。
+- `TraceCalleesServiceTest`（5 个）：链、maxDepth、叶子、接口展开、非法深度。
+- `EntryPointTest`（6 个）：Spring 方法/类注解、Scheduled/EventListener、JUnit、main、普通方法。
+- `MapperXmlTest`（4 个）：语句索引 + SQL 挂载、动态标签、非 mapper XML 忽略、DOCTYPE。

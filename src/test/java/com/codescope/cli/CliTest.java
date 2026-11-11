@@ -190,6 +190,23 @@ class CliTest {
     }
 
     @Test
+    void traceCalleesOnCodescopeProjectItself() {
+        // Issue #9 item 2: the downward companion must be wired through the
+        // CLI just like trace-callers.
+        Path project = Path.of(".").toAbsolutePath();
+        if (!Files.isRegularFile(project.resolve("pom.xml"))) return;
+        int code = Cli.run(new String[]{
+                "trace-callees", "com.codescope.mcp.McpServer", "handle",
+                "--project", project.toString(),
+                "--max-depth", "1"});
+        assertEquals(0, code, "stderr: " + err);
+        String outStr = out.toString();
+        assertTrue(outStr.contains("\"callees\""),
+                "callee tree must use the `callees` key, got: " + outStr);
+        assertTrue(outStr.contains("\"status\""), "expected status field, got: " + outStr);
+    }
+
+    @Test
     void findCallSitesOnCodescopeProject() {
         Path project = Path.of(".").toAbsolutePath();
         if (!Files.isRegularFile(project.resolve("pom.xml"))) return;

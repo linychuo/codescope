@@ -74,6 +74,11 @@ public final class JdtIndexer {
                 }
             }
         }
+        // MyBatis mapper XML (issue #9 item 4): the XML is the
+        // implementation of a mapper interface method, so index its
+        // statements alongside the Java sources. Scanned after the Java
+        // pass because it only needs the project root, not the bindings.
+        new MapperXmlIndexer(index, projectRoot).index();
         // Reverse-type-hierarchy pass: every virtual-dispatch method
         // declared on a type T is also method-hierarchy-related to
         // any same-named, same-arity method declared on a subtype of

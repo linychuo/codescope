@@ -3,6 +3,7 @@ package com.codescope.cli;
 import com.codescope.index.ProjectIndexCache;
 import com.codescope.service.FindCallSitesService;
 import com.codescope.service.FindSymbolsService;
+import com.codescope.service.TraceCalleesService;
 import com.codescope.service.TraceCallersService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -77,6 +78,7 @@ public final class Cli {
             System.out.println(pretty(json));
             return 0;
         } catch (TraceCallersService.TraceCallersException
+               | TraceCalleesService.TraceCalleesException
                | FindCallSitesService.FindCallSitesException
                | FindSymbolsService.FindSymbolsException e) {
             // Service layer already formats the user-facing message —
@@ -102,6 +104,13 @@ public final class Cli {
                         cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests,
                         p.maxDepth);
             }
+            case "trace-callees" -> {
+                String cls = p.requirePos(0, "class");
+                String mth = p.requirePos(1, "method");
+                yield new TraceCalleesService(SHARED_CACHE).traceCalleesJson(
+                        cls, mth, p.arity, p.paramTypes, p.project, p.refresh, p.includeTests,
+                        p.maxDepth);
+            }
             case "find-call-sites" -> {
                 String cls = p.requirePos(0, "class");
                 String mth = p.requirePos(1, "method");
@@ -118,7 +127,7 @@ public final class Cli {
                         q, p.kind, p.project, p.refresh, p.includeTests, p.limit, p.fuzzy);
             }
             default -> throw new UsageException("Unknown command: " + command
-                    + ". Use trace-callers, find-call-sites, or find-symbols.");
+                    + ". Use trace-callers, trace-callees, find-call-sites, or find-symbols.");
         };
     }
 
@@ -222,7 +231,7 @@ public final class Cli {
                 if (p.maxDepthSet) warnIrrelevant("--max-depth", command);
                 if (p.offsetSet) warnIrrelevant("--offset", command);
             }
-            case "trace-callers" -> {
+            case "trace-callers", "trace-callees" -> {
                 if (p.kindSet) warnIrrelevant("--kind", command);
                 if (p.limitSet) warnIrrelevant("--limit", command);
                 if (p.offsetSet) warnIrrelevant("--offset", command);
@@ -291,6 +300,7 @@ public final class Cli {
 
                 Commands:
                   trace-callers <class> <method>     Find all callers of a method
+                  trace-callees <class> <method>     Find all callees of a method
                   find-call-sites <class> <method>   Find all call sites (flat list)
                   find-symbols <query>               Find symbols by name substring
 
@@ -304,7 +314,7 @@ public final class Cli {
                   --limit <n>                        Max results for find-symbols (default 100);
                                                  page size for find-call-sites (default: all)
                   --offset <n>                       Skip the first n call sites (find-call-sites)
-                  --max-depth <n>                    Max caller levels for trace-callers (default 500)
+                  --max-depth <n>                    Max levels for trace-callers/trace-callees (default 500)
                   --fuzzy                            Typo-tolerant matching for find-symbols
 
                 Exit codes:

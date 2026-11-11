@@ -5,6 +5,7 @@ import com.codescope.index.ProjectIndexCache;
 import com.codescope.mcp.FindCallSitesTool;
 import com.codescope.mcp.FindSymbolsTool;
 import com.codescope.mcp.McpServer;
+import com.codescope.mcp.TraceCalleesTool;
 import com.codescope.mcp.TraceCallersTool;
 
 /** Entry point: starts the MCP server on stdio, or the CLI front-end if args are present. */
@@ -18,10 +19,12 @@ public final class Main {
         }
         ProjectIndexCache shared = new ProjectIndexCache();
         TraceCallersTool traceCallers = new TraceCallersTool(shared);
+        TraceCalleesTool traceCallees = new TraceCalleesTool(shared);
         FindCallSitesTool findCallSites = new FindCallSitesTool(shared);
         FindSymbolsTool findSymbols = new FindSymbolsTool(shared);
         McpServer server = new McpServer(shared)
                 .register(traceCallers)
+                .register(traceCallees)
                 .register(findCallSites)
                 .register(findSymbols);
 
@@ -31,6 +34,7 @@ public final class Main {
         // fan out to every tool in one composed consumer.
         server.onDefaultProjectRoot(path -> {
             traceCallers.setHostDefaultProject(path);
+            traceCallees.setHostDefaultProject(path);
             findCallSites.setHostDefaultProject(path);
             findSymbols.setHostDefaultProject(path);
         });

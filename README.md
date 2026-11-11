@@ -41,10 +41,13 @@ java -jar target/codescope.jar
 | 工具 | 功能 |
 |------|------|
 | `trace_callers` | 目标方法的所有调用方嵌套树，`max_depth` 控制展开层数 |
+| `trace_callees` | 目标方法的所有被调方嵌套树（向下），`max_depth` 控制展开层数 |
 | `find_call_sites` | 目标方法的所有调用点（精确行号），`offset`/`limit` 分页 |
 | `find_symbols` | 按名称子串搜索符号定义位置，可选 `fuzzy` 容错匹配 |
 
-三个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。结果附带源码行 `snippet`；`find_symbols` 附带 `match` 匹配说明，`find_call_sites` 附带 `total` 总数。
+四个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。结果附带源码行 `snippet`；`trace_callers` / `trace_callees` 的节点在框架入口处带 `entryPoint` 标记，`find_symbols` 附带 `match` 匹配说明，`find_call_sites` 附带 `total` 总数。
+
+MyBatis mapper XML 也会被解析：`trace_callees` 一个 mapper 接口方法时，会把对应的 SQL 语句作为叶子节点挂上（`sql` 字段）；`find_symbols` 可以用 `kind=mapper-statement` 按 statement id 搜到 SQL。
 
 详细参数见 [`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md) 或运行 `--help`。
 
@@ -82,5 +85,5 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 
 ```bash
 mvn test
-# 290 个测试
+# 311 个测试
 ```

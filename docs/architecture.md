@@ -8,10 +8,10 @@
 com.codescope
 ├── Main                     入口:无参起 MCP server,有参走 CLI
 ├── cli/                     Cli
-├── mcp/                     McpServer、Tool、AbstractMcpTool + 三个 Tool
-├── service/                 TraceCallersService、FindCallSitesService、FindSymbolsService
-├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache、MethodHierarchyExtractor
-├── analysis/                CallChainAnalyzer、CallNode、MethodResolver
+├── mcp/                     McpServer、Tool、AbstractMcpTool + 四个 Tool
+├── service/                 TraceCallersService、TraceCalleesService、FindCallSitesService、FindSymbolsService
+├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache、MethodHierarchyExtractor、MapperXmlIndexer、EntryPoints
+├── analysis/                CallChainAnalyzer、CalleeChainAnalyzer、CallNode、MethodResolver
 ├── model/                   MethodKey
 ├── dependency/              DependencyResolver(+Factory)、MvnCliDependencyResolver、MavenClasspathResolver、MavenSettings
 └── loader/                  ProjectLoader
@@ -107,6 +107,10 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `CallChainAnalyzer.maxDepth`(实例字段,默认 500) | BFS 按 caller 层数截断,根帧深度 0;被截断的分支挂 `truncated: true` 标记 | issue #9 深度控制;`toJson` 是迭代的,但 Jackson 序列化是递归的,层级无上限会 StackOverflow |
 | `SourceSnippet` | 按 project root 解析索引里的相对路径,逐文件缓存行 | issue #9 源码片段;文件不可读时返回 null(省略 `snippet` 字段),不在结果格式化路径上抛异常 |
 | `ProjectIndex.searchSymbols(..., fuzzy)` | 子串匹配失败后再做一次 Levenshtein(阈值 `len<=7 ? 1 : 2`),每个命中带 `SymbolMatch` 注释 | issue #9 模糊匹配 + 标注差异;`match_type`/`matched`/`case_differs`/`distance` 让 case-insensitive 或 fuzzy 命中不再和 exact 长得一样 |
+| `ProjectIndex.invokes`(正向边)+ `CalleeChainAnalyzer` | `recordInvocation` 写反向边时同步写正向边;`trace_callees` 沿正向边做 BFS,按 `relatedMethods` 扩展(接口方法的树含实现类的方法体) | issue #9-2:以前只能回答"谁调用我",无法回答"我调用谁" |
+| `ProjectIndex.UnresolvedCall` + `MapperXmlIndexer` 的 XML 扫描 | JDT 无法绑定的调用(项目接口从**类**超类继承方法)记成 `(caller, receiverType, name, arity)`,查询时按 receiver 与目标的层级可比性归属;类型层级同时记录库超类 | issue #9-1 接口多态:`interface extends 抽象类/库类` 时 JDT 的 `getInterfaces()` 不暴露类超类,调用边整条丢失 |
+| `MapperXmlIndexer` | StAX 扫 `*.xml`(排除 target/hidden),根元素是 `<mapper>` 就解析 `namespace` + `select/insert/update/delete/sql` 语句;语句进 `mapperStatements` 并登记为 `mapper-statement` 符号;`trace_callees` 把 SQL 挂在 mapper 方法下 | issue #9-4:mapper 接口方法的"实现"在 XML 里,以前完全不可见;StAX 而不是 DOM 是为了拿起始行号 |
+| `EntryPoints` + `CallNode.entryPoint` | 方法注解(FQN 优先,简单名兜底)+ `main` 签名 → 入口标记,注解在 AST 上解析(`resolveAnnotationBinding`) | issue #9-3:调用链停在 Spring handler / 定时任务 / 测试方法时,以前看起来像"还有没找到的 caller" |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |

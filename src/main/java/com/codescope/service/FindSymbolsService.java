@@ -40,7 +40,8 @@ public final class FindSymbolsService {
     public static final Set<String> VALID_KINDS = Collections.unmodifiableSet(
             new LinkedHashSet<>(List.of(
                     "class", "interface", "enum", "record", "annotation",
-                    "method", "constructor", "field", "synthetic")));
+                    "method", "constructor", "field", "synthetic",
+                    "mapper-statement")));
 
     private final ObjectMapper json = ProjectIndexCache.newObjectMapper();
 

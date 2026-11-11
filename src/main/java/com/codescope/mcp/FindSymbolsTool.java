@@ -32,13 +32,14 @@ public final class FindSymbolsTool extends AbstractMcpTool {
 
     @Override
     public String description() {
-        return "Search for Java symbols (classes, interfaces, enums, records, annotations, "
-                + "methods, constructors, fields) by case-insensitive substring on the simple "
-                + "name. Returns a flat list of matching symbols with their kind, FQN, "
-                + "container, and source location. Use this to answer \"where is X defined?\" "
-                + "or \"what classes/methods contain the word Y?\" without knowing the full "
-                + "qualified name. For transitive caller chains, use `trace_callers`; for "
-                + "non-transitive call positions, use `find_call_sites`.";
+        return "Search for symbols (classes, interfaces, enums, records, annotations, "
+                + "methods, constructors, fields, and MyBatis mapper statements) by "
+                + "case-insensitive substring on the simple name. Returns a flat list of "
+                + "matching symbols with their kind, FQN, container, and source location. "
+                + "Use this to answer \"where is X defined?\" or \"what classes/methods "
+                + "contain the word Y?\" without knowing the full qualified name. For "
+                + "transitive caller chains, use `trace_callers`; for non-transitive call "
+                + "positions, use `find_call_sites`.";
     }
 
     @Override

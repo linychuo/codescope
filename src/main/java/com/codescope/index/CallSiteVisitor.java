@@ -109,10 +109,15 @@ final class CallSiteVisitor extends ASTVisitor {
      * Records one type-hierarchy edge per supertype declared on
      * the AST node. Walks the node's own superclassType (for a
      * class) and superInterfaceTypes (for an interface), reading
-     * each supertype's binding — but only stores it when
-     * the binding resolves AND is from project source. Library
-     * supertypes are intentionally skipped (see
-     * {@link #recordTypeHierarchyFromBinding} for the same gate).
+     * each supertype's binding.
+     *
+     * <p>Library supertypes are recorded too (issue #9): a project type
+     * that extends/implements a library type must still be walkable
+     * upward, or an unresolved call on such a receiver (see
+     * {@link ProjectIndex#recordUnresolvedCall}) can never be matched.
+     * The AST is text-faithful, so this is also the only source for the
+     * {@code interface extends SomeClass} edge that JDT's binding model
+     * does not expose.
      */
     private void recordSupertypesFromAst(TypeDeclaration node, String childFqn) {
         if (childFqn == null || childFqn.isEmpty()) return;
@@ -128,7 +133,7 @@ final class CallSiteVisitor extends ASTVisitor {
         org.eclipse.jdt.core.dom.Type sup = node.getSuperclassType();
         if (sup != null) {
             ITypeBinding sb = sup.resolveBinding();
-            if (sb != null && sb.isFromSource()) {
+            if (sb != null) {
                 String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(sb));
                 if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
             }
@@ -137,7 +142,7 @@ final class CallSiteVisitor extends ASTVisitor {
             org.eclipse.jdt.core.dom.Type iface = (org.eclipse.jdt.core.dom.Type) ifaceNode;
             if (iface == null) continue;
             ITypeBinding sb = iface.resolveBinding();
-            if (sb == null || !sb.isFromSource()) continue;
+            if (sb == null) continue;
             String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(sb));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childFqn, p);
         }
@@ -375,6 +380,12 @@ final class CallSiteVisitor extends ASTVisitor {
         IMethodBinding declBinding = node.resolveBinding();
         if (declBinding != null) {
             hierarchy.recordMethodHierarchy(declBinding);
+            // Issue #9: mark framework entry points (Spring handlers,
+            // scheduled/event methods, JUnit/TestNG tests, main) so a
+            // caller chain ending there is labelled as an entry rather than
+            // an unexplored branch.
+            String entryKind = EntryPoints.detectKind(declBinding, node.modifiers());
+            if (entryKind != null) index.recordEntryPoint(callerKey, entryKind);
         }
         methodStack.push(new MethodContext(callerKey));
         // Also record a method/constructor symbol for find_symbols.
@@ -597,11 +608,19 @@ final class CallSiteVisitor extends ASTVisitor {
     }
 
     private void recordCall(IMethodBinding binding, ASTNode node, String receiverType) {
-        if (binding == null) return;
         if (methodStack.isEmpty()) return;
+        MethodKey caller = methodStack.peek().key;
+        ProjectIndex.SourceLoc loc = new ProjectIndex.SourceLoc(file, cuLine(node));
+        if (binding == null) {
+            // JDT could not resolve the invocation (issue #9: a project
+            // interface inheriting the method from a class supertype). Keep
+            // the call as an unresolved tuple instead of dropping it —
+            // query time attributes it by receiver type + signature.
+            recordUnresolvedCall(node, caller, receiverType, loc);
+            return;
+        }
         MethodKey target = hierarchy.methodKeyOf(binding);
         if (target == null) return;
-        MethodKey caller = methodStack.peek().key;
         // recordInvocation(caller, callee): the enclosing method is the
         // caller, the resolved binding is the callee being invoked.
         index.recordInvocation(caller, target);
@@ -611,8 +630,29 @@ final class CallSiteVisitor extends ASTVisitor {
         // via the CompilationUnit line table; same helper used for
         // method declarations in visit(MethodDeclaration). The receiver's
         // static type rides along for the issue #7 / #8 hierarchy filter.
-        index.recordCallSite(caller, target, new ProjectIndex.SourceLoc(file, cuLine(node)),
-                receiverType);
+        index.recordCallSite(caller, target, loc, receiverType);
+    }
+
+    /**
+     * Records an unresolved invocation as a {@link ProjectIndex.UnresolvedCall}.
+     * Only plain and {@code super} method invocations carry a known name +
+     * arity; method references (whose arity depends on the functional
+     * interface) are skipped.
+     */
+    private void recordUnresolvedCall(ASTNode node, MethodKey caller,
+                                      String receiverType, ProjectIndex.SourceLoc loc) {
+        String name;
+        int arity;
+        if (node instanceof MethodInvocation mi) {
+            name = mi.getName().getIdentifier();
+            arity = mi.arguments().size();
+        } else if (node instanceof SuperMethodInvocation si) {
+            name = si.getName().getIdentifier();
+            arity = si.arguments().size();
+        } else {
+            return;
+        }
+        index.recordUnresolvedCall(caller, receiverType, name, arity, loc);
     }
 
     /**
@@ -637,10 +677,10 @@ final class CallSiteVisitor extends ASTVisitor {
      */
     private void recordTypeHierarchyFromBinding(String childFqn, ITypeBinding binding) {
         if (binding == null || childFqn == null || childFqn.isEmpty()) return;
-        // Only project types contribute to the hierarchy — library
-        // types' supertypes are never project declarations, so
-        // storing them would just create dead edges. Same gate
-        // recordMethodHierarchy uses transitively.
+        // Only project types are entered into the hierarchy as children —
+        // we visit project type declarations, so the child is always
+        // from source; the gate keeps a recovering/unknown binding from
+        // polluting the index.
         if (!binding.isFromSource()) return;
         // Strip type arguments from both the child FQN and the
         // supertype FQNs so they match the non-generic FQNs used
@@ -652,13 +692,18 @@ final class CallSiteVisitor extends ASTVisitor {
         // upward walk.
         String childKey = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(binding));
         if (childKey == null || childKey.isEmpty()) return;
+        // Library supertypes are recorded too (issue #9): the upward walk
+        // must reach them so unresolved calls on a receiver whose method
+        // comes from a library supertype can be matched, and so
+        // isSubtypeOf() can relate a project type to the library types it
+        // implements.
         ITypeBinding superclass = binding.getSuperclass();
-        if (superclass != null && superclass.isFromSource()) {
+        if (superclass != null) {
             String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(superclass));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
         }
         for (ITypeBinding iface : binding.getInterfaces()) {
-            if (iface == null || !iface.isFromSource()) continue;
+            if (iface == null) continue;
             String p = eraseTypeArgs(MethodHierarchyExtractor.fqnFromBinding(iface));
             if (p != null && !p.isEmpty()) index.recordTypeHierarchy(childKey, p);
         }

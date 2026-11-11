@@ -164,6 +164,50 @@ class FindCallSitesServiceTest {
     }
 
     @Test
+    void unresolvedInterfaceCallSurfacesAsCallSite() throws Exception {
+        // Issue #9: a call whose receiver is a project interface inheriting
+        // the method from a class supertype is not bound by JDT. The service
+        // must still report it (attributed by receiver type + signature).
+        Path tmp = Files.createTempDirectory("codescope-fcs-unresolved-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/UnresAbs.java"), """
+                    package com.example;
+                    public abstract class UnresAbs { public abstract void m(); }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/UnresI.java"), """
+                    package com.example;
+                    public interface UnresI extends UnresAbs { }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/UnresImpl.java"), """
+                    package com.example;
+                    public class UnresImpl implements UnresI { public void m() {} }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/UnresCaller.java"), """
+                    package com.example;
+                    public class UnresCaller { void go(UnresI i) { i.m(); } }
+                    """);
+
+            FindCallSitesService svc = new FindCallSitesService();
+            String json = svc.findCallSitesJson("com.example.UnresImpl", "m",
+                    null, null, tmp, true, false);
+            JsonNode sites = new ObjectMapper().readTree(json).path("call_sites");
+            assertTrue(sites.size() >= 1, "expected the unresolved call site, got: " + sites);
+            boolean found = false;
+            for (JsonNode s : sites) {
+                if ("com.example.UnresCaller#go/1".equals(s.path("caller").asText())) {
+                    found = true;
+                    assertEquals("src/main/java/com/example/UnresCaller.java",
+                            s.path("call_site").path("file").asText());
+                }
+            }
+            assertTrue(found, "UnresCaller must surface, got: " + sites);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
     void invalidPagingWindowIsRejected() {
         FindCallSitesService svc = new FindCallSitesService();
         assertThrows(FindCallSitesService.FindCallSitesException.class,

@@ -145,7 +145,7 @@ public final class FindCallSitesService {
         }
 
         Map<MethodKey, List<ProjectIndex.CallSite>> union =
-                collectCallSites(index, target, ordered);
+                collectCallSites(index, target, display, ordered);
 
         String message = buildMessage(className, methodName, arity, target, union, ordered);
         // The "(combined callers across N library overloads)" suffix is
@@ -215,7 +215,7 @@ public final class FindCallSitesService {
      * never filtered.
      */
     private static Map<MethodKey, List<ProjectIndex.CallSite>> collectCallSites(
-            ProjectIndex index, MethodKey target, List<MethodKey> ordered) {
+            ProjectIndex index, MethodKey target, MethodKey display, List<MethodKey> ordered) {
         Map<MethodKey, List<ProjectIndex.CallSite>> out = new LinkedHashMap<>();
         for (MethodKey key : ordered) {
             boolean ancestor = target != null && !key.equals(target)
@@ -233,15 +233,28 @@ public final class FindCallSitesService {
                     if (filtered.isEmpty()) continue;
                     sites = filtered;
                 }
-                out.merge(e.getKey(), sites, (a, b) -> {
-                    List<ProjectIndex.CallSite> combined = new ArrayList<>(a.size() + b.size());
-                    combined.addAll(a);
-                    combined.addAll(b);
-                    return combined;
-                });
+                out.merge(e.getKey(), sites, FindCallSitesService::concat);
             }
         }
+        // Issue #9: the calls JDT could not bind (project interface
+        // inheriting from a class supertype) carry no callee key, so they
+        // are matched against the user's target by receiver type +
+        // signature. Each contributes one site at its own position.
+        for (ProjectIndex.UnresolvedCall u : index.unresolvedCallersOf(display)) {
+            out.merge(u.caller(),
+                    new ArrayList<>(List.of(
+                            new ProjectIndex.CallSite(u.file(), u.line(), u.receiverType()))),
+                    FindCallSitesService::concat);
+        }
         return out;
+    }
+
+    private static List<ProjectIndex.CallSite> concat(List<ProjectIndex.CallSite> a,
+                                                      List<ProjectIndex.CallSite> b) {
+        List<ProjectIndex.CallSite> combined = new ArrayList<>(a.size() + b.size());
+        combined.addAll(a);
+        combined.addAll(b);
+        return combined;
     }
 
     /**

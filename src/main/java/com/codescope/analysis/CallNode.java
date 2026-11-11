@@ -26,6 +26,21 @@ public final class CallNode {
     // creation time. Never propagated to children — it's a property of
     // the analyzed request, not of any individual method.
     private boolean nodeCapTruncated;
+    /**
+     * Framework entry-point kind for this method (e.g. {@code "spring-mvc"},
+     * {@code "junit5"}, {@code "main"}), or null for an ordinary method
+     * (issue #9). Set by the analyzers from
+     * {@link ProjectIndex#entryPointKindOf(MethodKey)} after construction.
+     */
+    private String entryPoint;
+    /**
+     * MyBatis mapper statement SQL for this node (issue #9 item 4), set
+     * when the node is a mapper XML statement rather than a Java method.
+     * {@code sqlType} is {@code select}/{@code insert}/{@code update}/
+     * {@code delete}/{@code sql}; {@code sqlText} is the normalized body.
+     */
+    private String sqlType;
+    private String sqlText;
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
@@ -121,6 +136,27 @@ public final class CallNode {
     }
 
     /**
+     * Labels this node as a framework entry point of the given kind (issue
+     * #9), or clears the label when {@code kind} is null. Only the node's
+     * own JSON gains an {@code "entryPoint"} key — markers (cycle, depth,
+     * fan-out) carry no subtree and no declaration binding, so callers set
+     * it only on real nodes.
+     */
+    public void markEntryPoint(String kind) {
+        this.entryPoint = kind;
+    }
+
+    /**
+     * Marks this node as a MyBatis mapper XML statement (issue #9 item 4)
+     * and attaches its SQL. Only {@code trace_callees} creates such nodes:
+     * they are leaves (an XML statement has no outgoing call edges).
+     */
+    public void markSql(String type, String sql) {
+        this.sqlType = type;
+        this.sqlText = sql;
+    }
+
+    /**
      * Resolves the source line text for a {@code (file, line)} pair, used
      * to add a {@code snippet} field to each serialized node (issue #9:
      * results used to carry only {@code file} + {@code line}). Returns
@@ -156,6 +192,20 @@ public final class CallNode {
      * non-null and can resolve it.
      */
     public Map<String, Object> toJson(SnippetResolver snippetResolver) {
+        return toJson(snippetResolver, "callers");
+    }
+
+    /**
+     * As {@link #toJson(SnippetResolver)}, with the child array emitted
+     * under a caller-supplied key. {@code trace_callers} uses
+     * {@code "callers"}; {@code trace_callees} (issue #9) uses
+     * {@code "callees"} — the node shapes are otherwise identical (the
+     * same marker flags apply), so one class serves both directions.
+     *
+     * @param childrenKey the JSON key for the child list, e.g.
+     *                    {@code "callers"} or {@code "callees"}
+     */
+    public Map<String, Object> toJson(SnippetResolver snippetResolver, String childrenKey) {
         Map<String, Object> rootMap = new LinkedHashMap<>();
         Deque<Frame> stack = new ArrayDeque<>();
         stack.push(new Frame(this, rootMap));
@@ -175,6 +225,13 @@ public final class CallNode {
             if (f.node.truncated) f.map.put("truncated", true);
             if (f.node.fanoutTruncated) f.map.put("truncatedCallers", f.node.hiddenCallerCount);
             if (f.node.deduped) f.map.put("deduped", true);
+            if (f.node.entryPoint != null) f.map.put("entryPoint", f.node.entryPoint);
+            if (f.node.sqlText != null) {
+                Map<String, Object> sql = new LinkedHashMap<>();
+                sql.put("type", f.node.sqlType);
+                sql.put("text", f.node.sqlText);
+                f.map.put("sql", sql);
+            }
             if (f.node.nodeCapTruncated) f.map.put("nodeCapTruncated", true);
             List<Map<String, Object>> kids = new ArrayList<>(f.node.callers.size());
             List<Frame> childFrames = new ArrayList<>(f.node.callers.size());
@@ -183,10 +240,11 @@ public final class CallNode {
                 kids.add(childMap);
                 childFrames.add(new Frame(c, childMap));
             }
-            // Always emit the callers key — even as [] for leaves — so
-            // downstream consumers can iterate `obj.callers` uniformly
-            // instead of branching on "missing vs empty array".
-            f.map.put("callers", kids);
+            // Always emit the children key — even as [] for leaves — so
+            // downstream consumers can iterate `obj.callers` /
+            // `obj.callees` uniformly instead of branching on "missing vs
+            // empty array".
+            f.map.put(childrenKey, kids);
             if (childFrames.isEmpty()) continue;
             // Push children in reverse so they're processed in source order.
             for (int i = childFrames.size() - 1; i >= 0; i--) {

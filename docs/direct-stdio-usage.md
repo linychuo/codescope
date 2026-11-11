@@ -41,6 +41,11 @@ mvn package
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trace_callers","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope","max_depth":3}}}
 ```
 
+`trace_callees`（向下，和 `trace_callers` 对称）:
+```json
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"trace_callees","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope","max_depth":2}}}
+```
+
 `find_call_sites`:
 ```json
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_call_sites","arguments":{"class":"com.example.Foo","method":"bar","project":"C:/projects/codescope","offset":0,"limit":100}}}
@@ -65,9 +70,12 @@ mvn package
 
 响应新增字段：
 
-- **snippet** — 结果节点附带源码行文本（`trace_callers` 的每个节点、`find_call_sites` 的每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
+- **snippet** — 结果节点附带源码行文本（`trace_callers` / `trace_callees` 的每个节点、`find_call_sites` 的每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
 - **match** — `find_symbols` 每个命中的匹配说明：`type`（`exact` / `case_insensitive` / `substring` / `fuzzy`）、`matched`（实际匹配文本，保留原始大小写）、`case_differs`、`distance`。
 - **total** — `find_call_sites` 窗口前的总调用点数。
+- **entryPoint** — `trace_callers` / `trace_callees` 节点上，框架入口标记（`spring-mvc` / `spring-scheduled` / `spring-event` / `junit5` / `junit4` / `testng` / `main` …）。
+- **sql** — `trace_callees` 中 mapper 接口方法的 SQL 叶子节点：`{type, text}`。
+- `find_symbols` 新增 kind `mapper-statement`（MyBatis mapper XML 的 statement）。
 
 ### 3. 一行跑完
 

@@ -48,6 +48,53 @@ public final class ProjectIndex {
     public record CallSite(String file, int line, String receiverType) {}
 
     /**
+     * A method invocation whose callee JDT could not resolve (issue #9
+     * "接口多态未展开"). The known trigger: the receiver's static type is a
+     * <em>project interface</em> that inherits the method from a
+     * <em>class</em> supertype — JDT does not expose an interface's
+     * abstract/library class supertype through
+     * {@code ITypeBinding.getInterfaces()}, so {@code resolveMethodBinding()}
+     * returns null and the call edge never enters the index.
+     *
+     * <p>Instead of dropping the call, the indexer records it here with the
+     * receiver's static type and the invoked name + arity. Query time then
+     * attributes it to any target whose {@code (name, arity)} match and
+     * whose declaring class is hierarchy-comparable with the receiver type
+     * (see {@link #unresolvedCallersOf(MethodKey)}). This is deliberately a
+     * fallback for <em>unresolved</em> bindings only — resolved bindings
+     * keep their exact edge.
+     *
+     * @param caller       the enclosing method (the call-site's caller)
+     * @param receiverType the receiver expression's static type (erased FQN),
+     *                     or null if even that could not be resolved
+     * @param methodName   the invoked method's simple name
+     * @param arity        the number of arguments at the call site
+     * @param file         the source file of the call expression
+     * @param line         the 1-based line of the call expression
+     */
+    public record UnresolvedCall(MethodKey caller, String receiverType,
+                                 String methodName, int arity, String file, int line) {}
+
+    /**
+     * One MyBatis mapper statement parsed from an XML file (issue #9 item
+     * 4). The XML is the <em>implementation</em> of a mapper interface
+     * method: {@code namespace} is the mapper interface FQN and {@code id}
+     * is the statement id, so {@code (namespace, id)} pairs with
+     * {@code MapperInterface#method}. {@code sql} is the statement body
+     * (nested dynamic-SQL tags preserved as text, whitespace collapsed).
+     *
+     * @param namespace mapper interface FQN (the {@code namespace} attribute)
+     * @param id        statement {@code id}
+     * @param type      element name: {@code select}, {@code insert},
+     *                  {@code update}, {@code delete} or {@code sql}
+     * @param sql       the statement body
+     * @param file      source path, relative to the project root when possible
+     * @param line      1-based line of the statement's start tag
+     */
+    public record MapperStatement(String namespace, String id, String type,
+                                  String sql, String file, int line) {}
+
+    /**
      * A single declared symbol — a type (class/interface/enum/record/annotation),
      * a method, a constructor, or a field. Carries enough metadata for
      * {@code find_symbols} to render a useful search hit without re-walking
@@ -74,6 +121,14 @@ public final class ProjectIndex {
             String signature) {}
 
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
+    /**
+     * Forward view of the same call edges: {@code invokes[caller]} = the
+     * methods {@code caller} directly invokes. Maintained write-through by
+     * {@link #recordInvocation} so the downward callee tree
+     * ({@code trace_callees}, issue #9) does not have to invert the reverse
+     * map per query. Same thread-safety pattern as {@link #calls}.
+     */
+    private final Map<MethodKey, Set<MethodKey>> invokes = new ConcurrentHashMap<>();
     private final Map<MethodKey, SourceLoc> declarations = new ConcurrentHashMap<>();
     // Visibility / dispatchability of each declared method, recorded
     // by JdtIndexer at the same visit time as the declaration.
@@ -86,6 +141,12 @@ public final class ProjectIndex {
     // on one would surface callers of the other. See
     // JdtIndexer.repairMethodHierarchyViaTypeHierarchy.
     private final Map<MethodKey, Integer> declarationModifiers = new ConcurrentHashMap<>();
+    // Framework entry-point kinds (issue #9): method → label such as
+    // "spring-mvc", "spring-scheduled", "junit5", "main". Recorded by the
+    // indexer from the method's annotations / signature; surfaced on the
+    // node so a caller chain that ends at a Spring handler says so instead
+    // of looking like an unexplored branch.
+    private final Map<MethodKey, String> entryPoints = new ConcurrentHashMap<>();
     // Constructors are not virtual dispatch: they must never participate in
     // the method-hierarchy walk (a constructor's name is the class simple
     // name, so a same-named superclass method would otherwise be linked as
@@ -150,6 +211,17 @@ public final class ProjectIndex {
     // outer, synchronized inner).
     private final Map<MethodKey, Map<MethodKey, List<CallSite>>> callSites
             = new ConcurrentHashMap<>();
+    // Invocations whose callee binding JDT could not resolve (issue #9
+    // interface polymorphism). Kept as (caller, receiverType, name, arity)
+    // tuples and attributed at query time by
+    // {@link #unresolvedCallersOf(MethodKey)}. Usually empty or tiny; a
+    // synchronized list because the parallel parse pass appends to it.
+    private final List<UnresolvedCall> unresolvedCalls =
+            Collections.synchronizedList(new ArrayList<>());
+    // MyBatis mapper statements parsed from XML (issue #9 item 4). Keyed by
+    // namespace + id for lookup from a mapper interface method.
+    private final List<MapperStatement> mapperStatements =
+            Collections.synchronizedList(new ArrayList<>());
     // Flat symbol table populated by JdtIndexer. Outer key: lowercase simple
     // name (for case-insensitive lookup); inner: ordered list of matching
     // symbols (a single name can match many types/methods/fields). Each
@@ -188,6 +260,12 @@ public final class ProjectIndex {
         synchronized (set) {
             set.add(caller);
         }
+        // Forward edge, used by the downward callee tree (trace_callees).
+        // Maintained here so the reverse and forward views can never drift.
+        Set<MethodKey> fwd = invokes.computeIfAbsent(caller, k -> new LinkedHashSet<>());
+        synchronized (fwd) {
+            fwd.add(callee);
+        }
     }
 
     /**
@@ -215,6 +293,97 @@ public final class ProjectIndex {
         }
     }
 
+    /**
+     * Records a method invocation whose callee binding JDT could not
+     * resolve (issue #9 interface polymorphism). The call is kept as a
+     * {@link UnresolvedCall} and attributed at query time by
+     * {@link #unresolvedCallersOf(MethodKey)} rather than dropped.
+     */
+    public void recordUnresolvedCall(MethodKey caller, String receiverType,
+                                     String methodName, int arity, SourceLoc loc) {
+        unresolvedCalls.add(new UnresolvedCall(caller, receiverType, methodName, arity,
+                loc.file(), loc.line()));
+    }
+
+    /**
+     * Returns the unresolved calls that could target {@code target}: same
+     * {@code (name, arity)} and a receiver type that is
+     * <em>hierarchy-comparable</em> with the target's declaring class.
+     *
+     * <p>Comparability is deliberately symmetric
+     * ({@code isSubtypeOf(target, receiver) || isSubtypeOf(receiver, target)}):
+     * a call on a receiver of type {@code R} dispatches into {@code R}'s
+     * hierarchy, so a target declared on {@code R} (or a subtype of {@code R})
+     * is a possible callee, and so is a target declared on a supertype of
+     * {@code R} that {@code R} inherits the method from — which is exactly
+     * the interface-inherits-from-class case the binding resolver misses.
+     * Sibling classes are <em>not</em> comparable, so they still do not
+     * cross-attribute (the issue #7 / #8 invariant).
+     *
+     * <p>Linear over {@link #unresolvedCalls}, which is normally empty or
+     * tiny (only bindings JDT could not resolve).
+     */
+    public List<UnresolvedCall> unresolvedCallersOf(MethodKey target) {
+        List<UnresolvedCall> out = new ArrayList<>();
+        synchronized (unresolvedCalls) {
+            for (UnresolvedCall u : unresolvedCalls) {
+                if (!u.methodName().equals(target.methodName)) continue;
+                if (u.arity() != target.arity) continue;
+                if (u.receiverType() == null) continue;
+                if (isSubtypeOf(target.declaringClass, u.receiverType())
+                        || isSubtypeOf(u.receiverType(), target.declaringClass)) {
+                    out.add(u);
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Records a MyBatis mapper statement parsed from XML (issue #9 item 4).
+     * Duplicate {@code (namespace, id, type, file, line)} entries are
+     * coalesced, matching {@link #recordSymbol}'s dedup rule.
+     */
+    public void recordMapperStatement(MapperStatement statement) {
+        if (statement == null || statement.namespace == null || statement.id == null) return;
+        synchronized (mapperStatements) {
+            for (MapperStatement existing : mapperStatements) {
+                if (existing.namespace.equals(statement.namespace)
+                        && existing.id.equals(statement.id)
+                        && existing.type.equals(statement.type)
+                        && existing.line == statement.line
+                        && java.util.Objects.equals(existing.file, statement.file)) {
+                    return;
+                }
+            }
+            mapperStatements.add(statement);
+        }
+    }
+
+    /**
+     * Returns every mapper statement for the mapper interface method
+     * {@code namespace#method}, in file order. Used by
+     * {@code trace_callees} to attach the SQL that implements a mapper
+     * interface method.
+     */
+    public List<MapperStatement> mapperStatementsFor(String namespace, String method) {
+        if (namespace == null || method == null) return List.of();
+        List<MapperStatement> out = new ArrayList<>();
+        synchronized (mapperStatements) {
+            for (MapperStatement s : mapperStatements) {
+                if (namespace.equals(s.namespace) && method.equals(s.id)) out.add(s);
+            }
+        }
+        return out;
+    }
+
+    /** All recorded mapper statements (defensive copy). */
+    public List<MapperStatement> mapperStatements() {
+        synchronized (mapperStatements) {
+            return List.copyOf(mapperStatements);
+        }
+    }
+
     public void putDeclaration(MethodKey method, SourceLoc loc) {
         declarations.putIfAbsent(method, loc);
         bySignature
@@ -239,6 +408,24 @@ public final class ProjectIndex {
     /** Records that {@code method} is a constructor (not virtual dispatch). */
     public void recordConstructor(MethodKey method) {
         constructors.add(method);
+    }
+
+    /**
+     * Records that {@code method} is a framework entry point of the given
+     * kind (e.g. {@code "spring-mvc"}, {@code "main"}). Idempotent: the
+     * first recorded kind wins.
+     */
+    public void recordEntryPoint(MethodKey method, String kind) {
+        if (kind == null || kind.isEmpty()) return;
+        entryPoints.putIfAbsent(method, kind);
+    }
+
+    /**
+     * The framework entry-point kind for {@code method}, or null if it is
+     * an ordinary method. See {@link EntryPoints}.
+     */
+    public String entryPointKindOf(MethodKey method) {
+        return entryPoints.get(method);
     }
 
     /** True if {@code method} was recorded as a constructor. */
@@ -614,6 +801,29 @@ public final class ProjectIndex {
     public Set<MethodKey> callersOfSet(MethodKey target) {
         Set<MethodKey> set = calls.get(target);
         return set == null ? Set.of() : set;
+    }
+
+    /**
+     * Returns the methods {@code caller} directly invokes (the forward
+     * direction of {@link #recordInvocation}), or an empty set if none.
+     * Used by the downward callee tree ({@code trace_callees}, issue #9).
+     * The returned set is a live index entry — callers must not mutate it,
+     * same contract as {@link #callersOfSet}.
+     */
+    public Set<MethodKey> invokesOf(MethodKey caller) {
+        Set<MethodKey> set = invokes.get(caller);
+        return set == null ? Set.of() : set;
+    }
+
+    /**
+     * Defensive snapshot of {@link #invokesOf(MethodKey)}.
+     */
+    public List<MethodKey> invokesOfList(MethodKey caller) {
+        Set<MethodKey> set = invokes.get(caller);
+        if (set == null) return Collections.emptyList();
+        synchronized (set) {
+            return List.copyOf(set);
+        }
     }
 
     /**

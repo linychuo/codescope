@@ -102,6 +102,8 @@ public final class CallChainAnalyzer {
                 displayTarget.declaringClass, displayTarget.methodName, displayTarget.arity,
                 rootLoc != null ? rootLoc.file() : null,
                 rootLoc != null ? rootLoc.line() : 0);
+        // Issue #9: label the root when it is a framework entry point.
+        root.markEntryPoint(index.entryPointKindOf(displayTarget));
 
         // Seed the queue with one frame per overload. They all share the
         // same root CallNode, so children land in one tree. Ancestors are
@@ -157,11 +159,12 @@ public final class CallChainAnalyzer {
             // tree node — diamond convergence across unrelated paths
             // (different parents reaching the same C) is still preserved
             // by the per-path ancestor check above.
-            // Per-frame fan-out: collect into a single ordered set so the
-            // visible children are stable and the cap is enforced on the
-            // union, not per relatedKey.
-            Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
-            int hidden = 0;
+            // Collect this frame's candidate callers into one ordered set:
+            // resolved callers grouped by related key first (stable order),
+            // then the unresolved calls (JDT could not bind the invocation)
+            // that match the frame key by receiver type + signature. The
+            // cap below is enforced on this union, not per relatedKey.
+            Set<MethodKey> frameCallers = new LinkedHashSet<>();
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
                 // Issue #7 / #8: when expanding to an *ancestor* method
                 // (a method the frame's key overrides), a recorded call
@@ -188,58 +191,69 @@ public final class CallChainAnalyzer {
                         List<ProjectIndex.CallSite> sites = sitesByCaller.get(caller);
                         if (sites != null && !anySiteReaches(index, f.key, sites)) continue;
                     }
-                    // A true back-edge on the current path is a cycle
-                    // marker, not an expandable caller. Markers carry no
-                    // subtree, so they are always recorded — the fan-out
-                    // cap below bounds the callers the BFS expands, not
-                    // the markers it emits. Checking this first also keeps
-                    // `hidden` an accurate count of omitted callers rather
-                    // than folding cycle markers into it. Dedup via
-                    // localCallersSeen so the same ancestor reached through
-                    // two related keys yields one marker, not two.
-                    if (f.ancestors.contains(caller)) {
-                        if (f.localCallersSeen.add(caller)) {
-                            f.node.addChild(CallNode.cycleMarker(
-                                    caller.declaringClass, caller.methodName, caller.arity));
-                        }
-                        continue;
+                    frameCallers.add(caller);
+                }
+            }
+            // Issue #9: attribute the calls JDT could not bind (project
+            // interface inheriting from a class supertype) by receiver
+            // type + signature. See ProjectIndex.unresolvedCallersOf.
+            for (ProjectIndex.UnresolvedCall u : index.unresolvedCallersOf(f.key)) {
+                frameCallers.add(u.caller());
+            }
+            Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
+            int hidden = 0;
+            for (MethodKey caller : frameCallers) {
+                // A true back-edge on the current path is a cycle
+                // marker, not an expandable caller. Markers carry no
+                // subtree, so they are always recorded — the fan-out
+                // cap below bounds the callers the BFS expands, not
+                // the markers it emits. Checking this first also keeps
+                // `hidden` an accurate count of omitted callers rather
+                // than folding cycle markers into it. Dedup via
+                // localCallersSeen so the same ancestor reached through
+                // two related keys yields one marker, not two.
+                if (f.ancestors.contains(caller)) {
+                    if (f.localCallersSeen.add(caller)) {
+                        f.node.addChild(CallNode.cycleMarker(
+                                caller.declaringClass, caller.methodName, caller.arity));
                     }
-                    if (collected.size() >= MAX_CALLERS_PER_FRAME) {
-                        hidden++;
-                        continue;
-                    }
-                    // Direct-caller dedup ONLY applies at the root level
-                    // (isRoot=true) when multiple seeds share the same
-                    // caller. Below the root each path has its own
-                    // ancestors and we want the full subtree for diamonds.
-                    if (f.isRoot && !directCallersSeen.add(caller)) continue;
-                    // Per-frame dedup so the same caller discovered via
-                    // multiple related keys (e.g. M1 and M2 in
-                    // relatedMethods) doesn't show up twice as a child
-                    // of this frame.
-                    if (!f.localCallersSeen.add(caller)) continue;
-                    if (!collected.add(caller)) continue;
-                    ProjectIndex.SourceLoc loc = index.declarationOf(caller);
-                    if (!seenInTree.add(caller)) {
-                        f.node.addChild(buildCallerNode(caller, loc, true));
-                        continue;
-                    }
-                    CallNode child = buildCallerNode(caller, loc, false);
-                    f.node.addChild(child);
-                    // Add `caller` to its descendants' ancestors so a
-                    // reachable back-edge through `caller` becomes a
-                    // cycle marker, not a second subtree.
-                    Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
-                    childAncestors.add(caller);
-                    childAncestors.addAll(f.ancestors);
-                    queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
-                    nodes++;
-                    if (nodes >= maxNodes) {
-                        root.markNodeCapTruncated();
-                        return new Result(root, true,
-                                "Truncated at " + maxNodes + " nodes to prevent runaway expansion. "
-                                        + "There may be a deeply-recursive or hot method in the chain.");
-                    }
+                    continue;
+                }
+                if (collected.size() >= MAX_CALLERS_PER_FRAME) {
+                    hidden++;
+                    continue;
+                }
+                // Direct-caller dedup ONLY applies at the root level
+                // (isRoot=true) when multiple seeds share the same
+                // caller. Below the root each path has its own
+                // ancestors and we want the full subtree for diamonds.
+                if (f.isRoot && !directCallersSeen.add(caller)) continue;
+                // Per-frame dedup so the same caller discovered via
+                // multiple related keys (e.g. M1 and M2 in
+                // relatedMethods) doesn't show up twice as a child
+                // of this frame.
+                if (!f.localCallersSeen.add(caller)) continue;
+                if (!collected.add(caller)) continue;
+                ProjectIndex.SourceLoc loc = index.declarationOf(caller);
+                if (!seenInTree.add(caller)) {
+                    f.node.addChild(buildCallerNode(index, caller, loc, true));
+                    continue;
+                }
+                CallNode child = buildCallerNode(index, caller, loc, false);
+                f.node.addChild(child);
+                // Add `caller` to its descendants' ancestors so a
+                // reachable back-edge through `caller` becomes a
+                // cycle marker, not a second subtree.
+                Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
+                childAncestors.add(caller);
+                childAncestors.addAll(f.ancestors);
+                queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
+                nodes++;
+                if (nodes >= maxNodes) {
+                    root.markNodeCapTruncated();
+                    return new Result(root, true,
+                            "Truncated at " + maxNodes + " nodes to prevent runaway expansion. "
+                                    + "There may be a deeply-recursive or hot method in the chain.");
                 }
             }
             if (hidden > 0) {
@@ -317,13 +331,18 @@ public final class CallChainAnalyzer {
      * already appears elsewhere in the tree). Both shapes carry the
      * method's declaration location, or {@code (null, 0)} if undeclared.
      */
-    private static CallNode buildCallerNode(MethodKey caller,
+    private static CallNode buildCallerNode(ProjectIndex index, MethodKey caller,
                                             ProjectIndex.SourceLoc loc, boolean deduped) {
         String file = loc == null ? null : loc.file();
         int line = loc == null ? 0 : loc.line();
-        return deduped
+        CallNode node = deduped
                 ? CallNode.dedupedMarker(caller.declaringClass, caller.methodName, caller.arity, file, line)
                 : new CallNode(caller.declaringClass, caller.methodName, caller.arity, file, line);
+        // Issue #9: a caller chain that ends at a framework entry point
+        // says so (spring-mvc / junit5 / main / ...) instead of looking
+        // like an unexplored branch.
+        node.markEntryPoint(index.entryPointKindOf(caller));
+        return node;
     }
 
     /** Per-frame and per-depth caps remain static because their tests

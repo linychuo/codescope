@@ -447,7 +447,8 @@ class FindSymbolsServiceTest {
         // into the "Valid: ..." diagnostics. Keep the advertised order.
         assertEquals(
                 List.of("class", "interface", "enum", "record", "annotation",
-                        "method", "constructor", "field", "synthetic"),
+                        "method", "constructor", "field", "synthetic",
+                        "mapper-statement"),
                 new ArrayList<>(FindSymbolsService.VALID_KINDS));
     }
 
