@@ -49,15 +49,28 @@
 新增 `ProjectIndex.CallSite(file, line, receiverType)` 承载该信息；`callSitesOf` 的返回类型
 随之从 `List<SourceLoc>` 变为 `List<CallSite>`。
 
-### 2.2 祖先扩展过滤
+### 2.2 接收者静态类型过滤（含 #8）
 
-`ProjectIndex.isSubtypeOf(sub, super)` 沿 `typeParents` 上溯（null 视为"未知，不过滤"）。
-BFS 扩展 frame `K` 时，对每个 `relatedKey`：
+`ProjectIndex.isComparable(a, b)` = `isSubtypeOf(a, b) || isSubtypeOf(b, a)`
+（null 视为"未知，不过滤"）。BFS 扩展 frame 时，**所有方向**（自身 / 祖先 / 后代）的
+调用点都要求：receiver 类型与 frame 的 **context 类** 层级可比 —— 即 receiver
+可能持有一个该类的实例。
 
-- `relatedKey == K` 或 `relatedKey` 是 **后代**（`K` override 它）→ 不过滤（保持既有
-  "override 家族"语义，接口跨边界靠的就是这个方向）；
-- `relatedKey` 是 **祖先**（`K` 被它 override）→ 只保留 receiver 类型满足
-  `K.declaringClass <: receiverType` 的调用点。
+context 的取法：
+
+- **根帧 = 用户查询的类 Q**（不是解析后目标的声明类 D）。这是 #8 的关键：
+  `trace ChildA#save`（继承来的方法）解析到 `Parent#save`，但 context 仍是
+  `ChildA`，于是 `new ChildB().save("x")`（receiver = ChildB，与 ChildA 不可比）
+  被过滤。
+- **更深帧 = `frame.key.declaringClass`**（那一层问的是"谁调用这个方法"）。
+
+效果：
+
+- trace 一个**声明了 override** 的方法（#7）：兄弟的 caller 被过滤。
+- trace 一个**继承来的**方法（#8）：兄弟 override 的 caller 被过滤。
+- trace **父类 / 接口**方法：家族语义保留 —— `Parent#save` 仍能看到 `ChildB` 的
+  caller，泛型 `I#bar(T)` 仍能到达 `Impl#bar(String)` 的 caller（由
+  `HierarchyEdgeCaseTest.genericTypeVariableOverrideIsLinked` 锁定）。
 
 `find_call_sites` 用同一套规则（`FindCallSitesService.collectCallSites`），保证两个工具口径一致。
 
@@ -79,7 +92,7 @@ BFS 扩展 frame `K` 时，对每个 `relatedKey`：
 
 ## 3. 测试
 
-- `ReceiverTypeFilterTest`（4 个）：兄弟合并、继承方法 receiver 过滤、接口兄弟实现、super 的 receiver 语义。
+- `ReceiverTypeFilterTest`（6 个）：兄弟合并、继承方法 receiver 过滤、接口兄弟实现、super 的 receiver 语义、**trace 继承方法不串味**、trace 父类方法保留家族语义。
 - `SourceSnippetTest`（5 个）：相对/绝对路径、缩进保留、缺失/越界返回 null、`..` 路径。
 - `CallChainAnalyzerTest` / `TraceCallersServiceTest`：maxDepth 语义与标记。
 - `FindCallSitesServiceTest`：分页窗口、total、非法窗口。

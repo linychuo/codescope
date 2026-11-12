@@ -145,7 +145,7 @@ public final class FindCallSitesService {
         }
 
         Map<MethodKey, List<ProjectIndex.CallSite>> union =
-                collectCallSites(index, target, display, ordered);
+                collectCallSites(index, target, display, ordered, className);
 
         String message = buildMessage(className, methodName, arity, target, union, ordered);
         // The "(combined callers across N library overloads)" suffix is
@@ -206,41 +206,46 @@ public final class FindCallSitesService {
      * {@link MethodKey}, which is exact on parameter types, so different
      * overloads of the same caller stay distinct.
      *
-     * <p>For a project target, a related key that is an <em>ancestor</em>
-     * of the target (the target overrides it) contributes only the sites
-     * whose receiver's static type is a supertype of the target's
-     * declaring class. Without that filter, a sibling override's
-     * {@code super} call would surface under the target too. Library
-     * targets ({@code target == null}) have no project hierarchy and are
-     * never filtered.
+     * <p>Every expansion direction (the target itself, its ancestors and
+     * its descendants) contributes only the sites whose receiver's static
+     * type is hierarchy-comparable with {@code queryClass} — the class the
+     * user asked about (issue #7 / #8). Using the query class rather than
+     * the resolved target's declaring class is what keeps an inherited
+     * query ({@code trace ChildA#save} → {@code Parent#save}) from
+     * surfacing a sibling override's callers.
+     *
+     * <p>Library targets ({@code target == null}) resolve only by strict
+     * call-edge matches, whose receivers are the library type itself or a
+     * recorded subtype, so the same check is a no-op there in practice.
      */
     private static Map<MethodKey, List<ProjectIndex.CallSite>> collectCallSites(
-            ProjectIndex index, MethodKey target, MethodKey display, List<MethodKey> ordered) {
+            ProjectIndex index, MethodKey target, MethodKey display, List<MethodKey> ordered,
+            String queryClass) {
         Map<MethodKey, List<ProjectIndex.CallSite>> out = new LinkedHashMap<>();
+        // Issue #8: every expansion direction is filtered by whether the
+        // call site's receiver could hold an instance of the user's query
+        // class — not just ancestor expansion, and not keyed on the
+        // resolved target's declaring class (which is broader than the
+        // query class for an inherited method).
         for (MethodKey key : ordered) {
-            boolean ancestor = target != null && !key.equals(target)
-                    && index.isSubtypeOf(target.declaringClass, key.declaringClass);
             for (Map.Entry<MethodKey, List<ProjectIndex.CallSite>> e
                     : index.callSitesOf(key).entrySet()) {
                 List<ProjectIndex.CallSite> sites = e.getValue();
-                if (ancestor) {
-                    List<ProjectIndex.CallSite> filtered = new ArrayList<>(sites.size());
-                    for (ProjectIndex.CallSite site : sites) {
-                        if (index.isSubtypeOf(target.declaringClass, site.receiverType())) {
-                            filtered.add(site);
-                        }
+                List<ProjectIndex.CallSite> filtered = new ArrayList<>(sites.size());
+                for (ProjectIndex.CallSite site : sites) {
+                    if (index.isComparable(queryClass, site.receiverType())) {
+                        filtered.add(site);
                     }
-                    if (filtered.isEmpty()) continue;
-                    sites = filtered;
                 }
-                out.merge(e.getKey(), sites, FindCallSitesService::concat);
+                if (filtered.isEmpty()) continue;
+                out.merge(e.getKey(), filtered, FindCallSitesService::concat);
             }
         }
         // Issue #9: the calls JDT could not bind (project interface
         // inheriting from a class supertype) carry no callee key, so they
         // are matched against the user's target by receiver type +
         // signature. Each contributes one site at its own position.
-        for (ProjectIndex.UnresolvedCall u : index.unresolvedCallersOf(display)) {
+        for (ProjectIndex.UnresolvedCall u : index.unresolvedCallersOf(display, queryClass)) {
             out.merge(u.caller(),
                     new ArrayList<>(List.of(
                             new ProjectIndex.CallSite(u.file(), u.line(), u.receiverType()))),

@@ -120,9 +120,12 @@ public final class TraceCallersService {
 
         CallChainAnalyzer analyzer = new CallChainAnalyzer(
                 CallChainAnalyzer.DEFAULT_MAX_NODES, maxDepth);
+        // Issue #8: the receiver filter's context is the class the user
+        // asked about, which for an inherited method is a subtype of the
+        // resolved target's declaring class.
         CallChainAnalyzer.Result r = (target != null)
-                ? analyzer.traceCallers(index, target)
-                : analyzer.traceCallers(index, display, seeds);
+                ? analyzer.traceCallers(index, target, className)
+                : analyzer.traceCallers(index, display, seeds, className);
 
         String message = r.message();
         // Library overload union suffix only when seeds collected >1 keys.

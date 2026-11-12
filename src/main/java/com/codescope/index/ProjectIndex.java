@@ -309,9 +309,24 @@ public final class ProjectIndex {
      * Returns the unresolved calls that could target {@code target}: same
      * {@code (name, arity)} and a receiver type that is
      * <em>hierarchy-comparable</em> with the target's declaring class.
+     * See {@link #unresolvedCallersOf(MethodKey, String)} for the
+     * comparability rule.
+     */
+    public List<UnresolvedCall> unresolvedCallersOf(MethodKey target) {
+        return unresolvedCallersOf(target, target.declaringClass);
+    }
+
+    /**
+     * As {@link #unresolvedCallersOf(MethodKey)}, but the receiver is
+     * compared against {@code queryClass} — the class the user asked
+     * about — rather than the resolved method's declaring class. This
+     * matters for an inherited query ({@code trace ChildA#save} where
+     * {@code save} is declared on {@code Parent}): the receiver must be
+     * able to hold a {@code ChildA} instance, not just a {@code Parent}
+     * (issue #8).
      *
      * <p>Comparability is deliberately symmetric
-     * ({@code isSubtypeOf(target, receiver) || isSubtypeOf(receiver, target)}):
+     * ({@code isSubtypeOf(context, receiver) || isSubtypeOf(receiver, context)}):
      * a call on a receiver of type {@code R} dispatches into {@code R}'s
      * hierarchy, so a target declared on {@code R} (or a subtype of {@code R})
      * is a possible callee, and so is a target declared on a supertype of
@@ -323,20 +338,34 @@ public final class ProjectIndex {
      * <p>Linear over {@link #unresolvedCalls}, which is normally empty or
      * tiny (only bindings JDT could not resolve).
      */
-    public List<UnresolvedCall> unresolvedCallersOf(MethodKey target) {
+    public List<UnresolvedCall> unresolvedCallersOf(MethodKey target, String queryClass) {
+        String context = queryClass != null ? queryClass : target.declaringClass;
         List<UnresolvedCall> out = new ArrayList<>();
         synchronized (unresolvedCalls) {
             for (UnresolvedCall u : unresolvedCalls) {
                 if (!u.methodName().equals(target.methodName)) continue;
                 if (u.arity() != target.arity) continue;
-                if (u.receiverType() == null) continue;
-                if (isSubtypeOf(target.declaringClass, u.receiverType())
-                        || isSubtypeOf(u.receiverType(), target.declaringClass)) {
+                if (isComparable(context, u.receiverType())) {
                     out.add(u);
                 }
             }
         }
         return out;
+    }
+
+    /**
+     * True if {@code a} and {@code b} are hierarchy-comparable: one is a
+     * subtype of the other (or they are equal). This is the receiver-side
+     * filter for issues #7 / #8: a call site on a receiver of type
+     * {@code R} can only be attributed to a method whose declaring class
+     * (or the user's query class) is comparable with {@code R} — otherwise
+     * the receiver can never hold an instance of that class.
+     *
+     * <p>A null on either side is "unknown" and returns true (do not filter
+     * on an unknown fact). See {@link #isSubtypeOf(String, String)}.
+     */
+    public boolean isComparable(String a, String b) {
+        return isSubtypeOf(a, b) || isSubtypeOf(b, a);
     }
 
     /**

@@ -80,7 +80,18 @@ public final class CallChainAnalyzer {
      * {@link ProjectIndex.AmbiguousMethodException} before the BFS even runs.
      */
     public Result traceCallers(ProjectIndex index, MethodKey target) {
-        return traceCallers(index, target, List.of(target));
+        return traceCallers(index, target, List.of(target), target.declaringClass);
+    }
+
+    /**
+     * As {@link #traceCallers(ProjectIndex, MethodKey)}, with an explicit
+     * <em>query class</em> used as the receiver context for the root frame
+     * (issue #8). Pass the class the user asked about, which may differ
+     * from the resolved target's declaring class when the method is
+     * inherited.
+     */
+    public Result traceCallers(ProjectIndex index, MethodKey target, String queryClass) {
+        return traceCallers(index, target, List.of(target), queryClass);
     }
 
     /**
@@ -97,6 +108,22 @@ public final class CallChainAnalyzer {
      * delegates here with a one-element seed list.
      */
     public Result traceCallers(ProjectIndex index, MethodKey displayTarget, List<MethodKey> seeds) {
+        return traceCallers(index, displayTarget, seeds, displayTarget.declaringClass);
+    }
+
+    /**
+     * As {@link #traceCallers(ProjectIndex, MethodKey, List)}, with an
+     * explicit <em>query class</em> used as the receiver context for the
+     * root frame (issue #8).
+     *
+     * @param queryClass the class the user asked about; a call site only
+     *                   counts when its receiver could hold an instance of
+     *                   it (hierarchy-comparable). Deeper frames use the
+     *                   frame key's declaring class, since each level asks
+     *                   "who calls this method?".
+     */
+    public Result traceCallers(ProjectIndex index, MethodKey displayTarget, List<MethodKey> seeds,
+                               String queryClass) {
         ProjectIndex.SourceLoc rootLoc = index.declarationOf(displayTarget);
         CallNode root = new CallNode(
                 displayTarget.declaringClass, displayTarget.methodName, displayTarget.arity,
@@ -125,8 +152,12 @@ public final class CallChainAnalyzer {
         // increments it. The depth cap therefore reads naturally:
         // maxDepth=1 keeps only direct callers, maxDepth=2 adds one more
         // level, and so on.
+        // The root frame's receiver context is the class the user asked
+        // about (issue #8), which may be a subtype of the resolved target's
+        // declaring class when the method is inherited.
+        String rootContext = queryClass != null ? queryClass : displayTarget.declaringClass;
         for (MethodKey seed : seeds) {
-            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true));
+            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true, rootContext));
         }
 
         int nodes = 1;
@@ -166,30 +197,28 @@ public final class CallChainAnalyzer {
             // cap below is enforced on this union, not per relatedKey.
             Set<MethodKey> frameCallers = new LinkedHashSet<>();
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
-                // Issue #7 / #8: when expanding to an *ancestor* method
-                // (a method the frame's key overrides), a recorded call
-                // site only counts if its receiver's static type is a
-                // supertype of the frame method's declaring class. Without
-                // this filter, expanding ChildA#save → Parent#save would
-                // also pick up every other caller of Parent#save —
-                // including ChildB#save, a sibling override that merely
-                // calls super.save() — merging the two siblings' callers.
-                // Descendant expansion (the frame key overrides the
-                // related key) is intentionally unfiltered: a call to an
-                // override is part of the same dispatch family.
-                boolean ancestor = !relatedKey.equals(f.key)
-                        && index.isSubtypeOf(f.key.declaringClass, relatedKey.declaringClass);
+                // Issue #7 / #8: every expansion direction (self,
+                // ancestors, descendants) is filtered by whether the call
+                // site's receiver could hold an instance of the frame's
+                // context class. Without this, expanding ChildA#save →
+                // Parent#save also picks up every other caller of
+                // Parent#save — including ChildB#save, a sibling override
+                // that merely calls super.save() — merging the siblings'
+                // callers; and expanding Parent#save → ChildB#save picks up
+                // callers on a ChildB receiver when the user asked about an
+                // inherited ChildA#save.
+                //
                 // Receiver types are only known when the indexer recorded
                 // call sites (production always does; a hand-built index
                 // that only called recordInvocation has none). Without
                 // site data there is nothing to filter on, so the caller
                 // is kept — the historical behavior.
                 Map<MethodKey, List<ProjectIndex.CallSite>> sitesByCaller =
-                        ancestor ? index.callSitesOfSet(relatedKey) : Map.of();
+                        index.callSitesOfSet(relatedKey);
                 for (MethodKey caller : index.callersOfSet(relatedKey)) {
-                    if (ancestor) {
-                        List<ProjectIndex.CallSite> sites = sitesByCaller.get(caller);
-                        if (sites != null && !anySiteReaches(index, f.key, sites)) continue;
+                    List<ProjectIndex.CallSite> sites = sitesByCaller.get(caller);
+                    if (sites != null && !anySiteMatchesContext(index, f.contextClass, sites)) {
+                        continue;
                     }
                     frameCallers.add(caller);
                 }
@@ -197,7 +226,8 @@ public final class CallChainAnalyzer {
             // Issue #9: attribute the calls JDT could not bind (project
             // interface inheriting from a class supertype) by receiver
             // type + signature. See ProjectIndex.unresolvedCallersOf.
-            for (ProjectIndex.UnresolvedCall u : index.unresolvedCallersOf(f.key)) {
+            for (ProjectIndex.UnresolvedCall u
+                    : index.unresolvedCallersOf(f.key, f.contextClass)) {
                 frameCallers.add(u.caller());
             }
             Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
@@ -247,7 +277,10 @@ public final class CallChainAnalyzer {
                 Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
                 childAncestors.add(caller);
                 childAncestors.addAll(f.ancestors);
-                queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false));
+                // Deeper frames ask "who calls this method?", so their
+                // receiver context is the caller's own declaring class.
+                queue.addLast(new PathFrame(caller, child, childAncestors, f.depth + 1, false,
+                        caller.declaringClass));
                 nodes++;
                 if (nodes >= maxNodes) {
                     root.markNodeCapTruncated();
@@ -276,19 +309,18 @@ public final class CallChainAnalyzer {
     }
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
-                             int depth, boolean isRoot,
+                             int depth, boolean isRoot, String contextClass,
                              Set<MethodKey> localCallersSeen) {
         PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
-                  int depth, boolean isRoot) {
-            this(key, node, ancestors, depth, isRoot, new HashSet<>());
+                  int depth, boolean isRoot, String contextClass) {
+            this(key, node, ancestors, depth, isRoot, contextClass, new HashSet<>());
         }
     }
 
     /**
-     * True if at least one recorded call site of {@code target}'s caller
-     * reaches {@code target} through its receiver's static type — i.e.
-     * some site's receiver type is a supertype of
-     * {@code target.declaringClass} (issues #7 / #8).
+     * True if at least one recorded call site of a caller could hold an
+     * instance of {@code contextClass} — i.e. some site's receiver type is
+     * hierarchy-comparable with {@code contextClass} (issues #7 / #8).
      *
      * <p>The same caller can invoke the same callee from several
      * expressions with different receiver static types (a
@@ -296,12 +328,12 @@ public final class CallChainAnalyzer {
      * One compatible expression is enough to count the caller, so the
      * per-site receiver type is OR-ed rather than required to be uniform.
      * A null receiver type (unknown) passes — see
-     * {@link ProjectIndex#isSubtypeOf}.
+     * {@link ProjectIndex#isComparable}.
      */
-    private static boolean anySiteReaches(ProjectIndex index, MethodKey target,
-                                          List<ProjectIndex.CallSite> sites) {
+    private static boolean anySiteMatchesContext(ProjectIndex index, String contextClass,
+                                                 List<ProjectIndex.CallSite> sites) {
         for (ProjectIndex.CallSite site : sites) {
-            if (index.isSubtypeOf(target.declaringClass, site.receiverType())) return true;
+            if (index.isComparable(contextClass, site.receiverType())) return true;
         }
         return false;
     }

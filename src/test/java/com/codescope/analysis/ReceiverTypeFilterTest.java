@@ -211,6 +211,109 @@ class ReceiverTypeFilterTest {
                 "CallerB's receiver is statically B, which cannot dispatch to A#m: " + classes);
     }
 
+    /** Runs the same resolution the tools use, with an explicit query class. */
+    private static CallChainAnalyzer.Result traceWithQuery(ProjectIndex index,
+                                                           String queryClass,
+                                                           String cls, String name)
+            throws Exception {
+        MethodResolver.Result res = MethodResolver.resolve(index, cls, name, null, null);
+        MethodKey display;
+        List<MethodKey> seeds;
+        if (res instanceof MethodResolver.Result.ProjectTarget pt) {
+            display = pt.target();
+            seeds = List.of(display);
+        } else {
+            MethodResolver.Result.LibrarySeeds ls = (MethodResolver.Result.LibrarySeeds) res;
+            display = ls.display();
+            seeds = ls.seeds();
+        }
+        return new CallChainAnalyzer().traceCallers(index, display, seeds, queryClass);
+    }
+
+    @Test
+    void inheritedMethodQueryDoesNotPickUpSiblingOverrideCallers(@TempDir Path tmp)
+            throws Exception {
+        // Issue #8: ChildA inherits save() (no override), so querying
+        // ChildA#save resolves to Parent#save. The receiver context must be
+        // ChildA — a call on a ChildB receiver (which binds to the sibling
+        // override ChildB#save) can never involve ChildA's inherited method.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Parent.java"), """
+                package com.example;
+                public class Parent { public void save(String s) {} }
+                """);
+        Files.writeString(srcDir.resolve("ChildA.java"), """
+                package com.example;
+                public class ChildA extends Parent { }
+                """);
+        Files.writeString(srcDir.resolve("ChildB.java"), """
+                package com.example;
+                public class ChildB extends Parent {
+                    @Override public void save(String s) {}
+                }
+                """);
+        Files.writeString(srcDir.resolve("CallerA.java"), """
+                package com.example;
+                public class CallerA { void go() { new ChildA().save("x"); } }
+                """);
+        Files.writeString(srcDir.resolve("CallerB.java"), """
+                package com.example;
+                public class CallerB { void go() { new ChildB().save("x"); } }
+                """);
+        Files.writeString(srcDir.resolve("CallerP.java"), """
+                package com.example;
+                public class CallerP { void go(Parent p) { p.save("x"); } }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Parent.java", "ChildA.java", "ChildB.java",
+                "CallerA.java", "CallerB.java", "CallerP.java");
+
+        CallChainAnalyzer.Result r = traceWithQuery(index, "com.example.ChildA",
+                "com.example.ChildA", "save");
+        assertTrue(r.found());
+        java.util.Set<String> classes = callerClasses(r.root());
+        assertTrue(classes.contains("com.example.CallerA"),
+                "CallerA's receiver is ChildA — it invokes ChildA's inherited save, got: "
+                        + classes);
+        assertTrue(classes.contains("com.example.CallerP"),
+                "a Parent-typed receiver can hold a ChildA, got: " + classes);
+        assertFalse(classes.contains("com.example.CallerB"),
+                "issue #8: CallerB's receiver is ChildB, which cannot hold a ChildA — its "
+                        + "call must not surface under the inherited ChildA#save, got: " + classes);
+    }
+
+    @Test
+    void parentMethodQueryStillIncludesOverrideCallers(@TempDir Path tmp) throws Exception {
+        // The other half of issue #8's contract: tracing the declaring /
+        // supertype method keeps the family semantics — an override's
+        // callers are part of "what calls Parent#save" in the dispatch
+        // family sense. This is what
+        // HierarchyEdgeCaseTest.genericTypeVariableOverrideIsLinked locks in
+        // for the generic case.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Parent.java"), """
+                package com.example;
+                public class Parent { public void save(String s) {} }
+                """);
+        Files.writeString(srcDir.resolve("ChildB.java"), """
+                package com.example;
+                public class ChildB extends Parent {
+                    @Override public void save(String s) {}
+                }
+                """);
+        Files.writeString(srcDir.resolve("CallerB.java"), """
+                package com.example;
+                public class CallerB { void go() { new ChildB().save("x"); } }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Parent.java", "ChildB.java", "CallerB.java");
+
+        CallChainAnalyzer.Result r = traceWithQuery(index, "com.example.Parent",
+                "com.example.Parent", "save");
+        assertTrue(r.found());
+        assertTrue(callerClasses(r.root()).contains("com.example.CallerB"),
+                "tracing Parent#save must still surface the override's caller (family "
+                        + "semantics), got: " + r.root().toJson());
+    }
+
     @Test
     void superCallOnThisIsAttributedToTheTargetClass(@TempDir Path tmp) throws Exception {
         // The super call inside ChildA must remain a caller of ChildA#save

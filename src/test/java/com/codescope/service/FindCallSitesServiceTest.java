@@ -208,6 +208,54 @@ class FindCallSitesServiceTest {
     }
 
     @Test
+    void inheritedMethodQueryFiltersSiblingOverrideCallSites() throws Exception {
+        // Issue #8 at the service layer: InhChildA inherits save(), so the
+        // query resolves to InhParent#save, but the receiver context stays
+        // InhChildA — a call on an InhChildB receiver must not surface.
+        Path tmp = Files.createTempDirectory("codescope-fcs-inherited-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhParent.java"), """
+                    package com.example;
+                    public class InhParent { public void save(String s) {} }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhChildA.java"), """
+                    package com.example;
+                    public class InhChildA extends InhParent { }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhChildB.java"), """
+                    package com.example;
+                    public class InhChildB extends InhParent {
+                        @Override public void save(String s) {}
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhCallerA.java"), """
+                    package com.example;
+                    public class InhCallerA { void go() { new InhChildA().save("x"); } }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhCallerB.java"), """
+                    package com.example;
+                    public class InhCallerB { void go() { new InhChildB().save("x"); } }
+                    """);
+
+            FindCallSitesService svc = new FindCallSitesService();
+            String json = svc.findCallSitesJson("com.example.InhChildA", "save",
+                    null, null, tmp, true, false);
+            JsonNode sites = new ObjectMapper().readTree(json).path("call_sites");
+            java.util.Set<String> callers = new java.util.HashSet<>();
+            for (JsonNode s : sites) callers.add(s.path("caller").asText());
+
+            assertTrue(callers.contains("com.example.InhCallerA#go/0"),
+                    "InhCallerA invokes the inherited save on a ChildA receiver, got: " + callers);
+            assertFalse(callers.contains("com.example.InhCallerB#go/0"),
+                    "issue #8: InhCallerB's receiver is InhChildB, which cannot hold an "
+                            + "InhChildA, got: " + callers);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
     void invalidPagingWindowIsRejected() {
         FindCallSitesService svc = new FindCallSitesService();
         assertThrows(FindCallSitesService.FindCallSitesException.class,

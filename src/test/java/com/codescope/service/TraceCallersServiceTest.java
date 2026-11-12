@@ -73,6 +73,53 @@ class TraceCallersServiceTest {
     }
 
     @Test
+    void inheritedMethodQueryFiltersSiblingOverrideCallers() throws Exception {
+        // Issue #8 at the service layer: the query class (InhChildA) is the
+        // receiver context even though the method resolves to InhParent#save.
+        Path tmp = Files.createTempDirectory("codescope-tc-inherited-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhParent.java"), """
+                    package com.example;
+                    public class InhParent { public void save(String s) {} }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhChildA.java"), """
+                    package com.example;
+                    public class InhChildA extends InhParent { }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhChildB.java"), """
+                    package com.example;
+                    public class InhChildB extends InhParent {
+                        @Override public void save(String s) {}
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhCallerA.java"), """
+                    package com.example;
+                    public class InhCallerA { void go() { new InhChildA().save("x"); } }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/InhCallerB.java"), """
+                    package com.example;
+                    public class InhCallerB { void go() { new InhChildB().save("x"); } }
+                    """);
+
+            TraceCallersService svc = new TraceCallersService();
+            JsonNode tree = new ObjectMapper().readTree(svc.traceCallersJson(
+                    "com.example.InhChildA", "save", null, null, tmp, true, false));
+            java.util.Set<String> classes = new java.util.HashSet<>();
+            for (JsonNode c : tree.path("target").path("callers")) {
+                classes.add(c.path("class").asText());
+            }
+            assertTrue(classes.contains("com.example.InhCallerA"),
+                    "InhCallerA invokes the inherited save on a ChildA receiver, got: " + classes);
+            assertFalse(classes.contains("com.example.InhCallerB"),
+                    "issue #8: InhCallerB's receiver is InhChildB, which cannot hold an "
+                            + "InhChildA, got: " + classes);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
     void invalidMaxDepthIsRejected() {
         TraceCallersService svc = new TraceCallersService();
         assertThrows(TraceCallersService.TraceCallersException.class,
