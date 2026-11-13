@@ -110,6 +110,11 @@ public final class ProjectIndex {
      * and {@code container} is the declaring class FQN. {@code signature}
      * carries the method/constructor full parameter-type list, or null
      * for types and fields.
+     *
+     * <p>{@code detail} is an optional, searchable payload: for MyBatis
+     * mapper statements it is the SQL body, so {@code find_symbols} can
+     * match on SQL content ("which mapper queries the user table?")
+     * rather than only the statement id. Null for every other symbol kind.
      */
     public record Symbol(
             String name,
@@ -118,7 +123,15 @@ public final class ProjectIndex {
             String container,
             String file,
             int line,
-            String signature) {}
+            String signature,
+            String detail) {
+
+        /** Convenience constructor for symbols without a {@code detail}. */
+        public Symbol(String name, String kind, String fqn, String container,
+                      String file, int line, String signature) {
+            this(name, kind, fqn, container, file, line, signature, null);
+        }
+    }
 
     private final Map<MethodKey, Set<MethodKey>> calls = new ConcurrentHashMap<>();
     /**
@@ -390,17 +403,30 @@ public final class ProjectIndex {
     }
 
     /**
-     * Returns every mapper statement for the mapper interface method
-     * {@code namespace#method}, in file order. Used by
-     * {@code trace_callees} to attach the SQL that implements a mapper
-     * interface method.
+     * The mapper element types that implement a mapper interface method.
+     * {@code <sql>} fragments are reusable snippets, not method
+     * implementations, so they are indexed (searchable) but excluded here
+     * (issue #9 follow-up: a fragment with the same id as a method must not
+     * be attached to the method's callee tree).
+     */
+    private static final Set<String> METHOD_STATEMENT_TYPES =
+            Set.of("select", "insert", "update", "delete");
+
+    /**
+     * Returns every mapper statement that implements the mapper interface
+     * method {@code namespace#method} (select/insert/update/delete only),
+     * in file order. Used by {@code trace_callees} to attach the SQL that
+     * implements a mapper interface method.
      */
     public List<MapperStatement> mapperStatementsFor(String namespace, String method) {
         if (namespace == null || method == null) return List.of();
         List<MapperStatement> out = new ArrayList<>();
         synchronized (mapperStatements) {
             for (MapperStatement s : mapperStatements) {
-                if (namespace.equals(s.namespace) && method.equals(s.id)) out.add(s);
+                if (namespace.equals(s.namespace) && method.equals(s.id)
+                        && METHOD_STATEMENT_TYPES.contains(s.type)) {
+                    out.add(s);
+                }
             }
         }
         return out;
@@ -632,12 +658,16 @@ public final class ProjectIndex {
      *   <li>{@link #SUBSTRING} — case-insensitive substring (the historical
      *       behavior); {@code matchedText} is the substring of the name
      *       that matched, in the name's own casing.</li>
+     *   <li>{@link #DETAIL} — the symbol's searchable payload
+     *       ({@link Symbol#detail()}, i.e. a mapper statement's SQL body)
+     *       contains the query. {@code matchedText} is a window of the
+     *       payload around the match.</li>
      *   <li>{@link #FUZZY} — Levenshtein distance within the threshold;
      *       only produced when the caller opts in. {@code distance} is the
      *       edit distance.</li>
      * </ul>
      */
-    public enum MatchKind { EXACT, CASE_INSENSITIVE, SUBSTRING, FUZZY }
+    public enum MatchKind { EXACT, CASE_INSENSITIVE, SUBSTRING, DETAIL, FUZZY }
 
     /**
      * One {@code find_symbols} hit: the symbol plus the match annotation.
@@ -701,6 +731,21 @@ public final class ProjectIndex {
      */
     public SymbolMatchResult searchSymbols(String query, String kindFilter, int limit,
                                            boolean fuzzy) {
+        return searchSymbols(query, kindFilter, 0, limit, fuzzy);
+    }
+
+    /**
+     * As {@link #searchSymbols(String, String, int, boolean)}, with an
+     * explicit window offset (issue #9 follow-up: {@code find_symbols}
+     * pagination). The window is applied after the stable sort, so
+     * {@code offset}/{@code limit} page deterministically.
+     *
+     * @param offset number of matches to skip (0 = start from the first)
+     * @param limit  maximum number of matches to return; pass
+     *               {@link Integer#MAX_VALUE} for "no cap"
+     */
+    public SymbolMatchResult searchSymbols(String query, String kindFilter,
+                                           int offset, int limit, boolean fuzzy) {
         if (query == null || query.isEmpty()) {
             return new SymbolMatchResult(List.of(), 0);
         }
@@ -726,22 +771,24 @@ public final class ProjectIndex {
             return sa.compareTo(sb);
         });
         int total = hits.size();
-        // A negative limit is a caller bug; preserve the historical
-        // contract of an empty match list (with the full total) rather
-        // than throwing from subList.
-        int effectiveLimit = Math.max(0, limit);
-        if (hits.size() > effectiveLimit) {
-            hits = new ArrayList<>(hits.subList(0, effectiveLimit));
-        }
-        return new SymbolMatchResult(hits, total);
+        // A negative offset or limit is a caller bug; preserve the
+        // historical contract of clamping rather than throwing from
+        // subList.
+        int from = Math.min(Math.max(0, offset), total);
+        int to = (int) Math.min((long) from + Math.max(0, limit), total);
+        List<SymbolMatch> window = (from == 0 && to == total)
+                ? hits
+                : new ArrayList<>(hits.subList(from, to));
+        return new SymbolMatchResult(window, total);
     }
 
     /**
      * Matches one symbol against the query, returning the annotated hit or
-     * null. Order matters: exact, then case-insensitive equality, then
-     * substring, then (opt-in) fuzzy — the first that applies wins, so a
-     * name that is both an exact match and a substring is reported as
-     * {@link MatchKind#EXACT}.
+     * null. Order matters: exact, then case-insensitive equality, then a
+     * substring of the name, then a substring of the payload
+     * ({@link Symbol#detail()}), then (opt-in) fuzzy — the first that
+     * applies wins, so a name that is both an exact match and a substring
+     * is reported as {@link MatchKind#EXACT}.
      */
     private static SymbolMatch matchSymbol(Symbol s, String query, String needle,
                                            boolean fuzzy, int maxDistance) {
@@ -763,6 +810,16 @@ public final class ProjectIndex {
                     : name;
             return new SymbolMatch(s, MatchKind.SUBSTRING, matched, 0);
         }
+        // Mapper statements carry their SQL body as the searchable payload,
+        // so "which mapper queries the user table?" works by content.
+        if (s.detail != null) {
+            String detailLower = s.detail.toLowerCase(Locale.ROOT);
+            int di = detailLower.indexOf(needle);
+            if (di >= 0) {
+                return new SymbolMatch(s, MatchKind.DETAIL,
+                        detailWindow(s.detail, di, needle.length()), 0);
+            }
+        }
         if (fuzzy && Math.abs(name.length() - query.length()) <= maxDistance) {
             int distance = levenshtein(lower, needle);
             if (distance <= maxDistance) {
@@ -770,6 +827,20 @@ public final class ProjectIndex {
             }
         }
         return null;
+    }
+
+    /**
+     * A ~40-character window of {@code detail} around the match at
+     * {@code idx}, with {@code ...} markers when the window is clipped.
+     * Used as the {@link SymbolMatch#matchedText()} for
+     * {@link MatchKind#DETAIL} hits, so a long SQL body is readable.
+     */
+    private static String detailWindow(String detail, int idx, int length) {
+        int from = Math.max(0, idx - 20);
+        int to = Math.min(detail.length(), idx + length + 20);
+        String prefix = from > 0 ? "..." : "";
+        String suffix = to < detail.length() ? "..." : "";
+        return prefix + detail.substring(from, to) + suffix;
     }
 
     /**
@@ -842,17 +913,6 @@ public final class ProjectIndex {
     public Set<MethodKey> invokesOf(MethodKey caller) {
         Set<MethodKey> set = invokes.get(caller);
         return set == null ? Set.of() : set;
-    }
-
-    /**
-     * Defensive snapshot of {@link #invokesOf(MethodKey)}.
-     */
-    public List<MethodKey> invokesOfList(MethodKey caller) {
-        Set<MethodKey> set = invokes.get(caller);
-        if (set == null) return Collections.emptyList();
-        synchronized (set) {
-            return List.copyOf(set);
-        }
     }
 
     /**

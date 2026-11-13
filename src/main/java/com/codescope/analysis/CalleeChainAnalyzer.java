@@ -80,6 +80,22 @@ public final class CalleeChainAnalyzer {
      * real node on both. Same contract as {@link CallChainAnalyzer}.
      */
     public Result traceCallees(ProjectIndex index, MethodKey displayTarget, List<MethodKey> seeds) {
+        return traceCallees(index, displayTarget, seeds, displayTarget.declaringClass);
+    }
+
+    /**
+     * As {@link #traceCallees(ProjectIndex, MethodKey, List)}, with an
+     * explicit <em>query class</em> used as the context for the root
+     * frame's hierarchy expansion (issue #9 follow-up, the callee-side
+     * counterpart of #8).
+     *
+     * <p>A family member other than the frame key contributes its callees
+     * only when its declaring class is a subtype of the context: the
+     * implementations/overrides in the queried class's subtree. A sibling
+     * override of an inherited method must not leak in.
+     */
+    public Result traceCallees(ProjectIndex index, MethodKey displayTarget, List<MethodKey> seeds,
+                               String queryClass) {
         List<MethodKey> effectiveSeeds = seeds.isEmpty() ? List.of(displayTarget) : seeds;
         ProjectIndex.SourceLoc rootLoc = index.declarationOf(displayTarget);
         CallNode root = new CallNode(
@@ -88,12 +104,13 @@ public final class CalleeChainAnalyzer {
                 rootLoc != null ? rootLoc.line() : 0);
         root.markEntryPoint(index.entryPointKindOf(displayTarget));
 
+        String rootContext = queryClass != null ? queryClass : displayTarget.declaringClass;
         Set<MethodKey> seedAncestors = new HashSet<>(effectiveSeeds);
         Deque<PathFrame> queue = new ArrayDeque<>();
         Set<MethodKey> directCalleesSeen = new HashSet<>();
         Set<MethodKey> rootCollected = new LinkedHashSet<>();
         for (MethodKey seed : effectiveSeeds) {
-            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true));
+            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true, rootContext));
         }
 
         int nodes = 1;
@@ -104,16 +121,23 @@ public final class CalleeChainAnalyzer {
         while (!queue.isEmpty()) {
             PathFrame f = queue.removeFirst();
             if (f.depth >= maxDepth) {
-                if (hasAnyCallee(index, f.key)) {
+                if (hasAnyCallee(index, f.key, f.contextClass)) {
                     f.node.addChild(CallNode.depthMarker(
                             f.key.declaringClass, f.key.methodName, f.key.arity));
                 }
                 continue;
             }
             // Union of the callees over the frame key's hierarchy group, in
-            // a stable order (relatedMethods returns a sorted set).
+            // a stable order (relatedMethods returns a sorted set). Only the
+            // subtree implementations of the context class contribute: a
+            // sibling override of an inherited method is not part of the
+            // queried class's family.
             Set<MethodKey> frameCallees = new LinkedHashSet<>();
             for (MethodKey relatedKey : index.relatedMethods(f.key)) {
+                if (!relatedKey.equals(f.key)
+                        && !index.isSubtypeOf(relatedKey.declaringClass, f.contextClass)) {
+                    continue;
+                }
                 frameCallees.addAll(index.invokesOf(relatedKey));
             }
             Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
@@ -143,7 +167,10 @@ public final class CalleeChainAnalyzer {
                 Set<MethodKey> childAncestors = new HashSet<>(f.ancestors.size() + 1);
                 childAncestors.add(callee);
                 childAncestors.addAll(f.ancestors);
-                queue.addLast(new PathFrame(callee, child, childAncestors, f.depth + 1, false));
+                // Deeper frames ask "what does this method call?", so their
+                // context is the callee's own declaring class.
+                queue.addLast(new PathFrame(callee, child, childAncestors, f.depth + 1, false,
+                        callee.declaringClass));
                 nodes++;
                 if (nodes >= maxNodes) {
                     root.markNodeCapTruncated();
@@ -193,24 +220,30 @@ public final class CalleeChainAnalyzer {
     }
 
     /**
-     * True if {@code key} has any recorded callee across its hierarchy
-     * group — used to decide whether a frame on the {@code maxDepth}
-     * boundary should emit a depth marker (a leaf on the boundary has
-     * nothing to truncate).
+     * True if {@code key} has any recorded callee across the part of its
+     * hierarchy group that belongs to {@code contextClass}'s subtree —
+     * used to decide whether a frame on the {@code maxDepth} boundary
+     * should emit a depth marker (a leaf on the boundary has nothing to
+     * truncate).
      */
-    private static boolean hasAnyCallee(ProjectIndex index, MethodKey key) {
+    private static boolean hasAnyCallee(ProjectIndex index, MethodKey key,
+                                       String contextClass) {
         for (MethodKey relatedKey : index.relatedMethods(key)) {
+            if (!relatedKey.equals(key)
+                    && !index.isSubtypeOf(relatedKey.declaringClass, contextClass)) {
+                continue;
+            }
             if (!index.invokesOf(relatedKey).isEmpty()) return true;
         }
         return false;
     }
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
-                             int depth, boolean isRoot,
+                             int depth, boolean isRoot, String contextClass,
                              Set<MethodKey> localCalleesSeen) {
         PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
-                  int depth, boolean isRoot) {
-            this(key, node, ancestors, depth, isRoot, new HashSet<>());
+                  int depth, boolean isRoot, String contextClass) {
+            this(key, node, ancestors, depth, isRoot, contextClass, new HashSet<>());
         }
     }
 }

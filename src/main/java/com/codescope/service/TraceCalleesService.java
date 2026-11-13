@@ -102,7 +102,10 @@ public final class TraceCalleesService {
 
         CalleeChainAnalyzer analyzer = new CalleeChainAnalyzer(
                 CalleeChainAnalyzer.DEFAULT_MAX_NODES, maxDepth);
-        CalleeChainAnalyzer.Result r = analyzer.traceCallees(index, display, seeds);
+        // The callee-side counterpart of issue #8: the queried class is the
+        // context for the root frame's hierarchy expansion, so a sibling
+        // override of an inherited method does not leak its callees in.
+        CalleeChainAnalyzer.Result r = analyzer.traceCallees(index, display, seeds, className);
 
         String message = ProjectIndexCache.withSkippedFilesSuffix(r.message(), index);
 

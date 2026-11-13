@@ -96,6 +96,21 @@ public final class FindSymbolsService {
                                   Path projectRoot, boolean refresh,
                                   boolean includeTests, int limit, boolean fuzzy)
             throws FindSymbolsException {
+        return findSymbolsJson(query, kind, projectRoot, refresh, includeTests, limit, 0, fuzzy);
+    }
+
+    /**
+     * As {@link #findSymbolsJson(String, String, Path, boolean, boolean, int, boolean)},
+     * with an explicit window offset (issue #9 follow-up: pagination).
+     *
+     * @param offset number of matches to skip, applied after the stable
+     *               sort; {@code total} in the envelope always reports the
+     *               full match count so the caller can page deterministically
+     */
+    public String findSymbolsJson(String query, String kind,
+                                  Path projectRoot, boolean refresh,
+                                  boolean includeTests, int limit, int offset, boolean fuzzy)
+            throws FindSymbolsException {
         if (query == null || query.isBlank()) {
             throw new FindSymbolsException("Missing or blank required argument: query");
         }
@@ -103,24 +118,28 @@ public final class FindSymbolsService {
             throw new FindSymbolsException("Unknown kind '" + kind
                     + "'. Valid: " + VALID_KINDS);
         }
+        if (offset < 0) {
+            throw new FindSymbolsException("offset must be >= 0; got " + offset + ".");
+        }
         int effectiveLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
 
         ProjectIndex index = ProjectIndexCache.validateAndLoad(
                 indexCache, projectRoot, refresh, includeTests, FindSymbolsException::new);
 
         ProjectIndex.SymbolMatchResult result =
-                index.searchSymbols(query, kind, effectiveLimit, fuzzy);
+                index.searchSymbols(query, kind, offset, effectiveLimit, fuzzy);
         List<ProjectIndex.SymbolMatch> matches = result.matches();
-        // Total reflects every match that existed before the limit was
-        // applied; a strict greater-than check distinguishes "capped at
-        // limit" from "happens to equal limit" without a second scan.
-        boolean truncated = result.totalCount() > effectiveLimit;
+        int total = result.totalCount();
+        // Truncated when the window ends before the last match.
+        boolean truncated = total > (long) offset + effectiveLimit;
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("query", query);
         out.put("kind", kind);
         out.put("status", "ok");
-        out.put("message", buildMessage(query, kind, matches, truncated, effectiveLimit));
+        out.put("message", buildMessage(query, kind, matches, truncated, effectiveLimit, offset,
+                total));
+        out.put("total", total);
         out.put("symbols", buildSymbolsArray(query, matches, new SourceSnippet(projectRoot)));
         try {
             return json.writeValueAsString(out);
@@ -131,7 +150,7 @@ public final class FindSymbolsService {
 
     private static String buildMessage(String query, String kind,
                                        List<ProjectIndex.SymbolMatch> matches, boolean truncated,
-                                       int limit) {
+                                       int limit, int offset, int total) {
         if (matches.isEmpty()) {
             String hint = kind == null
                     ? "Try a shorter query or pass a `kind` filter (one of: "
@@ -144,9 +163,15 @@ public final class FindSymbolsService {
         String noun = matches.size() == 1 ? "symbol" : "symbols";
         String base = "Found " + matches.size() + " " + noun + " matching '" + query + "'"
                 + (kind == null ? "" : " (kind=" + kind + ")") + ".";
-        return truncated
-                ? base + " (capped at limit=" + limit + "; refine the query to see more)"
-                : base;
+        if (truncated) {
+            base = base + " (capped at limit=" + limit + "; refine the query to see more)";
+        }
+        if (offset > 0 || truncated) {
+            base = base + " (showing " + (Math.min(offset + 1, total)) + "-"
+                    + (offset + matches.size()) + " of " + total
+                    + "; pass offset/limit to paginate)";
+        }
+        return base;
     }
 
     private static List<Map<String, Object>> buildSymbolsArray(
@@ -163,6 +188,9 @@ public final class FindSymbolsService {
             entry.put("line", s.line());
             entry.put("signature", s.signature());
             entry.put("match", buildMatchJson(query, m));
+            // Mapper statements carry their SQL body as a searchable
+            // payload; surface it so a content hit is readable in place.
+            if (s.detail() != null) entry.put("detail", s.detail());
             // Issue #9: the declaration line, so a hit can be judged
             // without opening the file.
             String snippet = snippets.line(s.file(), s.line());
@@ -173,15 +201,18 @@ public final class FindSymbolsService {
     }
 
     /**
-     * Builds the issue #9 match annotation: how the hit matched, the text
-     * that matched (in the name's own casing), whether the case differs
-     * from the query, and the edit distance for fuzzy hits. This is the
-     * "标注差异" half of the feature — without it, a case-insensitive or
-     * fuzzy hit looked identical to an exact one.
+     * Builds the issue #9 match annotation: how the hit matched, which
+     * field matched ({@code name} or the symbol's {@code detail} payload),
+     * the text that matched, whether the case differs from the query, and
+     * the edit distance for fuzzy hits. This is the "标注差异" half of the
+     * feature — without it, a case-insensitive or fuzzy hit looked
+     * identical to an exact one.
      */
     private static Map<String, Object> buildMatchJson(String query, ProjectIndex.SymbolMatch m) {
         Map<String, Object> match = new LinkedHashMap<>();
+        boolean detailMatch = m.kind() == ProjectIndex.MatchKind.DETAIL;
         match.put("type", m.kind().name().toLowerCase(Locale.ROOT));
+        match.put("field", detailMatch ? "detail" : "name");
         match.put("matched", m.matchedText());
         boolean caseDiffers = m.kind() == ProjectIndex.MatchKind.CASE_INSENSITIVE
                 || (m.kind() == ProjectIndex.MatchKind.SUBSTRING

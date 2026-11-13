@@ -123,6 +123,76 @@ class MapperXmlTest {
     }
 
     @Test
+    void sqlFragmentsAreNotAttachedAsMethodImplementations(@TempDir Path tmp) throws Exception {
+        // A <sql id="..."> element is a reusable fragment, not the
+        // implementation of a mapper method; only select/insert/update/
+        // delete may attach to the callee tree.
+        writeJava(tmp, """
+                package com.example;
+                public interface UserMapper { String findById(Long id); }
+                """);
+        writeMapperXml(tmp, mapperXml("""
+                <sql id="findById">SELECT 1</sql>
+                <select id="findById" resultType="String">SELECT 2</select>
+                """));
+        ProjectIndex index = build(tmp, "UserMapper.java");
+
+        List<ProjectIndex.MapperStatement> impl =
+                index.mapperStatementsFor("com.example.UserMapper", "findById");
+        assertEquals(1, impl.size(),
+                "only the <select> implements the method, got: " + index.mapperStatements());
+        assertEquals("select", impl.get(0).type());
+        assertTrue(impl.get(0).sql().contains("SELECT 2"));
+
+        // The fragment is still indexed (searchable), just not attached.
+        assertTrue(index.mapperStatements().stream()
+                        .anyMatch(s -> s.type().equals("sql") && s.sql().contains("SELECT 1")),
+                "the fragment should remain searchable, got: " + index.mapperStatements());
+
+        MethodResolver.Result res = MethodResolver.resolve(
+                index, "com.example.UserMapper", "findById", 1, List.of("java.lang.Long"));
+        MethodKey display = (res instanceof MethodResolver.Result.ProjectTarget pt)
+                ? pt.target() : ((MethodResolver.Result.LibrarySeeds) res).display();
+        CalleeChainAnalyzer.Result r = new CalleeChainAnalyzer().traceCallees(
+                index, display, List.of(display), "com.example.UserMapper");
+        String json = r.root().toJson(null, "callees").toString();
+        assertTrue(json.contains("SELECT 2"), "the real statement must be attached, got: " + json);
+        assertFalse(json.contains("SELECT 1"),
+                "the <sql> fragment must not be attached, got: " + json);
+    }
+
+    @Test
+    void testResourceMappersAreSkippedUnlessIncluded(@TempDir Path tmp) throws Exception {
+        // include_tests governs the Java source walk; the mapper XML scan
+        // must obey it too (src/<...>/test/resources is a test tree).
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Path testRes = Files.createDirectories(tmp.resolve("src/test/resources/com/example"));
+        Files.writeString(srcDir.resolve("UserMapper.java"), """
+                package com.example;
+                public interface UserMapper { String findById(Long id); }
+                """);
+        Files.writeString(testRes.resolve("UserMapper.xml"), """
+                <?xml version="1.0"?>
+                <mapper namespace="com.example.UserMapper">
+                  <select id="findById" resultType="String">SELECT 1</select>
+                </mapper>
+                """);
+        java.util.List<Path> sources = List.of(srcDir.resolve("UserMapper.java"));
+
+        ProjectIndex withoutTests = new JdtIndexer().build(sources, List.of(),
+                List.of(srcDir.getParent().getParent().toString()), tmp, false);
+        assertTrue(withoutTests.mapperStatements().isEmpty(),
+                "test-resource mappers must be skipped when include_tests=false, got: "
+                        + withoutTests.mapperStatements());
+
+        ProjectIndex withTests = new JdtIndexer().build(sources, List.of(),
+                List.of(srcDir.getParent().getParent().toString()), tmp, true);
+        assertEquals(1, withTests.mapperStatements().size(),
+                "include_tests=true must index the test-resource mapper, got: "
+                        + withTests.mapperStatements());
+    }
+
+    @Test
     void nonMapperXmlIsIgnored(@TempDir Path tmp) throws Exception {
         writeJava(tmp, """
                 package com.example;

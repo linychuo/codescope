@@ -124,7 +124,8 @@ public final class Cli {
             case "find-symbols" -> {
                 String q = p.requirePos(0, "query");
                 yield new FindSymbolsService(SHARED_CACHE).findSymbolsJson(
-                        q, p.kind, p.project, p.refresh, p.includeTests, p.limit, p.fuzzy);
+                        q, p.kind, p.project, p.refresh, p.includeTests, p.limit, p.offset,
+                        p.fuzzy);
             }
             default -> throw new UsageException("Unknown command: " + command
                     + ". Use trace-callers, trace-callees, find-call-sites, or find-symbols.");
@@ -229,7 +230,6 @@ public final class Cli {
                 if (p.aritySet) warnIrrelevant("--arity", command);
                 if (p.paramTypesSet) warnIrrelevant("--param-types", command);
                 if (p.maxDepthSet) warnIrrelevant("--max-depth", command);
-                if (p.offsetSet) warnIrrelevant("--offset", command);
             }
             case "trace-callers", "trace-callees" -> {
                 if (p.kindSet) warnIrrelevant("--kind", command);
@@ -313,7 +313,7 @@ public final class Cli {
                   --kind <kind>                      Symbol kind: class|interface|enum|record|annotation|method|constructor|field
                   --limit <n>                        Max results for find-symbols (default 100);
                                                  page size for find-call-sites (default: all)
-                  --offset <n>                       Skip the first n call sites (find-call-sites)
+                  --offset <n>                       Skip the first n results (find-call-sites/find-symbols)
                   --max-depth <n>                    Max levels for trace-callers/trace-callees (default 500)
                   --fuzzy                            Typo-tolerant matching for find-symbols
 

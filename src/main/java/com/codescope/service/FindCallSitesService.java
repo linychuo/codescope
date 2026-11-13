@@ -163,8 +163,8 @@ public final class FindCallSitesService {
         // Pagination applies to the fully-built, stably-sorted list so the
         // window is deterministic across calls (the union's map iteration
         // order is not part of the contract).
-        List<Map<String, Object>> allSites =
-                buildCallSitesArray(index, union, new SourceSnippet(projectRoot));
+        SourceSnippet snippets = new SourceSnippet(projectRoot);
+        List<Map<String, Object>> allSites = buildCallSitesArray(index, union, snippets);
         int total = allSites.size();
         List<Map<String, Object>> page = paginate(allSites, offset, limit);
         if (page.size() < total) {
@@ -182,6 +182,14 @@ public final class FindCallSitesService {
         targetJson.put("signature", display.shortSignature());
         targetJson.put("file", targetLoc != null ? targetLoc.file() : null);
         targetJson.put("line", targetLoc != null ? targetLoc.line() : 0);
+        // Issue #9: the target's declaration line, so the hit can be read
+        // without opening the file, and the entry-point label, matching the
+        // trace tools.
+        String targetSnippet = targetLoc == null
+                ? null : snippets.line(targetLoc.file(), targetLoc.line());
+        if (targetSnippet != null) targetJson.put("snippet", targetSnippet);
+        String targetEntry = index.entryPointKindOf(display);
+        if (targetEntry != null) targetJson.put("entryPoint", targetEntry);
         out.put("target", targetJson);
         out.put("status", "ok");
         out.put("message", message);
@@ -344,6 +352,12 @@ public final class FindCallSitesService {
             entry.put("caller", e.getKey().shortSignature());
             entry.put("caller_file", decl != null ? decl.file() : null);
             entry.put("caller_line", decl != null ? decl.line() : 0);
+            // Issue #9: the caller's declaration line and entry-point
+            // label, matching the trace tools' node shape.
+            String callerSnippet = snippets.line(decl.file(), decl.line());
+            if (callerSnippet != null) entry.put("caller_snippet", callerSnippet);
+            String callerEntry = index.entryPointKindOf(e.getKey());
+            if (callerEntry != null) entry.put("entryPoint", callerEntry);
             entry.put("call_site", callSite);
             out.add(entry);
         }

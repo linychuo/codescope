@@ -52,12 +52,21 @@ public final class MapperXmlIndexer {
 
     /** Scans the project and records every mapper statement found. */
     public void index() {
+        index(false);
+    }
+
+    /**
+     * As {@link #index()}, honoring the {@code includeTests} flag the Java
+     * source walk already obeys: mapper XML under {@code src/<...>/test/…}
+     * is skipped unless it is true (issue #9 follow-up).
+     */
+    public void index(boolean includeTests) {
         if (projectRoot == null || !Files.isDirectory(projectRoot)) return;
         try (Stream<Path> walk = Files.walk(projectRoot, MAX_DIRECTORY_DEPTH)) {
             walk.filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT)
                             .endsWith(".xml"))
-                    .filter(this::isScanCandidate)
+                    .filter(p -> isScanCandidate(p, includeTests))
                     .forEach(this::parseFile);
         } catch (Exception e) {
             // A walk failure (permissions, a disappearing directory) must not
@@ -68,23 +77,34 @@ public final class MapperXmlIndexer {
     }
 
     /**
-     * Excludes build output, VCS and other hidden directories. Evaluated on
-     * the path <em>relative to the project root</em> so a project that lives
-     * under a hidden directory (e.g. {@code ~/.cache/proj}) is still
-     * scanned.
+     * Excludes build output, VCS, hidden directories, and — when
+     * {@code includeTests} is false — test trees. Evaluated on the path
+     * <em>relative to the project root</em> so a project that lives under a
+     * hidden directory (e.g. {@code ~/.cache/proj}) is still scanned.
+     *
+     * <p>A test tree is recognized by a {@code test} segment immediately
+     * followed by {@code java} or {@code resources} (the Maven layout the
+     * Java source walk uses), so a main resource folder that merely
+     * contains a {@code test} subdirectory is not skipped.
      */
-    private boolean isScanCandidate(Path p) {
+    private boolean isScanCandidate(Path p, boolean includeTests) {
         Path rel;
         try {
             rel = projectRoot.relativize(p);
         } catch (RuntimeException e) {
             rel = p;
         }
+        Path prev = null;
         for (Path part : rel) {
             String name = part.toString();
             if (name.startsWith(".") || name.equals("target") || name.equals("node_modules")) {
                 return false;
             }
+            if (!includeTests && prev != null && prev.toString().equals("test")
+                    && (name.equals("java") || name.equals("resources"))) {
+                return false;
+            }
+            prev = part;
         }
         return true;
     }
@@ -209,8 +229,9 @@ public final class MapperXmlIndexer {
         ProjectIndex.MapperStatement statement =
                 new ProjectIndex.MapperStatement(namespace, id, type, sql, relPath, line);
         index.recordMapperStatement(statement);
-        // Also surface the statement in find_symbols by its id.
+        // Also surface the statement in find_symbols: searchable by id
+        // (the name) and by SQL content (the detail payload).
         index.recordSymbol(new ProjectIndex.Symbol(
-                id, "mapper-statement", namespace + "#" + id, namespace, relPath, line, type));
+                id, "mapper-statement", namespace + "#" + id, namespace, relPath, line, type, sql));
     }
 }

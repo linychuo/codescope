@@ -315,6 +315,49 @@ class ReceiverTypeFilterTest {
     }
 
     @Test
+    void calleeTreeOfInheritedMethodExcludesSiblingOverride(@TempDir Path tmp) throws Exception {
+        // The callee-side counterpart of issue #8: ChildA inherits save(),
+        // ChildB overrides it. trace_callees(ChildA#save) must show what
+        // Parent#save calls (helper), not what the sibling override calls
+        // (other).
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Parent.java"), """
+                package com.example;
+                public class Parent {
+                    public void save(String s) { helper(); }
+                    void helper() {}
+                }
+                """);
+        Files.writeString(srcDir.resolve("ChildA.java"), """
+                package com.example;
+                public class ChildA extends Parent { }
+                """);
+        Files.writeString(srcDir.resolve("ChildB.java"), """
+                package com.example;
+                public class ChildB extends Parent {
+                    @Override public void save(String s) { other(); }
+                    void other() {}
+                }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Parent.java", "ChildA.java", "ChildB.java");
+
+        MethodResolver.Result res = MethodResolver.resolve(index, "com.example.ChildA",
+                "save", null, null);
+        MethodKey display = (res instanceof MethodResolver.Result.ProjectTarget pt)
+                ? pt.target() : ((MethodResolver.Result.LibrarySeeds) res).display();
+        List<MethodKey> seeds = (res instanceof MethodResolver.Result.ProjectTarget pt)
+                ? List.of(pt.target()) : ((MethodResolver.Result.LibrarySeeds) res).seeds();
+        CalleeChainAnalyzer.Result down =
+                new CalleeChainAnalyzer().traceCallees(index, display, seeds, "com.example.ChildA");
+        String json = down.root().toJson(null, "callees").toString();
+        assertTrue(json.contains("helper"),
+                "the inherited method's own callee must be present, got: " + json);
+        assertFalse(json.contains("other"),
+                "a sibling override's callee must not leak into the inherited method's tree, got: "
+                        + json);
+    }
+
+    @Test
     void superCallOnThisIsAttributedToTheTargetClass(@TempDir Path tmp) throws Exception {
         // The super call inside ChildA must remain a caller of ChildA#save
         // (it dispatches on `this`, a ChildA). Recording the superclass as

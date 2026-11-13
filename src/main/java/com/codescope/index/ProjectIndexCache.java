@@ -124,7 +124,8 @@ public final class ProjectIndexCache {
             // Relativize against the effective root (the aggregator when the
             // user pointed at a sub-module), not the sub-module itself —
             // otherwise sibling-module files get ".." segments.
-            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), load.root());
+            return indexer.build(load.sources(), load.classpath(), load.sourcepath(), load.root(),
+                    key.includeTests());
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to load project at " + key.projectRoot(), e);
         }

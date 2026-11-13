@@ -29,7 +29,28 @@ public final class JdtIndexer {
                               List<String> classpath,
                               List<String> sourcepath,
                               Path projectRoot) {
+        return build(sources, classpath, sourcepath, projectRoot, false);
+    }
+
+    /**
+     * As {@link #build(List, List, List, Path)}, with the
+     * {@code includeTests} flag that the Java source walk already obeys:
+     * mapper XML under {@code src/<...>/test/resources} is indexed only
+     * when it is true (issue #9 follow-up).
+     */
+    public ProjectIndex build(List<Path> sources,
+                              List<String> classpath,
+                              List<String> sourcepath,
+                              Path projectRoot,
+                              boolean includeTests) {
         ProjectIndex index = new ProjectIndex();
+
+        // MyBatis mapper XML (issue #9 item 4): the XML is the
+        // implementation of a mapper interface method, so index its
+        // statements alongside the Java sources. Scanned before the
+        // early return so an XML-only project still gets its statements;
+        // independent of the Java bindings, so it needs no parse pass.
+        new MapperXmlIndexer(index, projectRoot).index(includeTests);
 
         if (sources.isEmpty()) return index;
 
@@ -74,11 +95,6 @@ public final class JdtIndexer {
                 }
             }
         }
-        // MyBatis mapper XML (issue #9 item 4): the XML is the
-        // implementation of a mapper interface method, so index its
-        // statements alongside the Java sources. Scanned after the Java
-        // pass because it only needs the project root, not the bindings.
-        new MapperXmlIndexer(index, projectRoot).index();
         // Reverse-type-hierarchy pass: every virtual-dispatch method
         // declared on a type T is also method-hierarchy-related to
         // any same-named, same-arity method declared on a subtype of

@@ -125,6 +125,68 @@ class FindSymbolsServiceTest {
     }
 
     @Test
+    void totalAndOffsetAreReported() throws Exception {
+        // Issue #9 follow-up: find_symbols pages like find_call_sites —
+        // `total` reports the full match count and `offset` skips matches
+        // after the stable sort.
+        FindSymbolsService svc = new FindSymbolsService();
+        String first = svc.findSymbolsJson("leaf", "method", FIXTURE, false, false, 1, 0, false);
+        JsonNode t1 = new ObjectMapper().readTree(first);
+        int total = t1.path("total").asInt();
+        assertTrue(total >= 2, "expected several leaf methods, got: " + t1);
+        assertEquals(1, t1.path("symbols").size(), "limit=1 must cap the window, got: " + t1);
+        assertTrue(t1.path("message").asText().contains("of " + total),
+                "a truncated window must say so, got: " + t1.path("message").asText());
+
+        String second = svc.findSymbolsJson("leaf", "method", FIXTURE, false, false, 1, 1, false);
+        JsonNode t2 = new ObjectMapper().readTree(second);
+        assertEquals(total, t2.path("total").asInt(), "total must be window-independent");
+        assertEquals(1, t2.path("symbols").size());
+        assertNotEquals(t1.path("symbols").get(0).path("fqn").asText(),
+                t2.path("symbols").get(0).path("fqn").asText(),
+                "offset=1 must page to a different match");
+    }
+
+    @Test
+    void negativeOffsetIsRejected() {
+        FindSymbolsService svc = new FindSymbolsService();
+        assertThrows(FindSymbolsService.FindSymbolsException.class,
+                () -> svc.findSymbolsJson("x", null, FIXTURE, false, false, 10, -1, false));
+    }
+
+    @Test
+    void mapperSqlContentIsSearchable() throws Exception {
+        // Issue #9 follow-up: mapper statements are searchable by SQL body,
+        // not only by statement id.
+        Path tmp = Files.createTempDirectory("codescope-fs-sql-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.createDirectories(tmp.resolve("src/main/resources/com/example"));
+            Files.writeString(tmp.resolve("src/main/java/com/example/SqlMapper.java"), """
+                    package com.example;
+                    public interface SqlMapper { String findUser(); }
+                    """);
+            Files.writeString(tmp.resolve("src/main/resources/com/example/SqlMapper.xml"), """
+                    <?xml version="1.0"?>
+                    <mapper namespace="com.example.SqlMapper">
+                      <select id="findUser" resultType="String">SELECT * FROM app_user</select>
+                    </mapper>
+                    """);
+
+            FindSymbolsService svc = new FindSymbolsService();
+            String json = svc.findSymbolsJson("app_user", "mapper-statement",
+                    tmp, true, false, 100, 0, false);
+            JsonNode syms = new ObjectMapper().readTree(json).path("symbols");
+            assertEquals(1, syms.size(), "SQL content search must find the statement, got: " + syms);
+            assertEquals("detail", syms.get(0).path("match").path("field").asText());
+            assertTrue(syms.get(0).path("match").path("matched").asText().contains("app_user"));
+            assertTrue(syms.get(0).path("detail").asText().contains("SELECT * FROM app_user"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
     void substringSearchMatchesAcrossNames() throws Exception {
         // "lea" should match every method whose name contains "lea"
         // (leaf, leafWithArg, distanceFromOrigin) plus possibly other

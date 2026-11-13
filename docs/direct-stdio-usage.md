@@ -64,17 +64,21 @@ mvn package
 
 | 参数 | 工具 | 作用 |
 |---|---|---|
-| `max_depth` | trace_callers | 最多向上展开几层 caller：`0` 只返回目标，`1` 只含直接 caller，依此类推。默认 500（安全上限 1000）。被截断的分支带 `truncated: true` 标记。 |
-| `offset` / `limit` | find_call_sites | 对扁平结果分页（先稳定排序再开窗）。`limit` 缺省不封顶；响应始终带 `total`。 |
+| `max_depth` | trace_callers / trace_callees | 最多展开几层：`0` 只返回目标，`1` 只含直接 caller/callee，依此类推。默认 500（安全上限 1000）。被截断的分支带 `truncated: true` 标记。 |
+| `offset` / `limit` | find_call_sites / find_symbols | 对扁平结果分页（先稳定排序再开窗）。`find_call_sites` 的 `limit` 缺省不封顶；`find_symbols` 缺省 100。响应始终带 `total`。 |
 | `fuzzy` | find_symbols | 开启容错匹配（编辑距离 ≤ 1，查询长度 >7 时 ≤ 2）。默认关闭。 |
+
+`find_symbols` 的查询会匹配符号名，**也会匹配 mapper statement 的 SQL 正文**（例如查 `app_user` 能找到 `SELECT * FROM app_user` 那条 statement），命中条目的 `match.field` 会标成 `detail`。
 
 响应新增字段：
 
-- **snippet** — 结果节点附带源码行文本（`trace_callers` / `trace_callees` 的每个节点、`find_call_sites` 的每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
-- **match** — `find_symbols` 每个命中的匹配说明：`type`（`exact` / `case_insensitive` / `substring` / `fuzzy`）、`matched`（实际匹配文本，保留原始大小写）、`case_differs`、`distance`。
-- **total** — `find_call_sites` 窗口前的总调用点数。
-- **entryPoint** — `trace_callers` / `trace_callees` 节点上，框架入口标记（`spring-mvc` / `spring-scheduled` / `spring-event` / `junit5` / `junit4` / `testng` / `main` …）。
+- **snippet** — 结果节点附带源码行文本（`trace_callers` / `trace_callees` 的每个节点、`find_call_sites` 的 target 和每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
+- **match** — `find_symbols` 每个命中的匹配说明：`type`（`exact` / `case_insensitive` / `substring` / `detail` / `fuzzy`）、`field`（`name` 或 `detail`）、`matched`（实际匹配文本，保留原始大小写）、`case_differs`、`distance`。
+- **total** — `find_call_sites` / `find_symbols` 窗口前的总命中数。
+- **entryPoint** — `trace_callers` / `trace_callees` 的节点、`find_call_sites` 的 target 和 caller 条目上，框架入口标记（`spring-mvc` / `spring-scheduled` / `spring-event` / `junit5` / `junit4` / `testng` / `main` …）。
+- **caller_snippet** — `find_call_sites` 每条 caller 声明行的源码文本。
 - **sql** — `trace_callees` 中 mapper 接口方法的 SQL 叶子节点：`{type, text}`。
+- **detail** — `find_symbols` 中 mapper statement 的 SQL 正文（可搜索、可展示）。
 - `find_symbols` 新增 kind `mapper-statement`（MyBatis mapper XML 的 statement）。
 
 ### 3. 一行跑完

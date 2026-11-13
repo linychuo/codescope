@@ -146,3 +146,28 @@ DTD/外部实体被禁用（XXE 防护）。
 - `TraceCalleesServiceTest`（5 个）：链、maxDepth、叶子、接口展开、非法深度。
 - `EntryPointTest`（6 个）：Spring 方法/类注解、Scheduled/EventListener、JUnit、main、普通方法。
 - `MapperXmlTest`（4 个）：语句索引 + SQL 挂载、动态标签、非 mapper XML 忽略、DOCTYPE。
+
+## 6. 一致性收尾（全量 review 后补）
+
+1. **`trace_callees` 家族扩展加 query class context**：只扩展 context 类的子树实现
+   （`M.declaringClass <: contextClass`；根帧 context = 查询类，更深帧 = 该方法声明类）。
+   这是 #8 的 callee 侧对应——继承查询不再把兄弟 override 的 callee 混进来。
+2. **`<sql>` 片段不是方法实现**：`mapperStatementsFor` 只返回
+   `select/insert/update/delete`；`<sql>` 仍作为符号可搜，但不挂到 callee 树。
+3. **`find_call_sites` 输出对齐 trace 工具**：target 带 `snippet` + `entryPoint`；
+   caller 条目带 `entryPoint` + `caller_snippet`。
+4. **`find_symbols` 输出对齐 `find_call_sites`**：新增 `total`。
+5. **mapper XML 扫描感知 `include_tests`**：`JdtIndexer.build` 增加该参数，
+   `MapperXmlIndexer` 跳过 `src/<...>/test/{java,resources}`（与 Java 源码 walk 一致）；
+   扫描移到 `sources.isEmpty()` 提前返回之前，XML-only 项目也能索引。
+6. **`find_symbols` 分页**：`offset`（MCP + CLI），稳定排序后开窗。
+7. **`find_symbols` SQL 正文搜索**：`Symbol` 增加可搜索的 `detail` 载荷（mapper
+   statement 的 SQL），名字匹配失败后匹配 `detail`，`match.field` 标 `detail`，
+   `matched` 给 SQL 窗口。
+8. **删除死代码** `ProjectIndex.invokesOfList`（全仓库无调用）。
+
+测试：新增 `ReceiverTypeFilterTest.calleeTreeOfInheritedMethodExcludesSiblingOverride`、
+`MapperXmlTest.sqlFragmentsAreNotAttachedAsMethodImplementations` /
+`testResourceMappersAreSkippedUnlessIncluded`、
+`FindCallSitesServiceTest.entryPointLabelAndSnippetsAreReported`、
+`FindSymbolsServiceTest.totalAndOffsetAreReported` / `mapperSqlContentIsSearchable`。

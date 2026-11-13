@@ -256,6 +256,52 @@ class FindCallSitesServiceTest {
     }
 
     @Test
+    void entryPointLabelAndSnippetsAreReported() throws Exception {
+        // Issue #9: the call-site entries and the target carry the same
+        // context the trace tools do — the entry-point label and the source
+        // snippets for both the caller declaration and the call expression.
+        Path tmp = Files.createTempDirectory("codescope-fcs-entry-");
+        try {
+            copyDir(FIXTURE, tmp);
+            Files.writeString(tmp.resolve("src/main/java/com/example/EntryController.java"), """
+                    package com.example;
+                    import org.springframework.web.bind.annotation.GetMapping;
+                    public class EntryController {
+                        @GetMapping("/x")
+                        public String handle() { return "x"; }
+                    }
+                    """);
+            Files.writeString(tmp.resolve("src/main/java/com/example/EntryCaller.java"), """
+                    package com.example;
+                    public class EntryCaller {
+                        public static void main(String[] args) { new EntryController().handle(); }
+                    }
+                    """);
+
+            FindCallSitesService svc = new FindCallSitesService();
+            String json = svc.findCallSitesJson("com.example.EntryController", "handle",
+                    null, null, tmp, true, false);
+            JsonNode tree = new ObjectMapper().readTree(json);
+
+            assertEquals("spring-mvc", tree.path("target").path("entryPoint").asText(),
+                    "target must carry the entry-point label, got: " + tree.path("target"));
+            assertEquals("    public String handle() { return \"x\"; }",
+                    tree.path("target").path("snippet").asText(),
+                    "target must carry its declaration snippet, got: " + tree.path("target"));
+
+            JsonNode site = tree.path("call_sites").get(0);
+            assertEquals("main", site.path("entryPoint").asText(),
+                    "a caller that is itself an entry point must be labelled, got: " + site);
+            assertTrue(site.path("caller_snippet").asText().contains("main"),
+                    "caller declaration snippet must be present, got: " + site);
+            assertTrue(site.path("call_site").path("snippet").asText().contains("handle()"),
+                    "call-site snippet must be present, got: " + site);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
     void invalidPagingWindowIsRejected() {
         FindCallSitesService svc = new FindCallSitesService();
         assertThrows(FindCallSitesService.FindCallSitesException.class,

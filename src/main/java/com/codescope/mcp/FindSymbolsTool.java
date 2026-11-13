@@ -34,12 +34,13 @@ public final class FindSymbolsTool extends AbstractMcpTool {
     public String description() {
         return "Search for symbols (classes, interfaces, enums, records, annotations, "
                 + "methods, constructors, fields, and MyBatis mapper statements) by "
-                + "case-insensitive substring on the simple name. Returns a flat list of "
-                + "matching symbols with their kind, FQN, container, and source location. "
-                + "Use this to answer \"where is X defined?\" or \"what classes/methods "
-                + "contain the word Y?\" without knowing the full qualified name. For "
-                + "transitive caller chains, use `trace_callers`; for non-transitive call "
-                + "positions, use `find_call_sites`.";
+                + "case-insensitive substring. Matches the symbol name, and for mapper "
+                + "statements also the SQL body (\"which mapper queries the user table?\"). "
+                + "Returns a flat list of matching symbols with their kind, FQN, container, "
+                + "and source location. Use this to answer \"where is X defined?\" or "
+                + "\"what classes/methods contain the word Y?\" without knowing the full "
+                + "qualified name. For transitive caller chains, use `trace_callers`; for "
+                + "non-transitive call positions, use `find_call_sites`.";
     }
 
     @Override
@@ -92,6 +93,13 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + FindSymbolsService.MAX_LIMIT + ". Large projects can match thousands "
                         + "of symbols on common names; lower this if you only need the first "
                         + "few hits."));
+        props.put("offset", Map.of(
+                "type", "integer",
+                "minimum", 0,
+                "default", 0,
+                "description", "Number of matches to skip, applied after the stable sort. "
+                        + "Use with `limit` to page; `total` in the response always reports the "
+                        + "full match count."));
         props.put("fuzzy", Map.of(
                 "type", "boolean",
                 "default", false,
@@ -99,8 +107,8 @@ public final class FindSymbolsTool extends AbstractMcpTool {
                         + "the query (typo tolerance: 1 edit for queries up to 7 characters, "
                         + "2 beyond). Off by default because it is noisier than substring "
                         + "matching. Every hit carries a `match` object saying how it matched "
-                        + "(exact / case_insensitive / substring / fuzzy, the matched text, "
-                        + "and the edit distance)."));
+                        + "(exact / case_insensitive / substring / detail / fuzzy, the field "
+                        + "that matched, the matched text, and the edit distance)."));
         schema.put("properties", props);
         return schema;
     }
@@ -113,15 +121,37 @@ public final class FindSymbolsTool extends AbstractMcpTool {
         boolean refresh = optionalBool(args, "refresh");
         boolean includeTests = optionalBool(args, "include_tests");
         int limit = optionalLimit(args);
+        int offset = optionalOffset(args);
         boolean fuzzy = optionalBool(args, "fuzzy");
 
         try {
             String json = service.findSymbolsJson(
-                    query, kind, projectRoot, refresh, includeTests, limit, fuzzy);
+                    query, kind, projectRoot, refresh, includeTests, limit, offset, fuzzy);
             return ToolResult.text(json);
         } catch (FindSymbolsService.FindSymbolsException e) {
             return ToolResult.error(e.getMessage());
         }
+    }
+
+    private static int optionalOffset(Map<String, Object> args) {
+        Object v = args.get("offset");
+        if (v == null) return 0;
+        int n;
+        if (v instanceof Number num) {
+            n = num.intValue();
+        } else if (v instanceof String s) {
+            try {
+                n = Integer.parseInt(s.trim());
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Optional argument 'offset' must be an integer; got: " + v);
+            }
+        } else {
+            throw new IllegalArgumentException("Optional argument 'offset' must be an integer; got: " + v);
+        }
+        if (n < 0) {
+            throw new IllegalArgumentException("Optional argument 'offset' must be >= 0; got: " + n);
+        }
+        return n;
     }
 
     private static int optionalLimit(Map<String, Object> args) {
