@@ -103,6 +103,7 @@ public final class CalleeChainAnalyzer {
                 rootLoc != null ? rootLoc.file() : null,
                 rootLoc != null ? rootLoc.line() : 0);
         root.markEntryPoint(index.entryPointKindOf(displayTarget));
+        root.markTransactional(index.isTransactional(displayTarget));
 
         String rootContext = queryClass != null ? queryClass : displayTarget.declaringClass;
         Set<MethodKey> seedAncestors = new HashSet<>(effectiveSeeds);
@@ -216,6 +217,7 @@ public final class CalleeChainAnalyzer {
                 ? CallNode.dedupedMarker(callee.declaringClass, callee.methodName, callee.arity, file, line)
                 : new CallNode(callee.declaringClass, callee.methodName, callee.arity, file, line);
         node.markEntryPoint(index.entryPointKindOf(callee));
+        node.markTransactional(index.isTransactional(callee));
         return node;
     }
 

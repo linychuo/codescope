@@ -106,7 +106,7 @@ public final class ProjectIndexCache {
                     entries.remove(key);
                 }
             }
-            ProjectIndex built = buildIndex(key);
+            ProjectIndex built = buildIndex(key, refresh);
             synchronized (entries) {
                 ProjectIndex raced = entries.get(key);
                 if (raced != null) return raced;
@@ -118,7 +118,38 @@ public final class ProjectIndexCache {
         }
     }
 
-    private ProjectIndex buildIndex(IndexCacheKey key) {
+    /**
+     * Builds (or loads from the disk cache) the index for {@code key}. The
+     * disk cache is keyed by {@link IndexFingerprint} — the sources, mapper
+     * XML, and pom contents — so a cache hit skips the Maven dependency
+     * resolution and the whole JDT parse, which is the expensive part for
+     * the CLI's one-shot invocations (issue #9 follow-up).
+     *
+     * <p>All cache operations are best-effort: a miss, an unreadable file,
+     * or a write failure simply falls back to a normal build.
+     */
+    private ProjectIndex buildIndex(IndexCacheKey key, boolean refresh) {
+        String fingerprint =
+                IndexFingerprint.compute(key.projectRoot(), key.includeTests());
+        Path cacheFile = fingerprint == null
+                ? null
+                : IndexFingerprint.cacheDir().resolve("index-" + fingerprint + ".ser");
+        if (!refresh && cacheFile != null) {
+            ProjectIndex cached = ProjectIndexStore.load(cacheFile);
+            if (cached != null) return cached;
+        }
+        ProjectIndex built = buildIndexFromSources(key);
+        if (cacheFile != null) {
+            try {
+                ProjectIndexStore.save(built, cacheFile);
+            } catch (IOException | RuntimeException e) {
+                // Never fail a build because the cache could not be written.
+            }
+        }
+        return built;
+    }
+
+    private ProjectIndex buildIndexFromSources(IndexCacheKey key) {
         try {
             ProjectLoader.LoadResult load = new ProjectLoader().load(key.projectRoot(), key.includeTests());
             // Relativize against the effective root (the aggregator when the

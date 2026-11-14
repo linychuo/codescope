@@ -58,10 +58,28 @@ public final class MethodResolver {
         if (target != null) return new Result.ProjectTarget(target);
 
         List<MethodKey> seeds = index.findInvokedKeys(className, methodName, arity, paramTypes);
-        MethodKey display = new MethodKey(className, methodName,
-                arity == null ? 0 : arity,
-                paramTypes == null ? List.of() : paramTypes);
-        if (seeds.isEmpty()) seeds = List.of(display);
+        if (seeds.isEmpty()) {
+            // Nothing recorded under (className, methodName): synthesize a
+            // display key. When the caller omitted the arity there is no
+            // better information, so the historical arity-0 label stands.
+            MethodKey display = new MethodKey(className, methodName,
+                    arity == null ? 0 : arity,
+                    paramTypes == null ? List.of() : paramTypes);
+            seeds = List.of(display);
+            return new Result.LibrarySeeds(seeds, display);
+        }
+        // The caller omitted the arity but the recorded call edges carry
+        // the real one: use it for the display label instead of the
+        // synthetic arity 0 (e.g. `CustomerMapper#selectById/1` rather than
+        // `/0` for a method inherited from a library BaseMapper).
+        MethodKey display;
+        if (arity == null) {
+            MethodKey seed = seeds.get(0);
+            display = new MethodKey(className, methodName, seed.arity, seed.parameterTypes);
+        } else {
+            display = new MethodKey(className, methodName, arity,
+                    paramTypes == null ? List.of() : paramTypes);
+        }
         return new Result.LibrarySeeds(seeds, display);
     }
 

@@ -3,8 +3,15 @@ package com.codescope.index;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamConstants;
@@ -19,15 +26,16 @@ import javax.xml.stream.XMLStreamReader;
  * hidden directories, parses each with StAX (chosen over DOM because it
  * exposes the start tag's line number), and records every
  * {@code <select>} / {@code <insert>} / {@code <update>} / {@code <delete>}
- * (plus reusable {@code <sql>} fragments) whose parent is the root
- * {@code <mapper>} element. Each statement becomes a
+ * (plus reusable {@code <sql>} fragments and {@code <resultMap>}s) whose
+ * parent is the root {@code <mapper>} element. Each becomes a
  * {@link ProjectIndex.MapperStatement} and a {@code mapper-statement}
- * symbol so {@code find_symbols} can find it.
+ * symbol so {@code find_symbols} can find it by id or SQL body.
  *
- * <p>The statement body is captured as normalized text with nested
- * dynamic-SQL tags ({@code <if>}, {@code <foreach>}, {@code <include>},
- * …) preserved as tag text, so the snippet still shows the shape of the
- * query. Whitespace is collapsed to a single line for display.
+ * <p>Statement bodies are captured as normalized text with nested
+ * dynamic-SQL tags ({@code <if>}, {@code <foreach>}, …) preserved, and
+ * {@code <include refid="…">} is expanded from the referenced
+ * {@code <sql>} fragment (same or other namespace, issue #9 follow-up).
+ * Whitespace is collapsed to a single line for display.
  *
  * <p>Parsed after the Java sources in {@link JdtIndexer#build} — mapper
  * statements are looked up by {@code (namespace, id)} at query time, so
@@ -38,9 +46,17 @@ public final class MapperXmlIndexer {
     /** Same directory-depth bound as {@code ProjectLoader}'s source walk. */
     private static final int MAX_DIRECTORY_DEPTH = 12;
 
-    /** Statement element names that map to a mapper interface method. */
+    /** Element types that implement a mapper interface method. */
     private static final Set<String> STATEMENT_TYPES =
             Set.of("select", "insert", "update", "delete", "sql");
+
+    /** Everything indexed, including {@code <resultMap>} (issue #9). */
+    private static final Set<String> INDEXED_TYPES =
+            Set.of("select", "insert", "update", "delete", "sql", "resultMap");
+
+    /** {@code <include refid="…"/>} (both the explicit-close and self-closing spellings). */
+    private static final Pattern INCLUDE_PATTERN =
+            Pattern.compile("<include\\s+refid=\"([^\"]+)\"\\s*(?:></include>|/>)");
 
     private final ProjectIndex index;
     private final Path projectRoot;
@@ -62,17 +78,42 @@ public final class MapperXmlIndexer {
      */
     public void index(boolean includeTests) {
         if (projectRoot == null || !Files.isDirectory(projectRoot)) return;
+        List<Path> files = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(projectRoot, MAX_DIRECTORY_DEPTH)) {
             walk.filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT)
                             .endsWith(".xml"))
                     .filter(p -> isScanCandidate(p, includeTests))
-                    .forEach(this::parseFile);
+                    .forEach(files::add);
         } catch (Exception e) {
             // A walk failure (permissions, a disappearing directory) must not
             // abort the build: the Java index is the primary product.
             index.recordSkippedFile(projectRoot.toString(),
                     "mapper xml scan failed: " + e.getMessage());
+            return;
+        }
+
+        // Single parse pass collecting <sql> fragments and raw statements;
+        // includes are expanded afterwards so a fragment may be defined in
+        // any file (or referenced across namespaces).
+        Map<String, Map<String, Fragment>> fragments = new HashMap<>();
+        List<RawStatement> raw = new ArrayList<>();
+        for (Path file : files) {
+            parseFile(file, fragments, raw);
+        }
+        // Fragments stay searchable (kind=mapper-statement, type=sql) even
+        // though they are not method implementations.
+        for (Map.Entry<String, Map<String, Fragment>> ns : fragments.entrySet()) {
+            for (Map.Entry<String, Fragment> e : ns.getValue().entrySet()) {
+                Fragment f = e.getValue();
+                record(new RawStatement(ns.getKey(), e.getKey(), "sql", "sql",
+                        f.text(), f.file(), f.line()), f.text());
+            }
+        }
+        for (RawStatement stmt : raw) {
+            String sql = normalize(expandIncludes(stmt.rawSql, stmt.namespace, fragments,
+                    new HashSet<>()));
+            record(stmt, sql);
         }
     }
 
@@ -109,7 +150,15 @@ public final class MapperXmlIndexer {
         return true;
     }
 
-    private void parseFile(Path xml) {
+    /** One indexed element before include expansion. */
+    private record RawStatement(String namespace, String id, String type, String signature,
+                                String rawSql, String file, int line) {}
+
+    /** A reusable {@code <sql>} fragment, kept searchable as well as expandable. */
+    private record Fragment(String text, String file, int line) {}
+
+    private void parseFile(Path xml, Map<String, Map<String, Fragment>> fragments,
+                           List<RawStatement> raw) {
         String relPath;
         try {
             relPath = projectRoot.relativize(xml).toString();
@@ -128,6 +177,7 @@ public final class MapperXmlIndexer {
             boolean rootSeen = false;
             String stmtId = null;
             String stmtType = null;
+            String stmtSignature = null;
             int stmtLine = 0;
             int stmtDepth = 0;
             StringBuilder sql = null;
@@ -150,14 +200,18 @@ public final class MapperXmlIndexer {
                                 return;
                             }
                         } else if (stmtId == null && stmtDepth == 0
-                                && STATEMENT_TYPES.contains(name)) {
+                                && INDEXED_TYPES.contains(name)) {
                             stmtId = attr(r, "id");
                             if (stmtId == null || stmtId.isEmpty()) {
-                                // A statement without an id cannot be mapped to
+                                // An element without an id cannot be mapped to
                                 // an interface method; skip it.
                                 break;
                             }
                             stmtType = name;
+                            // For a <resultMap> the mapped type is the useful
+                            // identifier; statements use the element type.
+                            stmtSignature = "resultMap".equals(name) ? attr(r, "type") : name;
+                            if (stmtSignature == null || stmtSignature.isEmpty()) stmtSignature = name;
                             stmtLine = r.getLocation().getLineNumber();
                             stmtDepth = 0;
                             sql = new StringBuilder();
@@ -176,11 +230,22 @@ public final class MapperXmlIndexer {
                     case XMLStreamConstants.END_ELEMENT -> {
                         if (stmtId == null) continue;
                         String name = r.getLocalName();
-                        if (stmtDepth == 0 && STATEMENT_TYPES.contains(name)) {
-                            record(namespace, stmtId, stmtType, stmtLine,
-                                    normalize(sql), relPath);
+                        if (stmtDepth == 0 && INDEXED_TYPES.contains(name)) {
+                            String key = namespace + "#" + stmtId;
+                            if ("sql".equals(stmtType)) {
+                                // A reusable fragment, not a method
+                                // implementation: collected for expansion
+                                // (and re-recorded as a searchable symbol).
+                                fragments.computeIfAbsent(namespace, k -> new HashMap<>())
+                                        .put(stmtId, new Fragment(normalize(sql.toString()),
+                                                relPath, stmtLine));
+                            } else {
+                                raw.add(new RawStatement(namespace, stmtId, stmtType,
+                                        stmtSignature, sql.toString(), relPath, stmtLine));
+                            }
                             stmtId = null;
                             stmtType = null;
+                            stmtSignature = null;
                             sql = null;
                         } else if (stmtDepth > 0) {
                             stmtDepth--;
@@ -194,6 +259,41 @@ public final class MapperXmlIndexer {
             // An unparseable XML file is reported but does not abort the build.
             index.recordSkippedFile(relPath, "mapper xml parse error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Expands every {@code <include refid="…">} in {@code sql} from the
+     * referenced {@code <sql>} fragment, recursively and with a cycle
+     * guard. A {@code refid} containing a dot is treated as
+     * {@code namespace.id} (cross-namespace); otherwise it resolves in the
+     * statement's own namespace (issue #9 follow-up).
+     */
+    private static String expandIncludes(String sql, String namespace,
+                                         Map<String, Map<String, Fragment>> fragments,
+                                         Set<String> visited) {
+        Matcher m = INCLUDE_PATTERN.matcher(sql);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String refid = m.group(1);
+            String ns;
+            String id;
+            int dot = refid.lastIndexOf('.');
+            if (dot >= 0) {
+                ns = refid.substring(0, dot);
+                id = refid.substring(dot + 1);
+            } else {
+                ns = namespace;
+                id = refid;
+            }
+            String key = ns + "#" + id;
+            Fragment frag = fragments.getOrDefault(ns, Map.of()).get(id);
+            String replacement = (frag != null && visited.add(key))
+                    ? expandIncludes(frag.text(), ns, fragments, visited)
+                    : "";
+            m.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 
     private static String attr(XMLStreamReader r, String name) {
@@ -219,19 +319,19 @@ public final class MapperXmlIndexer {
         sb.append('>');
     }
 
-    private static String normalize(StringBuilder raw) {
+    private static String normalize(String raw) {
         if (raw == null) return "";
-        return raw.toString().replaceAll("\\s+", " ").trim();
+        return raw.replaceAll("\\s+", " ").trim();
     }
 
-    private void record(String namespace, String id, String type, int line,
-                        String sql, String relPath) {
-        ProjectIndex.MapperStatement statement =
-                new ProjectIndex.MapperStatement(namespace, id, type, sql, relPath, line);
+    private void record(RawStatement stmt, String sql) {
+        ProjectIndex.MapperStatement statement = new ProjectIndex.MapperStatement(
+                stmt.namespace, stmt.id, stmt.type, sql, stmt.file, stmt.line);
         index.recordMapperStatement(statement);
-        // Also surface the statement in find_symbols: searchable by id
-        // (the name) and by SQL content (the detail payload).
+        // Also surface it in find_symbols: searchable by id (the name) and
+        // by SQL body (the detail payload).
         index.recordSymbol(new ProjectIndex.Symbol(
-                id, "mapper-statement", namespace + "#" + id, namespace, relPath, line, type, sql));
+                stmt.id, "mapper-statement", stmt.namespace + "#" + stmt.id,
+                stmt.namespace, stmt.file, stmt.line, stmt.signature, sql));
     }
 }

@@ -1,6 +1,7 @@
 package com.codescope.index;
 
 import com.codescope.model.MethodKey;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -23,8 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * on the set itself (since {@code LinkedHashSet} is not thread-safe, but is
  * much cheaper than {@code ArrayList.contains} for dedup on hot methods).
  */
-public final class ProjectIndex {
-    public record SourceLoc(String file, int line) {}
+public final class ProjectIndex implements Serializable {
+    private static final long serialVersionUID = 1L;
+    public record SourceLoc(String file, int line) implements Serializable {}
 
     /**
      * One recorded call-site fact: where the call expression sits
@@ -45,7 +47,7 @@ public final class ProjectIndex {
      * constructor). {@link #isSubtypeOf} treats null as "unknown" and
      * does not filter on it.
      */
-    public record CallSite(String file, int line, String receiverType) {}
+    public record CallSite(String file, int line, String receiverType) implements Serializable {}
 
     /**
      * A method invocation whose callee JDT could not resolve (issue #9
@@ -73,7 +75,8 @@ public final class ProjectIndex {
      * @param line         the 1-based line of the call expression
      */
     public record UnresolvedCall(MethodKey caller, String receiverType,
-                                 String methodName, int arity, String file, int line) {}
+                                 String methodName, int arity, String file, int line)
+            implements Serializable {}
 
     /**
      * One MyBatis mapper statement parsed from an XML file (issue #9 item
@@ -92,7 +95,7 @@ public final class ProjectIndex {
      * @param line      1-based line of the statement's start tag
      */
     public record MapperStatement(String namespace, String id, String type,
-                                  String sql, String file, int line) {}
+                                  String sql, String file, int line) implements Serializable {}
 
     /**
      * A single declared symbol — a type (class/interface/enum/record/annotation),
@@ -124,7 +127,7 @@ public final class ProjectIndex {
             String file,
             int line,
             String signature,
-            String detail) {
+            String detail) implements Serializable {
 
         /** Convenience constructor for symbols without a {@code detail}. */
         public Symbol(String name, String kind, String fqn, String container,
@@ -160,6 +163,11 @@ public final class ProjectIndex {
     // node so a caller chain that ends at a Spring handler says so instead
     // of looking like an unexplored branch.
     private final Map<MethodKey, String> entryPoints = new ConcurrentHashMap<>();
+    // Transactional boundary (issue #9 follow-up): methods annotated
+    // @Transactional (or declared on a @Transactional class). These run
+    // through a framework proxy — the boundary matters when reading a
+    // caller chain, even though it is not an entry point.
+    private final Set<MethodKey> transactional = ConcurrentHashMap.newKeySet();
     // Constructors are not virtual dispatch: they must never participate in
     // the method-hierarchy walk (a constructor's name is the class simple
     // name, so a same-named superclass method would otherwise be linked as
@@ -211,7 +219,7 @@ public final class ProjectIndex {
     private final Map<NameArity, Map<String, Set<MethodKey>>> bySignature = new ConcurrentHashMap<>();
 
     // Composite key for {@link #bySignature}. Package-private; not part of the public API.
-    record NameArity(String name, int arity) {}
+    record NameArity(String name, int arity) implements Serializable {}
 
     private final List<String> skippedFiles = Collections.synchronizedList(new ArrayList<>());
     // Parallel to `calls` but per (callee, caller) edge carries a list of
@@ -481,6 +489,16 @@ public final class ProjectIndex {
      */
     public String entryPointKindOf(MethodKey method) {
         return entryPoints.get(method);
+    }
+
+    /** Records that {@code method} is a transactional boundary (issue #9). */
+    public void recordTransactional(MethodKey method) {
+        transactional.add(method);
+    }
+
+    /** True if {@code method} was recorded as a transactional boundary. */
+    public boolean isTransactional(MethodKey method) {
+        return transactional.contains(method);
     }
 
     /** True if {@code method} was recorded as a constructor. */

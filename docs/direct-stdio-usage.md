@@ -70,12 +70,29 @@ mvn package
 
 `find_symbols` 的查询会匹配符号名，**也会匹配 mapper statement 的 SQL 正文**（例如查 `app_user` 能找到 `SELECT * FROM app_user` 那条 statement），命中条目的 `match.field` 会标成 `detail`。
 
+mapper XML 的覆盖范围（`kind=mapper-statement`）：
+
+- `<select>` / `<insert>` / `<update>` / `<delete>` —— mapper 接口方法的实现，`trace_callees` 挂到方法下（`sql.text` 里 `<include>` 已展开）。
+- `<sql>` 片段 —— 可复用片段，可搜、可用于 `<include>` 展开，但**不**当作方法实现挂到 callee 树。
+- `<resultMap>` —— 列→属性映射，可搜（`signature` 是它映射的类型）。
+
+Lombok：`@Data`/`@Getter`/`@Setter`/`@Value` 标注的类（或字段级 `@Getter`/`@Setter`）会合成对应访问器，和手写方法一样可搜、可追调用链。
+
+### 磁盘缓存
+
+索引按「源码 + mapper XML + pom 内容」的指纹缓存到 `~/.cache/codescope/index-<指纹>.ser`。CLI 是单发进程，没有这个缓存的话每次都要重跑 Maven 依赖解析 + JDT 解析；命中时直接从磁盘加载（实测 386 文件的项目 ~26s → ~2s）。
+
+- `-Dcodescope.cache.dir=<dir>` 覆盖缓存目录。
+- 指纹包含源码/mapper XML 的 mtime+大小和 pom 内容；改完代码不用手动清缓存，指纹变了会自动重建。
+- `refresh: true` 会跳过读取（并写入新指纹的缓存）。
+
 响应新增字段：
 
 - **snippet** — 结果节点附带源码行文本（`trace_callers` / `trace_callees` 的每个节点、`find_call_sites` 的 target 和每个 call_site、`find_symbols` 的每个 symbol）。文件不可读时省略。
 - **match** — `find_symbols` 每个命中的匹配说明：`type`（`exact` / `case_insensitive` / `substring` / `detail` / `fuzzy`）、`field`（`name` 或 `detail`）、`matched`（实际匹配文本，保留原始大小写）、`case_differs`、`distance`。
 - **total** — `find_call_sites` / `find_symbols` 窗口前的总命中数。
-- **entryPoint** — `trace_callers` / `trace_callees` 的节点、`find_call_sites` 的 target 和 caller 条目上，框架入口标记（`spring-mvc` / `spring-scheduled` / `spring-event` / `junit5` / `junit4` / `testng` / `main` …）。
+- **entryPoint** — `trace_callers` / `trace_callees` 的节点、`find_call_sites` 的 target 和 caller 条目上，框架入口标记（`spring-mvc` / `spring-scheduled` / `spring-event` / `spring-mvc-exception` / `spring-mvc-advice` / `spring-event-listener` / `spring-boot-runner` / `lifecycle-init` / `lifecycle-destroy` / `junit5` / `junit4` / `testng` / `main` …）。
+- **transactional** — `@Transactional` 边界标记（与 `entryPoint` 不同：它不是框架入口，而是代理边界）。
 - **caller_snippet** — `find_call_sites` 每条 caller 声明行的源码文本。
 - **sql** — `trace_callees` 中 mapper 接口方法的 SQL 叶子节点：`{type, text}`。
 - **detail** — `find_symbols` 中 mapper statement 的 SQL 正文（可搜索、可展示）。

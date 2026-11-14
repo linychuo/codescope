@@ -129,8 +129,10 @@ public final class CallChainAnalyzer {
                 displayTarget.declaringClass, displayTarget.methodName, displayTarget.arity,
                 rootLoc != null ? rootLoc.file() : null,
                 rootLoc != null ? rootLoc.line() : 0);
-        // Issue #9: label the root when it is a framework entry point.
+        // Issue #9: label the root when it is a framework entry point or a
+        // transactional boundary.
         root.markEntryPoint(index.entryPointKindOf(displayTarget));
+        root.markTransactional(index.isTransactional(displayTarget));
 
         // Seed the queue with one frame per overload. They all share the
         // same root CallNode, so children land in one tree. Ancestors are
@@ -372,8 +374,10 @@ public final class CallChainAnalyzer {
                 : new CallNode(caller.declaringClass, caller.methodName, caller.arity, file, line);
         // Issue #9: a caller chain that ends at a framework entry point
         // says so (spring-mvc / junit5 / main / ...) instead of looking
-        // like an unexplored branch.
+        // like an unexplored branch; a transactional boundary is labelled
+        // too.
         node.markEntryPoint(index.entryPointKindOf(caller));
+        node.markTransactional(index.isTransactional(caller));
         return node;
     }
 

@@ -171,3 +171,25 @@ DTD/外部实体被禁用（XXE 防护）。
 `testResourceMappersAreSkippedUnlessIncluded`、
 `FindCallSitesServiceTest.entryPointLabelAndSnippetsAreReported`、
 `FindSymbolsServiceTest.totalAndOffsetAreReported` / `mapperSqlContentIsSearchable`。
+
+## 7. 真实项目评估（IMS：Spring Boot + MyBatis-Plus，386 Java / 39 mapper XML）
+
+用真实项目跑了一遍，核心链路（Controller → Service → Mapper → SQL）本来就是通的，但暴露了
+8 个缺口，全部在本轮修复：
+
+1. **Lombok 访问器不可见**（8 个文件）→ `CallSiteVisitor` 合成 `@Data` 等访问器。
+2. **Spring 入口识别不全**（`ApplicationListener`、`@ExceptionHandler`、`@ControllerAdvice`、
+   runner、`@PostConstruct` 等）→ `EntryPoints` 扩充注解 + 框架回调接口（写名兜底）。
+3. **`<include>` 未展开** → `MapperXmlIndexer` 两阶段（先收 `<sql>` 片段再展开）。
+4. **`<resultMap>` 未索引** → 加入（可搜、不挂 callee 树）。
+5. **MyBatis-Plus 委托未建模** → `MyBatisPlus` 记 `IService#m -> Mapper#mapped` 合成边。
+6. **库方法缺 arity 时根签名 `/0`** → 用 seed 的真实 arity 回填。
+7. **性能**（~24s，Maven 6.5s + JDT ~17s）→ `IndexFingerprint` + `ProjectIndexStore`
+   磁盘缓存；实测 386 文件 ~26s → ~2s。
+8. **`@Transactional` 边界未标注** → `EntryPoints.isTransactional` + `CallNode.transactional`。
+
+验证（真实项目 CLI）：`CustomerMapper#selectById` 根签名 `/1`、
+`PermissionScanner.onApplicationEvent` → `spring-event-listener`、
+`GlobalExceptionHandler.handleException` → `spring-mvc-exception`、
+Lombok `getSalesReturn` 可搜到、`<include>` 展开成真实列、`BaseResultMap` 35 条可搜、
+`SupplierServiceImpl.create` 带 `transactional`、磁盘缓存冷/热 ~26s/~2s。

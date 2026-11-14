@@ -5,6 +5,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Set;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.AbstractTypeDeclaration;
@@ -52,6 +53,10 @@ final class CallSiteVisitor extends ASTVisitor {
     private final String file;
     private final Deque<MethodContext> methodStack = new ArrayDeque<>();
     private final Deque<String> typeStack = new ArrayDeque<>();
+    // Written super-interface simple names per enclosing type (issue #9
+    // follow-up): the fallback for EntryPoints' framework-callback check
+    // when the framework jar is not on the analysis classpath.
+    private final Deque<Set<String>> callbackInterfaces = new ArrayDeque<>();
     private String packageName = "";
 
     CallSiteVisitor(ProjectIndex index, MethodHierarchyExtractor hierarchy, String file) {
@@ -100,9 +105,163 @@ final class CallSiteVisitor extends ASTVisitor {
         //    edge if we relied solely on the binding. The AST
         //    node always exposes the textual supertype, so we
         //    use it as the authoritative source.
+        callbackInterfaces.push(writtenSuperInterfaceNames(node.superInterfaceTypes()));
         recordSupertypesFromAst(node, fqn);
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
+        // Issue #9 follow-up: Lombok-generated accessors are invisible to
+        // JDT (it does not run the annotation processor), so a real project
+        // with @Data DTOs has unresolved getter/setter call sites. Detect
+        // the Lombok annotations and synthesize the declarations.
+        synthesizeLombokAccessors(node, fqn);
+        // Issue #9 follow-up: model the MyBatis-Plus ServiceImpl -> mapper
+        // delegation so callee chains cross the framework boundary.
+        MyBatisPlus.recordDelegations(index, hierarchy, node.resolveBinding());
         return true;
+    }
+
+    /** The accessors Lombok would generate for a class or field. */
+    private enum LombokAccessors {
+        NONE(false, false), GETTER(true, false), SETTER(false, true), BOTH(true, true);
+        final boolean getter;
+        final boolean setter;
+        LombokAccessors(boolean getter, boolean setter) {
+            this.getter = getter;
+            this.setter = setter;
+        }
+        /** Union of two accessor sets (a field-level annotation wins over the class's). */
+        LombokAccessors merge(LombokAccessors other) {
+            if (other == NONE) return this;
+            if (this == BOTH || other == BOTH) return BOTH;
+            boolean g = getter || other.getter;
+            boolean s = setter || other.setter;
+            return g && s ? BOTH : g ? GETTER : SETTER;
+        }
+    }
+
+    /**
+     * Detects Lombok's class-level accessor annotations
+     * ({@code @Data}, {@code @Getter}, {@code @Setter}, {@code @Value}) from
+     * the written simple names — Lombok is an annotation processor, so its
+     * annotations do not resolve to bindings in the JDT model.
+     */
+    private static LombokAccessors lombokKindOf(List<? extends ASTNode> modifiers) {
+        boolean getter = false;
+        boolean setter = false;
+        if (modifiers == null) return LombokAccessors.NONE;
+        for (ASTNode node : modifiers) {
+            if (!(node instanceof org.eclipse.jdt.core.dom.Annotation a)) continue;
+            String name = writtenSimpleName(a);
+            if ("Data".equals(name) || "Value".equals(name) || "Getter".equals(name)) {
+                getter = true;
+            }
+            if ("Data".equals(name) || "Setter".equals(name)) {
+                setter = true;
+            }
+        }
+        return getter && setter ? LombokAccessors.BOTH
+                : getter ? LombokAccessors.GETTER
+                : setter ? LombokAccessors.SETTER
+                : LombokAccessors.NONE;
+    }
+
+    /**
+     * The written super-interface simple names of a type declaration
+     * (issue #9 follow-up): the fallback for {@link EntryPoints}' framework
+     * callback check when the framework jar is not on the analysis
+     * classpath, mirroring the annotation simple-name fallback.
+     */
+    private static Set<String> writtenSuperInterfaceNames(List<?> superInterfaceTypes) {
+        Set<String> out = new java.util.HashSet<>();
+        if (superInterfaceTypes == null) return out;
+        for (Object o : superInterfaceTypes) {
+            if (!(o instanceof org.eclipse.jdt.core.dom.Type t)) continue;
+            String name = t.toString();
+            int lt = name.indexOf('<');
+            if (lt >= 0) name = name.substring(0, lt);
+            int dot = name.lastIndexOf('.');
+            out.add(dot < 0 ? name : name.substring(dot + 1));
+        }
+        return out;
+    }
+
+    /** The written simple name of an AST annotation, or null if unreadable. */
+    private static String writtenSimpleName(org.eclipse.jdt.core.dom.Annotation a) {
+        try {
+            String name = a.getTypeName().getFullyQualifiedName();
+            int dot = name.lastIndexOf('.');
+            return dot < 0 ? name : name.substring(dot + 1);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static String capitalize(String fieldName) {
+        if (fieldName == null || fieldName.isEmpty()) return fieldName;
+        return Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+    }
+
+    /**
+     * Synthesizes the getters/setters Lombok would generate for the given
+     * class, walking its direct {@code FieldDeclaration}s. Static fields are
+     * skipped (Lombok does not generate accessors for them) and final fields
+     * get no setter.
+     */
+    private void synthesizeLombokAccessors(TypeDeclaration node, String fqn) {
+        LombokAccessors kind = lombokKindOf(node.modifiers());
+        if (kind == LombokAccessors.NONE) return;
+        for (Object bd : node.bodyDeclarations()) {
+            if (bd instanceof FieldDeclaration field) {
+                synthesizeLombokAccessors(field, fqn, kind);
+            }
+        }
+    }
+
+    /**
+     * Synthesizes the accessors for one field. Called both for class-level
+     * Lombok annotations (from {@link #synthesizeLombokAccessors}) and for a
+     * field-level {@code @Getter}/{@code @Setter} (from
+     * {@link #visit(FieldDeclaration)}).
+     */
+    private void synthesizeLombokAccessors(FieldDeclaration field, String fqn,
+                                           LombokAccessors classKind) {
+        if (Modifier.isStatic(field.getModifiers())) return;
+        ITypeBinding fieldType = field.getType().resolveBinding();
+        if (fieldType == null) return;
+        LombokAccessors kind = classKind.merge(lombokKindOf(field.modifiers()));
+        if (kind == LombokAccessors.NONE) return;
+        String typeName = fieldType.getErasure().getQualifiedName();
+        boolean isPrimitiveBoolean = fieldType.isPrimitive() && "boolean".equals(typeName);
+        boolean finalField = Modifier.isFinal(field.getModifiers());
+        int line = cuLine(field);
+        for (Object f : field.fragments()) {
+            String fieldName = ((VariableDeclarationFragment) f).getName().getIdentifier();
+            if (kind.getter) {
+                String getter = (isPrimitiveBoolean ? "is" : "get") + capitalize(fieldName);
+                recordSynthesizedMethod(fqn, getter, 0, List.of(), line);
+            }
+            if (kind.setter && !finalField) {
+                String setter = "set" + capitalize(fieldName);
+                recordSynthesizedMethod(fqn, setter, 1, List.of(typeName), line);
+            }
+        }
+    }
+
+    /**
+     * Records a Lombok-synthesized accessor as a declaration (so
+     * {@code resolveTarget} and the unresolved-call fallback can find it)
+     * and as a {@code method} symbol. Deliberately records no modifier
+     * bitmask: the hierarchy repair pass skips {@code mMods == 0}, which
+     * keeps a synthesized getter from being linked to an unrelated
+     * same-named supertype method.
+     */
+    private void recordSynthesizedMethod(String fqn, String name, int arity,
+                                         List<String> paramTypes, int line) {
+        MethodKey key = new MethodKey(fqn, name, arity, paramTypes);
+        index.putDeclaration(key, new ProjectIndex.SourceLoc(file, line));
+        index.recordDeclaringPackage(key, packageName);
+        index.recordSymbol(new ProjectIndex.Symbol(name, "method",
+                fqn + "#" + name + "/" + arity, fqn, file, line,
+                paramTypes.isEmpty() ? "" : String.join(",", paramTypes)));
     }
 
     /**
@@ -151,12 +310,14 @@ final class CallSiteVisitor extends ASTVisitor {
     @Override
     public void endVisit(TypeDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     @Override
     public boolean visit(EnumDeclaration node) {
         String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
+        callbackInterfaces.push(java.util.Set.of());
         recordTypeSymbol(node, fqn, "enum");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
         // Enum constants are NOT FieldDeclaration nodes in JDT — they
@@ -178,6 +339,7 @@ final class CallSiteVisitor extends ASTVisitor {
     @Override
     public void endVisit(EnumDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     @Override
@@ -218,6 +380,7 @@ final class CallSiteVisitor extends ASTVisitor {
     public boolean visit(RecordDeclaration node) {
         String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
+        callbackInterfaces.push(java.util.Set.of());
         recordTypeSymbol(node, fqn, "record");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
         // Record components (e.g. `int x, int y` in `record Point(int x, int y)`)
@@ -242,12 +405,14 @@ final class CallSiteVisitor extends ASTVisitor {
     @Override
     public void endVisit(RecordDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     @Override
     public boolean visit(AnnotationTypeDeclaration node) {
         String fqn = fqnOfTypeDeclaration(node, fqnOfType(nameOf(node)));
         typeStack.push(fqn);
+        callbackInterfaces.push(java.util.Set.of());
         recordTypeSymbol(node, fqn, "annotation");
         recordTypeHierarchyFromBinding(fqn, node.resolveBinding());
         return true;
@@ -256,6 +421,7 @@ final class CallSiteVisitor extends ASTVisitor {
     @Override
     public void endVisit(AnnotationTypeDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     @Override
@@ -266,6 +432,7 @@ final class CallSiteVisitor extends ASTVisitor {
         // scoped. No symbol is recorded here — a wrapped record is
         // visited separately via visit(RecordDeclaration).
         typeStack.push(fqnOfType(nameOf(node)));
+        callbackInterfaces.push(java.util.Set.of());
         return true;
     }
 
@@ -293,6 +460,7 @@ final class CallSiteVisitor extends ASTVisitor {
             fqn = (enclosing.isEmpty() ? "" : enclosing + ".") + "<anon@" + node.getStartPosition() + ">";
         }
         typeStack.push(fqn);
+        callbackInterfaces.push(java.util.Set.of());
         // Anonymous classes are not recorded as symbols — their FQN is
         // a synthesized identity (e.g. "x.Outer$1") that doesn't match
         // any user-facing concept. Members declared inside them are
@@ -304,11 +472,13 @@ final class CallSiteVisitor extends ASTVisitor {
     @Override
     public void endVisit(AnonymousClassDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     @Override
     public void endVisit(ImplicitTypeDeclaration node) {
         typeStack.pop();
+        callbackInterfaces.pop();
     }
 
     private static String nameOf(AbstractTypeDeclaration node) {
@@ -384,8 +554,12 @@ final class CallSiteVisitor extends ASTVisitor {
             // scheduled/event methods, JUnit/TestNG tests, main) so a
             // caller chain ending there is labelled as an entry rather than
             // an unexplored branch.
-            String entryKind = EntryPoints.detectKind(declBinding, node.modifiers());
+            String entryKind = EntryPoints.detectKind(declBinding, node.modifiers(),
+                    callbackInterfaces.isEmpty() ? java.util.Set.of() : callbackInterfaces.peek());
             if (entryKind != null) index.recordEntryPoint(callerKey, entryKind);
+            if (EntryPoints.isTransactional(declBinding, node.modifiers())) {
+                index.recordTransactional(callerKey);
+            }
         }
         methodStack.push(new MethodContext(callerKey));
         // Also record a method/constructor symbol for find_symbols.
@@ -485,6 +659,10 @@ final class CallSiteVisitor extends ASTVisitor {
         // and the shape used by visit(Initializer) above. First-wins:
         // if a class has multiple field initializers, the declaration
         // points at the first one encountered (same rule as init blocks).
+        // Field-level Lombok @Getter/@Setter (issue #9 follow-up).
+        if (lombokKindOf(node.modifiers()) != LombokAccessors.NONE) {
+            synthesizeLombokAccessors(node, callerClass, LombokAccessors.NONE);
+        }
         boolean isStatic = Modifier.isStatic(node.getModifiers());
         String synthName = isStatic ? "<clinit>" : "<class-init>";
         MethodKey synthKey = new MethodKey(callerClass, synthName, 0, List.of());

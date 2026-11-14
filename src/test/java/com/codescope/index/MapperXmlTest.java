@@ -162,6 +162,53 @@ class MapperXmlTest {
     }
 
     @Test
+    void includeRefidIsExpandedFromSqlFragment(@TempDir Path tmp) throws Exception {
+        // Issue #9 follow-up: the SQL shown to the user must be the resolved
+        // statement, with <include refid> replaced by the <sql> fragment.
+        writeJava(tmp, """
+                package com.example;
+                public interface UserMapper { String findById(Long id); }
+                """);
+        writeMapperXml(tmp, mapperXml("""
+                <sql id="cols">id, name</sql>
+                <select id="findById" resultType="String">
+                  SELECT <include refid="cols"/> FROM user
+                </select>
+                """));
+        ProjectIndex index = build(tmp, "UserMapper.java");
+
+        List<ProjectIndex.MapperStatement> stmts =
+                index.mapperStatementsFor("com.example.UserMapper", "findById");
+        assertEquals(1, stmts.size());
+        assertTrue(stmts.get(0).sql().contains("id, name"),
+                "include must be expanded, got: " + stmts.get(0).sql());
+        assertFalse(stmts.get(0).sql().contains("<include"),
+                "no include tag should remain, got: " + stmts.get(0).sql());
+    }
+
+    @Test
+    void resultMapIsIndexedButNotAttachedToCallees(@TempDir Path tmp) throws Exception {
+        // Issue #9 follow-up: <resultMap> is part of the mapper XML and
+        // searchable, but it is not a method implementation.
+        writeJava(tmp, """
+                package com.example;
+                public interface UserMapper { String findById(Long id); }
+                """);
+        writeMapperXml(tmp, mapperXml("""
+                <resultMap id="BaseResultMap" type="com.example.User">
+                  <id column="id" property="id"/>
+                </resultMap>
+                """));
+        ProjectIndex index = build(tmp, "UserMapper.java");
+
+        ProjectIndex.SymbolMatchResult res =
+                index.searchSymbols("BaseResultMap", "mapper-statement", 100);
+        assertEquals(1, res.totalCount(), "resultMap should be searchable, got: " + res);
+        assertTrue(index.mapperStatementsFor("com.example.UserMapper", "BaseResultMap").isEmpty(),
+                "a resultMap must not attach to a callee tree");
+    }
+
+    @Test
     void testResourceMappersAreSkippedUnlessIncluded(@TempDir Path tmp) throws Exception {
         // include_tests governs the Java source walk; the mapper XML scan
         // must obey it too (src/<...>/test/resources is a test tree).

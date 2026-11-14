@@ -190,6 +190,7 @@ public final class FindCallSitesService {
         if (targetSnippet != null) targetJson.put("snippet", targetSnippet);
         String targetEntry = index.entryPointKindOf(display);
         if (targetEntry != null) targetJson.put("entryPoint", targetEntry);
+        if (index.isTransactional(display)) targetJson.put("transactional", true);
         out.put("target", targetJson);
         out.put("status", "ok");
         out.put("message", message);
@@ -358,6 +359,7 @@ public final class FindCallSitesService {
             if (callerSnippet != null) entry.put("caller_snippet", callerSnippet);
             String callerEntry = index.entryPointKindOf(e.getKey());
             if (callerEntry != null) entry.put("entryPoint", callerEntry);
+            if (index.isTransactional(e.getKey())) entry.put("transactional", true);
             entry.put("call_site", callSite);
             out.add(entry);
         }

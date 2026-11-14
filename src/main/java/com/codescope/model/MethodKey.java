@@ -1,12 +1,14 @@
 package com.codescope.model;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
 /** Unique identity of a method declaration: declaring class + name + parameter types. */
-public final class MethodKey {
+public final class MethodKey implements Serializable {
+    private static final long serialVersionUID = 1L;
     public final String declaringClass;
     public final String methodName;
     public final int arity;

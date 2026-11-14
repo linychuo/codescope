@@ -45,9 +45,17 @@ java -jar target/codescope.jar
 | `find_call_sites` | 目标方法的所有调用点（精确行号），`offset`/`limit` 分页 |
 | `find_symbols` | 按名称子串搜索符号定义位置，可选 `fuzzy` 容错匹配与 `offset` 分页；也能按 mapper SQL 正文搜 |
 
-四个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。结果附带源码行 `snippet`；`trace_callers` / `trace_callees` 的节点与 `find_call_sites` 的条目在框架入口处带 `entryPoint` 标记，`find_symbols` 附带 `match` 匹配说明，`find_call_sites` / `find_symbols` 附带 `total` 总数。
+四个工具共享索引缓存。所有工具都支持 `project`（项目路径）、`refresh`（重建索引）、`include_tests`（索引测试代码）参数。结果附带源码行 `snippet`；`trace_callers` / `trace_callees` 的节点与 `find_call_sites` 的条目在框架入口处带 `entryPoint` 标记、`@Transactional` 边界带 `transactional` 标记；`find_symbols` 附带 `match` 匹配说明；`find_call_sites` / `find_symbols` 附带 `total` 总数。
 
-MyBatis mapper XML 也会被解析（`include_tests` 同样作用于 `src/test/resources`）：`trace_callees` 一个 mapper 接口方法时，会把对应的 SQL 语句作为叶子节点挂上（`sql` 字段）；`find_symbols` 可以用 `kind=mapper-statement` 按 statement id 或 **SQL 正文**搜到。
+MyBatis mapper XML 也会被解析（`include_tests` 同样作用于 `src/test/resources`）：`trace_callees` 一个 mapper 接口方法时，会把对应的 SQL 语句作为叶子节点挂上（`sql` 字段，`<include>` 已展开成真实列）；`find_symbols` 可以用 `kind=mapper-statement` 按 statement id 或 **SQL 正文**搜到（含 `<sql>` 片段和 `<resultMap>`）。
+
+框架相关能力：
+
+- **Spring 入口识别**：`@RestController`/`@RequestMapping`/`@Scheduled` 等注解、`@ControllerAdvice`/`@ExceptionHandler`、`ApplicationListener`、`CommandLineRunner`/`ApplicationRunner`、`@PostConstruct`/`@PreDestroy` 等都会标 `entryPoint`。
+- **Lombok**：`@Data`/`@Getter`/`@Setter`/`@Value` 生成的访问器会被合成进符号表和调用边（JDT 不跑注解处理器，所以不做这一步这些方法就是不可见的）。
+- **MyBatis-Plus 委托**：`XxxServiceImpl extends ServiceImpl<XxxMapper, E>` 的 CRUD 方法会跨框架委托到项目里的 mapper，调用链不停在库边界。
+
+**磁盘缓存**：索引按「源码 + mapper XML + pom 内容」的指纹缓存到 `~/.cache/codescope/`，CLI 二次调用直接从磁盘加载（实测 386 文件的项目从 ~26s 降到 ~2s）。`-Dcodescope.cache.dir=<dir>` 可覆盖缓存目录。
 
 详细参数见 [`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md) 或运行 `--help`。
 
@@ -85,5 +93,5 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 
 ```bash
 mvn test
-# 322 个测试
+# 333 个测试
 ```

@@ -41,6 +41,13 @@ public final class CallNode {
      */
     private String sqlType;
     private String sqlText;
+    /**
+     * True when the method is a {@code @Transactional} boundary (issue #9
+     * follow-up): it runs through a framework proxy. Distinct from
+     * {@link #entryPoint} — that marks a framework-invoked entry, this
+     * marks a proxy boundary on an ordinary call path.
+     */
+    private boolean transactional;
     public final List<CallNode> callers = new ArrayList<>();
 
     public CallNode(String className, String methodName, int arity, String file, int line) {
@@ -157,6 +164,13 @@ public final class CallNode {
     }
 
     /**
+     * Marks this node as a {@code @Transactional} boundary (issue #9).
+     */
+    public void markTransactional(boolean transactional) {
+        this.transactional = transactional;
+    }
+
+    /**
      * Resolves the source line text for a {@code (file, line)} pair, used
      * to add a {@code snippet} field to each serialized node (issue #9:
      * results used to carry only {@code file} + {@code line}). Returns
@@ -226,6 +240,7 @@ public final class CallNode {
             if (f.node.fanoutTruncated) f.map.put("truncatedCallers", f.node.hiddenCallerCount);
             if (f.node.deduped) f.map.put("deduped", true);
             if (f.node.entryPoint != null) f.map.put("entryPoint", f.node.entryPoint);
+            if (f.node.transactional) f.map.put("transactional", true);
             if (f.node.sqlText != null) {
                 Map<String, Object> sql = new LinkedHashMap<>();
                 sql.put("type", f.node.sqlType);

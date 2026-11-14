@@ -99,6 +99,74 @@ class EntryPointTest {
     }
 
     @Test
+    void frameworkCallbackInterfacesAreDetected(@TempDir Path tmp) throws Exception {
+        // Issue #9 follow-up: the framework invokes these callbacks even
+        // though no project code calls them.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Listener.java"), """
+                package com.example;
+                import org.springframework.context.ApplicationListener;
+                import org.springframework.context.event.ContextRefreshedEvent;
+                public class Listener implements ApplicationListener<ContextRefreshedEvent> {
+                    @Override public void onApplicationEvent(ContextRefreshedEvent event) { }
+                }
+                """);
+        Files.writeString(srcDir.resolve("Job.java"), """
+                package com.example;
+                import org.springframework.boot.CommandLineRunner;
+                public class Job implements CommandLineRunner {
+                    @Override public void run(String... args) { }
+                }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Listener.java", "Job.java");
+        assertEquals("spring-event-listener",
+                kind(index, "com.example.Listener", "onApplicationEvent"));
+        assertEquals("spring-boot-runner", kind(index, "com.example.Job", "run"));
+    }
+
+    @Test
+    void adviceAndExceptionHandlerAreDetected(@TempDir Path tmp) throws Exception {
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Advice.java"), """
+                package com.example;
+                import org.springframework.web.bind.annotation.RestControllerAdvice;
+                import org.springframework.web.bind.annotation.ExceptionHandler;
+                @RestControllerAdvice
+                public class Advice {
+                    @ExceptionHandler(RuntimeException.class)
+                    public String handle(RuntimeException e) { return "x"; }
+                }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Advice.java");
+        assertEquals("spring-mvc-exception", kind(index, "com.example.Advice", "handle"));
+    }
+
+    @Test
+    void transactionalBoundaryIsRecorded(@TempDir Path tmp) throws Exception {
+        // Issue #9 follow-up: @Transactional is a proxy boundary, not an
+        // entry point — a distinct signal on the node.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("Svc.java"), """
+                package com.example;
+                import org.springframework.transaction.annotation.Transactional;
+                public class Svc {
+                    @Transactional(rollbackFor = Exception.class)
+                    public void save() { }
+                    public void plain() { }
+                }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "Svc.java");
+        MethodKey save = index.resolveTarget("com.example.Svc", "save");
+        assertNotNull(save);
+        assertTrue(index.isTransactional(save), "@Transactional must be recorded");
+        MethodKey plain = index.resolveTarget("com.example.Svc", "plain");
+        assertNotNull(plain);
+        assertFalse(index.isTransactional(plain), "an ordinary method must not be labelled");
+        assertNull(index.entryPointKindOf(save),
+                "@Transactional is a boundary, not an entry point");
+    }
+
+    @Test
     void mainMethodIsDetected(@TempDir Path tmp) throws Exception {
         Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
         Files.writeString(srcDir.resolve("App.java"), """
