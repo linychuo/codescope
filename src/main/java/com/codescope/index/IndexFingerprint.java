@@ -1,5 +1,6 @@
 package com.codescope.index;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,17 +45,17 @@ final class IndexFingerprint {
             md.update(VERSION.getBytes(StandardCharsets.UTF_8));
             md.update(Boolean.toString(includeTests).getBytes(StandardCharsets.UTF_8));
 
+            // Prune excluded directories during the walk rather than after:
+            // a build-output tree (target/) can hold hundreds of thousands
+            // of files that the index never reads.
             List<Path> files = new ArrayList<>();
-            try (Stream<Path> walk = Files.walk(projectRoot, MAX_DEPTH)) {
-                walk.filter(Files::isRegularFile).forEach(files::add);
-            }
+            collectFiles(projectRoot, files);
             files.sort(Comparator.comparing(Path::toString));
 
             // Sources and mapper XML: path + mtime + size is enough to
             // detect edits without hashing every file's content.
             for (Path p : files) {
                 String rel = projectRoot.relativize(p).toString();
-                if (isExcluded(rel)) continue;
                 String name = p.getFileName().toString();
                 if (name.endsWith(".java") || name.endsWith(".xml")) {
                     md.update(rel.getBytes(StandardCharsets.UTF_8));
@@ -80,9 +81,22 @@ final class IndexFingerprint {
                 java.net.URL location = IndexFingerprint.class.getProtectionDomain()
                         .getCodeSource().getLocation();
                 Path codeSource = Paths.get(location.toURI());
-                md.update(Long.toString(Files.getLastModifiedTime(codeSource).toMillis())
-                        .getBytes(StandardCharsets.UTF_8));
-                md.update(Long.toString(Files.size(codeSource)).getBytes(StandardCharsets.UTF_8));
+                if (Files.isDirectory(codeSource)) {
+                    // `mvn test` runs from target/classes: a directory's
+                    // mtime only moves when entries are added/removed, so
+                    // hash every class file's mtime instead.
+                    try (Stream<Path> classes = Files.walk(codeSource)) {
+                        for (Path c : classes.filter(Files::isRegularFile).sorted().toList()) {
+                            md.update(Long.toString(Files.getLastModifiedTime(c).toMillis())
+                                    .getBytes(StandardCharsets.UTF_8));
+                        }
+                    }
+                } else {
+                    // Shaded jar: its own mtime and size.
+                    md.update(Long.toString(Files.getLastModifiedTime(codeSource).toMillis())
+                            .getBytes(StandardCharsets.UTF_8));
+                    md.update(Long.toString(Files.size(codeSource)).getBytes(StandardCharsets.UTF_8));
+                }
             } catch (Exception ignored) {
                 // No code source (exotic class loading): the rest of the
                 // fingerprint still applies.
@@ -100,17 +114,43 @@ final class IndexFingerprint {
         }
     }
 
-    /** Mirrors the mapper XML scan's exclusions (build output, hidden dirs). */
-    private static boolean isExcluded(String relativePath) {
-        Path prev = null;
-        for (Path part : Paths.get(relativePath)) {
-            String name = part.toString();
-            if (name.startsWith(".") || name.equals("target") || name.equals("node_modules")) {
-                return true;
-            }
-            prev = part;
+    /** Collects the regular files under {@code root}, pruning excluded trees. */
+    private static void collectFiles(Path root, List<Path> out) {
+        try {
+            Files.walkFileTree(root, java.util.EnumSet.noneOf(java.nio.file.FileVisitOption.class),
+                    MAX_DEPTH, new java.nio.file.SimpleFileVisitor<>() {
+                        @Override
+                        public java.nio.file.FileVisitResult preVisitDirectory(
+                                Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
+                            if (dir.equals(root)) return java.nio.file.FileVisitResult.CONTINUE;
+                            return isExcludedDir(dir.getFileName().toString())
+                                    ? java.nio.file.FileVisitResult.SKIP_SUBTREE
+                                    : java.nio.file.FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public java.nio.file.FileVisitResult visitFile(
+                                Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
+                            out.add(file);
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public java.nio.file.FileVisitResult visitFileFailed(Path file,
+                                                                            IOException exc) {
+                            // Unreadable entries are skipped, like the rest of
+                            // the loader's best-effort walks.
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+                    });
+        } catch (IOException e) {
+            // best-effort: an unreadable tree just omits those files
         }
-        return false;
+    }
+
+    /** Mirrors the mapper XML scan's exclusions (build output, hidden dirs). */
+    private static boolean isExcludedDir(String name) {
+        return name.startsWith(".") || name.equals("target") || name.equals("node_modules");
     }
 
     /** The cache directory, overridable for tests. */

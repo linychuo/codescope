@@ -53,9 +53,9 @@ MyBatis mapper XML 也会被解析（`include_tests` 同样作用于 `src/test/r
 
 - **Spring 入口识别**：`@RestController`/`@RequestMapping`/`@Scheduled` 等注解、`@ControllerAdvice`/`@ExceptionHandler`、`ApplicationListener`、`CommandLineRunner`/`ApplicationRunner`、`@PostConstruct`/`@PreDestroy` 等都会标 `entryPoint`。
 - **Lombok**：`@Data`/`@Getter`/`@Setter`/`@Value` 生成的访问器会被合成进符号表和调用边（JDT 不跑注解处理器，所以不做这一步这些方法就是不可见的）。
-- **MyBatis-Plus 委托**：`XxxServiceImpl extends ServiceImpl<XxxMapper, E>` 的 CRUD 方法会跨框架委托到项目里的 mapper，调用链不停在库边界。
+- **MyBatis-Plus 委托**：`XxxServiceImpl extends ServiceImpl<XxxMapper, E>` 的 CRUD 方法会跨框架委托到项目里的 mapper（按调用点 receiver 的静态类型限定到具体 Service 接口，不会串到别的服务），调用链不停在库边界。
 
-**磁盘缓存**：索引按「源码 + mapper XML + pom 内容」的指纹缓存到 `~/.cache/codescope/`，CLI 二次调用直接从磁盘加载（实测 386 文件的项目从 ~26s 降到 ~2s）。`-Dcodescope.cache.dir=<dir>` 可覆盖缓存目录。
+**磁盘缓存**：索引按「源码 + mapper XML + pom 内容 + 工具自身字节码」的指纹缓存到 `~/.cache/codescope/`，CLI 二次调用直接从磁盘加载（实测 386 文件的项目从 ~26s 降到 ~2s）。`-Dcodescope.cache.dir=<dir>` 可覆盖缓存目录。依赖版本变化而 pom 未变（SNAPSHOT 覆盖）时仍需 `refresh`。
 
 详细参数见 [`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md) 或运行 `--help`。
 
