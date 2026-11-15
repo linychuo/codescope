@@ -111,7 +111,8 @@ public final class CalleeChainAnalyzer {
         Set<MethodKey> directCalleesSeen = new HashSet<>();
         Set<MethodKey> rootCollected = new LinkedHashSet<>();
         for (MethodKey seed : effectiveSeeds) {
-            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true, rootContext));
+            queue.addLast(new PathFrame(seed, root, seedAncestors, 0, true, rootContext,
+                    new java.util.HashSet<String>()));
         }
 
         int nodes = 1;
@@ -141,6 +142,31 @@ public final class CalleeChainAnalyzer {
                 }
                 frameCallees.addAll(index.invokesOf(relatedKey));
             }
+            // Receiver static types of this frame's own call sites (looked up
+            // per callee — the site lives in the frame's body). A frame
+            // reached through a framework entry point carries them down so
+            // the delegation resolves to the right service (issue #9
+            // follow-up); inheriting the parent's set keeps it scoped.
+            Set<String> frameReceivers = new java.util.HashSet<>(f.receiverTypes);
+            for (MethodKey callee : frameCallees) {
+                List<ProjectIndex.CallSite> sites = index.callSitesOfSet(callee).get(f.key);
+                if (sites != null) {
+                    for (ProjectIndex.CallSite site : sites) {
+                        if (site.receiverType() != null) frameReceivers.add(site.receiverType());
+                    }
+                }
+            }
+            // Framework delegation, scoped to this frame's receivers. Kept
+            // out of the reverse call index so trace_callers on the mapper
+            // is not polluted by the library entry point.
+            Set<MethodKey> delegated = new LinkedHashSet<>();
+            for (MethodKey callee : frameCallees) {
+                for (String receiver : frameReceivers) {
+                    MethodKey target = index.delegationOf(callee, receiver);
+                    if (target != null) delegated.add(target);
+                }
+            }
+            frameCallees.addAll(delegated);
             Set<MethodKey> collected = f.isRoot ? rootCollected : new LinkedHashSet<>();
             int hidden = 0;
             for (MethodKey callee : frameCallees) {
@@ -169,9 +195,11 @@ public final class CalleeChainAnalyzer {
                 childAncestors.add(callee);
                 childAncestors.addAll(f.ancestors);
                 // Deeper frames ask "what does this method call?", so their
-                // context is the callee's own declaring class.
+                // context is the callee's own declaring class. The receiver
+                // types travel down so a framework delegation resolved one
+                // level below still knows which service was invoked.
                 queue.addLast(new PathFrame(callee, child, childAncestors, f.depth + 1, false,
-                        callee.declaringClass));
+                        callee.declaringClass, frameReceivers));
                 nodes++;
                 if (nodes >= maxNodes) {
                     root.markNodeCapTruncated();
@@ -242,10 +270,11 @@ public final class CalleeChainAnalyzer {
 
     private record PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
                              int depth, boolean isRoot, String contextClass,
+                             Set<String> receiverTypes,
                              Set<MethodKey> localCalleesSeen) {
         PathFrame(MethodKey key, CallNode node, Set<MethodKey> ancestors,
-                  int depth, boolean isRoot, String contextClass) {
-            this(key, node, ancestors, depth, isRoot, contextClass, new HashSet<>());
+                  int depth, boolean isRoot, String contextClass, Set<String> receiverTypes) {
+            this(key, node, ancestors, depth, isRoot, contextClass, receiverTypes, new HashSet<>());
         }
     }
 }

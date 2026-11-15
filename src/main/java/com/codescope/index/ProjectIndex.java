@@ -243,6 +243,14 @@ public final class ProjectIndex implements Serializable {
     // namespace + id for lookup from a mapper interface method.
     private final List<MapperStatement> mapperStatements =
             Collections.synchronizedList(new ArrayList<>());
+    // Framework delegation edges (MyBatis-Plus ServiceImpl -> mapper, issue
+    // #9 follow-up), keyed by the service method and the <em>receiver type</em>
+    // the delegation was resolved for (the project service interface). Unlike
+    // a normal call edge these do NOT feed the reverse index: the library
+    // ServiceImpl method is invoked by the framework, so a trace_callers on
+    // a mapper must not list every service that calls the same IService
+    // method — the receiver type scopes the edge to one service.
+    private final Map<MethodKey, Map<String, MethodKey>> delegations = new ConcurrentHashMap<>();
     // Flat symbol table populated by JdtIndexer. Outer key: lowercase simple
     // name (for case-insensitive lookup); inner: ordered list of matching
     // symbols (a single name can match many types/methods/fields). Each
@@ -273,6 +281,27 @@ public final class ProjectIndex implements Serializable {
      * site reads the same as the JDT visit: "this method calls that
      * method".
      */
+    /**
+     * Records a framework delegation edge {@code from -> to}, scoped to calls
+     * whose receiver static type is {@code receiverType} (issue #9
+     * follow-up). Used by the downward callee tree only — it is deliberately
+     * not a call edge, so {@code trace_callers} is not polluted by the
+     * library entry point the framework invokes.
+     */
+    public void recordDelegation(MethodKey from, String receiverType, MethodKey to) {
+        if (from == null || to == null || receiverType == null || receiverType.isEmpty()) return;
+        delegations.computeIfAbsent(from, k -> new ConcurrentHashMap<>()).put(receiverType, to);
+    }
+
+    /**
+     * The delegation target for {@code from} on a receiver of type
+     * {@code receiverType}, or null. See {@link #recordDelegation}.
+     */
+    public MethodKey delegationOf(MethodKey from, String receiverType) {
+        Map<String, MethodKey> byReceiver = delegations.get(from);
+        return byReceiver == null ? null : byReceiver.get(receiverType);
+    }
+
     public void recordInvocation(MethodKey caller, MethodKey callee) {
         // Dedupe: the same (caller, callee) pair can come from a hot method
         // being called from many sites in the same caller body. LinkedHashSet

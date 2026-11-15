@@ -71,6 +71,31 @@ class LombokAccessorTest {
     }
 
     @Test
+    void handwrittenAccessorIsNotShadowedByTheSynthesizedOne(@TempDir Path tmp) throws Exception {
+        // Lombok does not generate an accessor the class already declares;
+        // the real declaration (and its line) must win over the synthesized
+        // one, which would otherwise be recorded first and shadow it.
+        Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
+        Files.writeString(srcDir.resolve("User.java"), """
+                package com.example;
+                import lombok.Data;
+                @Data
+                public class User {
+                    private String name;
+                    public String getName() { return name; }
+                }
+                """);
+        ProjectIndex index = build(srcDir, tmp, "User.java");
+
+        MethodKey getName = index.resolveTarget("com.example.User", "getName");
+        assertNotNull(getName);
+        ProjectIndex.SourceLoc loc = index.declarationOf(getName);
+        assertNotNull(loc);
+        assertEquals(6, loc.line(),
+                "the real getter's line must win over the synthesized one, got: " + loc);
+    }
+
+    @Test
     void fieldLevelGetterFinalAndStaticAreHandled(@TempDir Path tmp) throws Exception {
         Path srcDir = Files.createDirectories(tmp.resolve("src/main/java/com/example"));
         Files.writeString(srcDir.resolve("Mixed.java"), """

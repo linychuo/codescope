@@ -83,8 +83,9 @@ Lombok：`@Data`/`@Getter`/`@Setter`/`@Value` 标注的类（或字段级 `@Gett
 索引按「源码 + mapper XML + pom 内容」的指纹缓存到 `~/.cache/codescope/index-<指纹>.ser`。CLI 是单发进程，没有这个缓存的话每次都要重跑 Maven 依赖解析 + JDT 解析；命中时直接从磁盘加载（实测 386 文件的项目 ~26s → ~2s）。
 
 - `-Dcodescope.cache.dir=<dir>` 覆盖缓存目录。
-- 指纹包含源码/mapper XML 的 mtime+大小和 pom 内容；改完代码不用手动清缓存，指纹变了会自动重建。
+- 指纹包含源码/mapper XML 的 mtime+大小、pom 内容，以及**工具自身的字节码**（升级/重编译后不会读到旧索引）；改完代码不用手动清缓存，指纹变了会自动重建。
 - `refresh: true` 会跳过读取（并写入新指纹的缓存）。
+- 指纹**不含依赖 jar**：如果依赖版本变了而 pom 没变（SNAPSHOT 覆盖、本地仓库更新），需要显式 `refresh: true`。
 
 响应新增字段：
 

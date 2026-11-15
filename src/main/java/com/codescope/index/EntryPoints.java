@@ -103,25 +103,20 @@ final class EntryPoints {
             Map.entry("AfterAll", "junit5-lifecycle"));
 
     /**
-     * @param method          the declared method binding
-     * @param astModifiers    the method's AST modifiers list (JDT folds
-     *                        annotations into it), used for authoritative
-     *                        FQN matching
-     * @return the entry-point kind (e.g. {@code "spring-mvc"}), or null if
-     *         it is an ordinary method
-     */
-    static String detectKind(IMethodBinding method, List<? extends ASTNode> astModifiers) {
-        return detectKind(method, astModifiers, Set.of());
-    }
-
-    /**
-     * As {@link #detectKind(IMethodBinding, List)}, with the type's written
+     * Detects the entry-point kind for a declared method from its
+     * annotations, its declaring type's annotations, and the type's written
      * super-interface simple names (issue #9 follow-up). The written names
      * are the fallback for the callback-interface check when the framework
      * jar is not on the analysis classpath — the same reason the annotation
      * matcher has a simple-name fallback.
      *
+     * @param method          the declared method binding
+     * @param astModifiers    the method's AST modifiers list (JDT folds
+     *                        annotations into it), used for authoritative
+     *                        FQN matching
      * @param superInterfaceNames simple names as written on the declaration
+     * @return the entry-point kind (e.g. {@code "spring-mvc"}), or null if
+     *         it is an ordinary method
      */
     static String detectKind(IMethodBinding method, List<? extends ASTNode> astModifiers,
                              Set<String> superInterfaceNames) {

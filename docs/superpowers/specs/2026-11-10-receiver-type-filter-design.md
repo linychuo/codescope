@@ -182,7 +182,7 @@ DTD/外部实体被禁用（XXE 防护）。
    runner、`@PostConstruct` 等）→ `EntryPoints` 扩充注解 + 框架回调接口（写名兜底）。
 3. **`<include>` 未展开** → `MapperXmlIndexer` 两阶段（先收 `<sql>` 片段再展开）。
 4. **`<resultMap>` 未索引** → 加入（可搜、不挂 callee 树）。
-5. **MyBatis-Plus 委托未建模** → `MyBatisPlus` 记 `IService#m -> Mapper#mapped` 合成边。
+5. **MyBatis-Plus 委托未建模** → `MyBatisPlus` 记 `IService#m --(receiver=该 Service 接口)--> Mapper#mapped` 合成边,只给向下 callee 树用。receiver 限定是关键:全局共享边会让 `trace_callers` 把 A 服务的调用串到 B 服务的 mapper(实测到的串味)。
 6. **库方法缺 arity 时根签名 `/0`** → 用 seed 的真实 arity 回填。
 7. **性能**（~24s，Maven 6.5s + JDT ~17s）→ `IndexFingerprint` + `ProjectIndexStore`
    磁盘缓存；实测 386 文件 ~26s → ~2s。

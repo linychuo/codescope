@@ -76,6 +76,15 @@ final class MyBatisPlus {
         }
         ITypeBinding iService = findInterface(superclass, I_SERVICE);
         if (iService == null) return;
+        // The project service interface this impl implements (e.g.
+        // CustomerService). The delegation is scoped to that receiver type so
+        // a call through one service does not surface another service's
+        // mapper (issue #9 follow-up: the previous global edge leaked
+        // sibling services' callers into trace_callers).
+        ITypeBinding serviceInterface = findProjectInterface(typeBinding);
+        if (serviceInterface == null) return;
+        String serviceFqn = MethodHierarchyExtractor.fqnFromBinding(serviceInterface.getErasure());
+        if (serviceFqn == null || serviceFqn.isEmpty()) return;
         for (IMethodBinding method : iService.getDeclaredMethods()) {
             String mapperName = DELEGATION.get(method.getName());
             if (mapperName == null) continue;
@@ -83,9 +92,23 @@ final class MyBatisPlus {
             MethodKey to = findMapperMethod(mapper, mapperFqn, mapperName,
                     method.getParameterTypes().length);
             if (from != null && to != null) {
-                index.recordInvocation(from, to);
+                index.recordDelegation(from, serviceFqn, to);
             }
         }
+    }
+
+    /**
+     * The project service interface a {@code XxxServiceImpl} implements
+     * (the direct super-interface that is neither {@code IService} nor a
+     * library type), or null if there is none.
+     */
+    private static ITypeBinding findProjectInterface(ITypeBinding typeBinding) {
+        for (ITypeBinding iface : typeBinding.getInterfaces()) {
+            String fqn = iface.getErasure().getQualifiedName();
+            if (I_SERVICE.equals(fqn)) continue;
+            if (iface.isFromSource()) return iface;
+        }
+        return null;
     }
 
     /** Finds a direct or inherited interface by FQN. */

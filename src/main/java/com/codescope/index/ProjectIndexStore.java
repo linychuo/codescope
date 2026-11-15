@@ -7,6 +7,9 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Persists a built {@link ProjectIndex} to disk and loads it back (issue #9
@@ -21,6 +24,14 @@ import java.nio.file.Path;
  */
 public final class ProjectIndexStore {
 
+    /**
+     * Upper bound on cached indexes, so a project that changes often (or a
+     * test suite that builds many temp projects) does not grow the cache
+     * directory without limit. The least-recently-written entries are
+     * deleted once the bound is exceeded.
+     */
+    private static final int MAX_CACHE_ENTRIES = 200;
+
     private ProjectIndexStore() {}
 
     /**
@@ -34,6 +45,35 @@ public final class ProjectIndexStore {
         try (ObjectOutputStream out = new ObjectOutputStream(
                 new BufferedOutputStream(Files.newOutputStream(file)))) {
             out.writeObject(index);
+        }
+        evictOldEntries(parent, file);
+    }
+
+    /**
+     * Deletes the oldest {@code index-*.ser} entries in {@code dir} once the
+     * count exceeds {@link #MAX_CACHE_ENTRIES}, keeping {@code keep}. Any
+     * failure is ignored: eviction is housekeeping, not part of the result.
+     */
+    private static void evictOldEntries(Path dir, Path keep) {
+        if (dir == null) return;
+        try (Stream<Path> entries = Files.list(dir)) {
+            List<Path> cached = entries
+                    .filter(p -> p.getFileName().toString().startsWith("index-"))
+                    .filter(p -> !p.equals(keep))
+                    .sorted(Comparator.comparingLong(p -> {
+                        try {
+                            return Files.getLastModifiedTime(p).toMillis();
+                        } catch (IOException e) {
+                            return 0L;
+                        }
+                    }))
+                    .toList();
+            int excess = cached.size() + 1 - MAX_CACHE_ENTRIES;
+            for (int i = 0; i < excess && i < cached.size(); i++) {
+                Files.deleteIfExists(cached.get(i));
+            }
+        } catch (Exception ignored) {
+            // Best-effort.
         }
     }
 

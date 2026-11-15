@@ -209,9 +209,19 @@ final class CallSiteVisitor extends ASTVisitor {
     private void synthesizeLombokAccessors(TypeDeclaration node, String fqn) {
         LombokAccessors kind = lombokKindOf(node.modifiers());
         if (kind == LombokAccessors.NONE) return;
+        // Lombok does not generate an accessor when the class already declares
+        // one with the same name + arity; synthesizing it anyway would let a
+        // generated declaration shadow the real one (its line would be the
+        // field's, because putDeclaration is first-wins).
+        Set<String> declared = new java.util.HashSet<>();
+        for (Object bd : node.bodyDeclarations()) {
+            if (bd instanceof MethodDeclaration md) {
+                declared.add(md.getName().getIdentifier() + "/" + md.parameters().size());
+            }
+        }
         for (Object bd : node.bodyDeclarations()) {
             if (bd instanceof FieldDeclaration field) {
-                synthesizeLombokAccessors(field, fqn, kind);
+                synthesizeLombokAccessors(field, fqn, kind, declared);
             }
         }
     }
@@ -220,10 +230,11 @@ final class CallSiteVisitor extends ASTVisitor {
      * Synthesizes the accessors for one field. Called both for class-level
      * Lombok annotations (from {@link #synthesizeLombokAccessors}) and for a
      * field-level {@code @Getter}/{@code @Setter} (from
-     * {@link #visit(FieldDeclaration)}).
+     * {@link #visit(FieldDeclaration)}, which passes an empty {@code declared}
+     * set — it has no enclosing-type view).
      */
     private void synthesizeLombokAccessors(FieldDeclaration field, String fqn,
-                                           LombokAccessors classKind) {
+                                           LombokAccessors classKind, Set<String> declared) {
         if (Modifier.isStatic(field.getModifiers())) return;
         ITypeBinding fieldType = field.getType().resolveBinding();
         if (fieldType == null) return;
@@ -237,11 +248,15 @@ final class CallSiteVisitor extends ASTVisitor {
             String fieldName = ((VariableDeclarationFragment) f).getName().getIdentifier();
             if (kind.getter) {
                 String getter = (isPrimitiveBoolean ? "is" : "get") + capitalize(fieldName);
-                recordSynthesizedMethod(fqn, getter, 0, List.of(), line);
+                if (!declared.contains(getter + "/0")) {
+                    recordSynthesizedMethod(fqn, getter, 0, List.of(), line);
+                }
             }
             if (kind.setter && !finalField) {
                 String setter = "set" + capitalize(fieldName);
-                recordSynthesizedMethod(fqn, setter, 1, List.of(typeName), line);
+                if (!declared.contains(setter + "/1")) {
+                    recordSynthesizedMethod(fqn, setter, 1, List.of(typeName), line);
+                }
             }
         }
     }
@@ -661,7 +676,7 @@ final class CallSiteVisitor extends ASTVisitor {
         // points at the first one encountered (same rule as init blocks).
         // Field-level Lombok @Getter/@Setter (issue #9 follow-up).
         if (lombokKindOf(node.modifiers()) != LombokAccessors.NONE) {
-            synthesizeLombokAccessors(node, callerClass, LombokAccessors.NONE);
+            synthesizeLombokAccessors(node, callerClass, LombokAccessors.NONE, Set.of());
         }
         boolean isStatic = Modifier.isStatic(node.getModifiers());
         String synthName = isStatic ? "<clinit>" : "<class-init>";

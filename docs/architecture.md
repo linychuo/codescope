@@ -114,7 +114,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `EntryPoints` + `CallNode.entryPoint` | 方法注解(FQN 优先,简单名兜底)+ `main` 签名 + 框架回调接口(`ApplicationListener`/`CommandLineRunner`/`ApplicationRunner`/`InitializingBean`)→ 入口标记,注解在 AST 上解析(`resolveAnnotationBinding`),接口名有"写下的简单名"兜底 | issue #9-3:调用链停在 Spring handler / 定时任务 / runner / listener / advice 时,以前看起来像"还有没找到的 caller" |
 | `EntryPoints.isTransactional` + `CallNode.transactional` | 方法或类上的 `@Transactional`(Spring/Jakarta/javax)→ 代理边界标记,与入口标记分开 | 真实项目 review:`@Transactional` 在 35 个文件里,是链路语义的一部分但不是入口 |
 | `CallSiteVisitor.synthesizeLombokAccessors` | `@Data/@Getter/@Setter/@Value` → 为字段合成 `getX`/`setX`/`isX`(static 跳过、final 无 setter) | JDT 不跑 Lombok 注解处理器,不合成这些方法就是不可见的;真实项目 8 个文件受影响 |
-| `MyBatisPlus` | 项目类 `extends ServiceImpl<M, E>` → 记 `IService#method -> M#mapperMethod` 合成边 | 真实项目 review:链路停在库方法 `IService.getById`,看不到项目 mapper |
+| `MyBatisPlus` | 项目类 `extends ServiceImpl<M, E>` → 记 `IService#method --(receiver=M 对应的 Service 接口)--> M#mapperMethod` 合成边,只给**向下**的 callee 树用(不进反向 callers 索引) | 真实项目 review:链路停在库方法 `IService.getById`;receiver 限定避免 A 服务调用串到 B 服务的 mapper |
 | `IndexFingerprint` + `ProjectIndexStore` | 索引按「源码/mapper XML 的 mtime+大小 + pom 内容」的指纹序列化到 `~/.cache/codescope/`;`ProjectIndex` 全量 `Serializable` | CLI 单发进程,不缓存每次都要 Maven+JDT;实测 386 文件 ~26s→~2s |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |

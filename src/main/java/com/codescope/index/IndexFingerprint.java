@@ -72,6 +72,22 @@ final class IndexFingerprint {
                 }
             }
 
+            // The tool's own bytecode: a rebuild that changes index
+            // semantics must invalidate the cache too, not just source
+            // edits. Uses the code-source location (the shaded jar, or
+            // target/classes under `mvn test`).
+            try {
+                java.net.URL location = IndexFingerprint.class.getProtectionDomain()
+                        .getCodeSource().getLocation();
+                Path codeSource = Paths.get(location.toURI());
+                md.update(Long.toString(Files.getLastModifiedTime(codeSource).toMillis())
+                        .getBytes(StandardCharsets.UTF_8));
+                md.update(Long.toString(Files.size(codeSource)).getBytes(StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+                // No code source (exotic class loading): the rest of the
+                // fingerprint still applies.
+            }
+
             byte[] digest = md.digest();
             StringBuilder sb = new StringBuilder(digest.length * 2);
             for (byte b : digest) {

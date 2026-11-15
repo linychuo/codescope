@@ -84,21 +84,48 @@ class MyBatisPlusDelegationTest {
         ProjectIndex index = new JdtIndexer().build(sources, List.of(),
                 List.of(src.toString()), tmp);
 
-        // The delegation edge must be recorded against the key call sites
-        // actually bind to (the library IService method).
+        // The delegation is scoped to the project service interface that the
+        // call site's receiver is typed as, and is not a call edge (so
+        // trace_callers on the mapper is not polluted).
         MethodKey iServiceGetById = new MethodKey(MyBatisPlus.I_SERVICE, "getById", 1,
                 List.of("java.io.Serializable"));
-        Set<MethodKey> callees = index.invokesOf(iServiceGetById);
-        assertTrue(callees.stream().anyMatch(k ->
-                        k.declaringClass.equals("com.example.MyMapper")
-                                && k.methodName.equals("selectById")),
-                "the ServiceImpl -> mapper delegation must be recorded, got: " + callees);
+        MethodKey delegated = index.delegationOf(iServiceGetById, "com.example.MyService");
+        assertNotNull(delegated, "the ServiceImpl -> mapper delegation must be recorded");
+        assertEquals("selectById", delegated.methodName);
+        assertEquals("com.example.MyMapper", delegated.declaringClass);
+        assertTrue(delegated.arity == 1,
+                "the mapper key must carry the project mapper FQN, got: " + delegated);
+        assertTrue(index.invokesOf(iServiceGetById).isEmpty(),
+                "a delegation is not a call edge");
+    }
 
-        // The mapper method key uses the project mapper's FQN, so the
-        // mapper's XML statement attaches to the callee tree.
-        assertTrue(callees.stream().anyMatch(k ->
-                        k.declaringClass.equals("com.example.MyMapper")
-                                && k.arity == 1),
-                "the mapper key must carry the project mapper FQN, got: " + callees);
+    @Test
+    void calleeTreeUsesTheDelegationScopedToTheReceiver(@TempDir Path tmp) throws Exception {
+        // Hand-built index: Caller#use calls IService#getById on a
+        // MyService-typed receiver; the delegation maps that receiver to
+        // MyMapper#selectById. The callee tree must include the mapper and
+        // must not leak the sibling MyOtherService's mapper.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey use = new MethodKey("com.example.Caller", "use", 0, List.of());
+        MethodKey iServiceGetById = new MethodKey(MyBatisPlus.I_SERVICE, "getById", 1,
+                List.of("java.io.Serializable"));
+        MethodKey mapperSelect = new MethodKey("com.example.MyMapper", "selectById", 1,
+                List.of("java.io.Serializable"));
+        index.putDeclaration(use, new ProjectIndex.SourceLoc("Caller.java", 1));
+        index.putDeclaration(iServiceGetById, new ProjectIndex.SourceLoc("IService.java", 1));
+        index.putDeclaration(mapperSelect, new ProjectIndex.SourceLoc("MyMapper.java", 1));
+        index.recordInvocation(use, iServiceGetById);
+        index.recordCallSite(use, iServiceGetById,
+                new ProjectIndex.SourceLoc("Caller.java", 2), "com.example.MyService");
+        index.recordDelegation(iServiceGetById, "com.example.MyService", mapperSelect);
+
+        com.codescope.analysis.CalleeChainAnalyzer.Result r =
+                new com.codescope.analysis.CalleeChainAnalyzer().traceCallees(
+                        index, use, List.of(use), "com.example.Caller");
+        String json = r.root().toJson(null, "callees").toString();
+        assertTrue(json.contains("com.example.MyMapper") && json.contains("selectById"),
+                "the callee tree must cross the framework delegation, got: " + json);
+        assertFalse(json.contains("MyOtherService"),
+                "the delegation must be scoped to the receiver, got: " + json);
     }
 }
