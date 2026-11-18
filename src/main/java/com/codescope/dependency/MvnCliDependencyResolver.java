@@ -58,6 +58,22 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
             throw new IOException("pom.xml not found under " + projectRoot);
         }
 
+        // Disk cache first: the CLI is a one-shot process, so without this
+        // every invocation pays the full Maven cost (measured at 27.6s of a
+        // 33.8s warm run on MyBatis-3, most of it dependency metadata
+        // resolution rather than the index build). Keyed by the pom contents
+        // plus the extra args, so a dependency change is picked up.
+        String fingerprint = ClasspathCache.fingerprint(projectRoot, extraArgs);
+        if (fingerprint != null) {
+            List<String> cached = ClasspathCache.load(fingerprint);
+            if (cached != null) return cached;
+        }
+        List<String> resolved = resolveViaMaven(projectRoot);
+        if (fingerprint != null) ClasspathCache.save(fingerprint, resolved);
+        return resolved;
+    }
+
+    private List<String> resolveViaMaven(Path projectRoot) throws IOException {
         // Create temp file for maven output
         Path outputFile = Files.createTempFile("codescope-mvn-cp-", ".tmp");
         try {

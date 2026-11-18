@@ -109,6 +109,9 @@ class MvnCliDependencyResolverTest {
         // fixture project's mvn invocation takes seconds, so this reliably
         // exercises the timeout path instead of a real build.
         System.setProperty("codescope.mvn.timeout", "0");
+        // This test asserts the Maven invocation itself, so an entry another
+        // test cached for the same fixture must not short-circuit it.
+        ClasspathCache.clear();
         try {
             MvnCliDependencyResolver r = new MvnCliDependencyResolver();
             IOException e = assertThrows(IOException.class, () -> r.resolve(
@@ -116,6 +119,7 @@ class MvnCliDependencyResolverTest {
             assertTrue(e.getMessage().contains("timed out"), "got: " + e.getMessage());
         } finally {
             System.clearProperty("codescope.mvn.timeout");
+            ClasspathCache.clear();
         }
     }
 

@@ -184,9 +184,35 @@ DTD/外部实体被禁用（XXE 防护）。
 4. **`<resultMap>` 未索引** → 加入（可搜、不挂 callee 树）。
 5. **MyBatis-Plus 委托未建模** → `MyBatisPlus` 记 `IService#m --(receiver=该 Service 接口)--> Mapper#mapped` 合成边,只给向下 callee 树用。receiver 限定是关键:全局共享边会让 `trace_callers` 把 A 服务的调用串到 B 服务的 mapper(实测到的串味)。
 6. **库方法缺 arity 时根签名 `/0`** → 用 seed 的真实 arity 回填。
-7. **性能**（~24s，Maven 6.5s + JDT ~17s）→ `IndexFingerprint` + `ProjectIndexStore`
-   磁盘缓存；实测 386 文件 ~26s → ~2s。
+7. **性能**（真实测量）→ 见下。
 8. **`@Transactional` 边界未标注** → `EntryPoints.isTransactional` + `CallNode.transactional`。
+
+### 真实项目性能实测（MyBatis-3，1406 Java / 165 mapper XML；机器 4 核 / 8GB）
+
+| 场景 | 耗时 | 峰值 RSS |
+|---|---|---|
+| 冷（Maven 下载依赖 + 索引） | 首轮 600s 触发工具自带超时；依赖缓存后 33.8s | ~715MB |
+| 索引重建（classpath 缓存命中，无 Maven） | 21.0s | ~660MB |
+| 索引重建 + `-Xmx512m` | 22.2s | ~431MB |
+| 热查询（索引 + classpath 都命中） | **1.8s** | ~153MB |
+
+- **Maven 是最大头**：依赖已下载后重新解析仍要 27.6s（在线元数据检查），
+  离线只要 6.6s。→ 新增 `ClasspathCache`（按 pom 内容 + Maven 参数缓存
+  `mvn dependency:build-classpath` 的结果）。
+- **索引 21s**（1406 文件，~15ms/文件），其中 mapper XML 扫描占比很小；
+  内存峰值 ~660MB，`-Xmx512m` 也能在 ~22s 内完成（峰值 RSS 431MB）→
+  给解析加了 `Semaphore` 并发上限（`max(4, 核数×2)`），避免大项目内存随
+  文件数线性膨胀（实测对耗时无明显影响，是扩展性护栏）。
+- **冷热差距**（两个真实项目实测）：MyBatis-3 冷 38.5s / 热 2.0s；
+  IMS（386 文件）冷 25.9s / 热 1.9s。热跑 = classpath 缓存命中（跳过 Maven）
+  + 索引缓存命中（跳过 JDT 解析）。
+- 缓存目录有上限（classpath 100、索引 200），超出按最旧优先淘汰。
+- 已知限制：指纹不含依赖 jar（SNAPSHOT 覆盖而 pom 未变需 `refresh`）；
+  依赖下载受网络影响很大（首次跑可能触发 600s 超时）。
+- **mapper XML 的 `include_tests` 耦合**：MyBatis-3 的全部 165 个 mapper XML
+  都在 `src/test/resources`，默认（不含测试）索引到 **0** 条，加
+  `--include-tests` 才到 528 条。因为 mapper XML 是 SQL 配置而不是"测试代码"，
+  这个耦合是否合理可以再议（当前与 Java 测试源码的口径保持一致）。
 
 验证（真实项目 CLI）：`CustomerMapper#selectById` 根签名 `/1`、
 `PermissionScanner.onApplicationEvent` → `spring-event-listener`、

@@ -115,7 +115,9 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `EntryPoints.isTransactional` + `CallNode.transactional` | 方法或类上的 `@Transactional`(Spring/Jakarta/javax)→ 代理边界标记,与入口标记分开 | 真实项目 review:`@Transactional` 在 35 个文件里,是链路语义的一部分但不是入口 |
 | `CallSiteVisitor.synthesizeLombokAccessors` | `@Data/@Getter/@Setter/@Value` → 为字段合成 `getX`/`setX`/`isX`(static 跳过、final 无 setter) | JDT 不跑 Lombok 注解处理器,不合成这些方法就是不可见的;真实项目 8 个文件受影响 |
 | `MyBatisPlus` | 项目类 `extends ServiceImpl<M, E>` → 记 `IService#method --(receiver=M 对应的 Service 接口)--> M#mapperMethod` 合成边,只给**向下**的 callee 树用(不进反向 callers 索引) | 真实项目 review:链路停在库方法 `IService.getById`;receiver 限定避免 A 服务调用串到 B 服务的 mapper |
-| `IndexFingerprint` + `ProjectIndexStore` | 索引按「源码/mapper XML 的 mtime+大小 + pom 内容」的指纹序列化到 `~/.cache/codescope/`;`ProjectIndex` 全量 `Serializable` | CLI 单发进程,不缓存每次都要 Maven+JDT;实测 386 文件 ~26s→~2s |
+| `IndexFingerprint` + `ProjectIndexStore` | 索引按「源码/mapper XML 的 mtime+大小 + pom 内容 + 工具字节码」的指纹序列化到 `~/.cache/codescope/`;`ProjectIndex` 全量 `Serializable`;目录超 200 个按最旧淘汰 | CLI 单发进程,不缓存每次都要 Maven+JDT;实测 386 文件 ~26s→~2s |
+| `ClasspathCache` + `MvnCliDependencyResolver` | `mvn dependency:build-classpath` 的结果按「pom 内容 + Maven 参数」缓存(`classpath-<指纹>.txt`) | 依赖已下载后重新解析仍要 ~28s(在线元数据检查),缓存命中 ~2s |
+| `JdtIndexer` 并发上限 | 每个文件一个 virtual thread,但用 `Semaphore(max(4, 核数×2))` 限制同时解析的数量 | 实测 1406 文件峰值 RSS ~660MB(默认堆),`-Xmx512m` 也能在 ~22s 内完成;上限避免大项目内存随文件数线性膨胀 |
 | `CallChainAnalyzer.maxNodes = 50_000`(实例字段,默认 50_000) | 树大小硬上限 | 防止一个热门函数被广泛调用时 BFS 跑飞;package-private `CallChainAnalyzer(int)` 构造器让测试能用小 cap 验证截断行为 |
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |

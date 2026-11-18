@@ -55,7 +55,12 @@ MyBatis mapper XML 也会被解析（`include_tests` 同样作用于 `src/test/r
 - **Lombok**：`@Data`/`@Getter`/`@Setter`/`@Value` 生成的访问器会被合成进符号表和调用边（JDT 不跑注解处理器，所以不做这一步这些方法就是不可见的）。
 - **MyBatis-Plus 委托**：`XxxServiceImpl extends ServiceImpl<XxxMapper, E>` 的 CRUD 方法会跨框架委托到项目里的 mapper（按调用点 receiver 的静态类型限定到具体 Service 接口，不会串到别的服务），调用链不停在库边界。
 
-**磁盘缓存**：索引按「源码 + mapper XML + pom 内容 + 工具自身字节码」的指纹缓存到 `~/.cache/codescope/`，CLI 二次调用直接从磁盘加载（实测 386 文件的项目从 ~26s 降到 ~2s）。`-Dcodescope.cache.dir=<dir>` 可覆盖缓存目录。依赖版本变化而 pom 未变（SNAPSHOT 覆盖）时仍需 `refresh`。
+**磁盘缓存**：两层，都在 `~/.cache/codescope/`，`-Dcodescope.cache.dir=<dir>` 可覆盖目录。
+
+- **classpath 缓存**：`mvn dependency:build-classpath` 的结果按 pom 内容 + Maven 参数缓存。这一步在依赖已下载后仍要 ~28s（MyBatis-3 实测，主要是在线元数据解析），缓存后 ~2s。
+- **索引缓存**：索引按「源码 + mapper XML + pom 内容 + 工具自身字节码」的指纹缓存，命中后直接反序列化（实测 386 文件的项目 ~26s → ~2s）。
+
+两者都在 pom/源码变化时自动失效；依赖版本变化而 pom 未变（SNAPSHOT 覆盖）时仍需 `refresh`。索引构建的并发解析有上限（`max(4, 核数×2)`），内存占用在 512MB 堆内可完成。
 
 详细参数见 [`docs/direct-stdio-usage.md`](docs/direct-stdio-usage.md) 或运行 `--help`。
 
@@ -93,5 +98,5 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 
 ```bash
 mvn test
-# 335 个测试
+# 339 个测试
 ```

@@ -59,21 +59,12 @@ final class MyBatisPlus {
         ITypeBinding superclass = typeBinding.getSuperclass();
         if (superclass == null) return;
         String superFqn = MethodHierarchyExtractor.fqnFromBinding(superclass.getErasure());
-        if (superFqn != null) {
-            for (int i = 0; i < Math.min(superFqn.length(), SERVICE_IMPL.length()); i++) {
-                if (superFqn.charAt(i) != SERVICE_IMPL.charAt(i)) {
-                    break;
-                }
-            }
-        }
         if (!SERVICE_IMPL.equals(superFqn)) return;
         ITypeBinding[] typeArgs = superclass.getTypeArguments();
         if (typeArgs.length < 1) return;
         ITypeBinding mapper = typeArgs[0].getErasure();
         String mapperFqn = MethodHierarchyExtractor.fqnFromBinding(mapper);
         if (mapperFqn == null || mapperFqn.isEmpty()) return;
-        for (ITypeBinding ifc : superclass.getInterfaces()) {
-        }
         ITypeBinding iService = findInterface(superclass, I_SERVICE);
         if (iService == null) return;
         // The project service interface this impl implements (e.g.

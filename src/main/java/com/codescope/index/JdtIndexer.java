@@ -73,10 +73,31 @@ public final class JdtIndexer {
         // resolution, which can block on classpath jars. Virtual threads let
         // us spawn one per file without capping concurrency at available
         // cores, and the executor's close() blocks until all complete.
+        //
+        // The parse concurrency is bounded: every in-flight file holds its
+        // AST plus JDT's resolved bindings, so an unbounded one-thread-per-file
+        // pool grows memory with the project size. The bound keeps the live
+        // set flat; the I/O-bound parts (file read, classpath jars) still
+        // overlap. Measured on a 1406-file project: ~660 MB peak either way,
+        // so this is a scalability guard rather than a tuned optimum.
+        int parseConcurrency = Math.max(4, Runtime.getRuntime().availableProcessors() * 2);
+        java.util.concurrent.Semaphore parsePermits = new java.util.concurrent.Semaphore(parseConcurrency);
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>(sources.size());
             for (Path src : sources) {
-                futures.add(pool.submit(() -> parseFile(src, cp, sp, encodingNames, projectRoot, index)));
+                futures.add(pool.submit(() -> {
+                    try {
+                        parsePermits.acquire();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    try {
+                        parseFile(src, cp, sp, encodingNames, projectRoot, index);
+                    } finally {
+                        parsePermits.release();
+                    }
+                }));
             }
             for (Future<?> f : futures) {
                 try {
