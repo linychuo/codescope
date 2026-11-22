@@ -94,7 +94,11 @@ public final class ProjectIndexCache {
      * rather than serve a poisoned entry.
      */
     public ProjectIndex loadOrRebuild(Path projectRoot, boolean refresh, boolean includeTests) {
-        IndexCacheKey key = new IndexCacheKey(projectRoot, includeTests);
+        // Key on the effective root: a sub-module --project and the
+        // aggregator itself index exactly the same tree, so they should
+        // share one in-memory entry rather than building it twice.
+        Path effective = ProjectLoader.discoverEffectiveRoot(projectRoot);
+        IndexCacheKey key = new IndexCacheKey(effective, includeTests);
         ReentrantLock lock = lockFor(key);
         lock.lock();
         try {

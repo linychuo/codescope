@@ -105,6 +105,9 @@ class MvnCliDependencyResolverTest {
 
     @Test
     void resolveTimesOutWhenMavenRunsTooLong() throws Exception {
+        // This test asserts the Maven invocation itself, so it needs a real
+        // mvn; skip cleanly on a container/CI image without one.
+        org.junit.jupiter.api.Assumptions.assumeTrue(isMvnAvailable(), "mvn not available");
         // A zero-second timeout forces the wait to expire immediately. The
         // fixture project's mvn invocation takes seconds, so this reliably
         // exercises the timeout path instead of a real build.
@@ -127,10 +130,31 @@ class MvnCliDependencyResolverTest {
     void resolvesInFixtureProject() throws Exception {
         // Integration test: run against the fixture project (no deps, just
         // verify the mvn command succeeds and returns something).
+        org.junit.jupiter.api.Assumptions.assumeTrue(isMvnAvailable(), "mvn not available");
         MvnCliDependencyResolver r = new MvnCliDependencyResolver();
         List<String> cp = r.resolve(Path.of("src/test/resources/fixture-project"));
         // The fixture project has no dependencies, so the classpath
         // should be empty or contain only the project's own output dir.
         assertNotNull(cp);
+    }
+
+    /**
+     * True when a usable {@code mvn} is reachable via {@code MAVEN_HOME} or
+     * {@code PATH}. The two integration tests shell out to Maven, so they
+     * must skip (not fail) on a container/CI image without it.
+     */
+    private static boolean isMvnAvailable() {
+        String mavenHome = System.getenv("MAVEN_HOME");
+        if (mavenHome != null && !mavenHome.isBlank()) {
+            if (Files.isRegularFile(Path.of(mavenHome, "bin", "mvn"))
+                    || Files.isRegularFile(Path.of(mavenHome, "bin", "mvn.cmd"))) return true;
+        }
+        String path = System.getenv("PATH");
+        if (path == null) return false;
+        for (String dir : path.split(File.pathSeparator)) {
+            if (Files.isRegularFile(Path.of(dir, "mvn"))
+                    || Files.isRegularFile(Path.of(dir, "mvn.cmd"))) return true;
+        }
+        return false;
     }
 }

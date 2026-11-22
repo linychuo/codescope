@@ -38,6 +38,9 @@ class DependencyResolverFactoryTest {
         try {
             DependencyResolver resolver = DependencyResolverFactory.create(tmp);
             assertInstanceOf(MvnCliDependencyResolver.class, resolver);
+            assertEquals(List.of("-gs", "/path/to/settings.xml"),
+                    ((MvnCliDependencyResolver) resolver).effectiveExtraArgs(),
+                    "the factory args must reach the resolver");
         } finally {
             // Reset to avoid side effects on other tests
             DependencyResolverFactory.setMavenExtraArgs(List.of());
