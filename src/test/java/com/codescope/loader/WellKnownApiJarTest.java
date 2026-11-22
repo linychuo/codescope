@@ -26,7 +26,7 @@ class WellKnownApiJarTest {
         // Build a project that uses javax.inject.Provider but does NOT
         // declare javax.inject as a dep. The CDI / Spring transitive-dep
         // case: javax.inject is on the runtime classpath via some other
-        // module, but MavenClasspathResolver only sees this module's
+        // module, but the Maven classpath resolver only sees this module's
         // pom and produces an incomplete classpath. Without the bundled
         // fallback, the chain stops at the layer that does
         // `repoProvider.get().findById()`.

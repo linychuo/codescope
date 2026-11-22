@@ -122,8 +122,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |
 | shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8;固定大小的锁条(64 条 `ReentrantLock`)按 key 哈希分配,构建在缓存锁外进行 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果;锁条让不同 project 并发构建且内存有界,LRU 的读写仍在全局锁内保持正确 |
-| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;聚合工程按 `<modules>` 逐模块解析并合并(单次调用对每个模块各跑一次,后写覆盖前写);单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
-| `MavenClasspathResolver` | 保留但无生产调用方(旧实现,纯文件系统解析 pom) | 仅测试覆盖;不被 `ProjectLoader` 或任何生产代码引用,保留是既定决定 |
+| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;聚合工程按 `<modules>` 逐模块解析并合并(有界并行,避免单次调用被后一个模块覆盖);单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
 | `ProjectLoader.collectSourceRoots0` | 匹配 `src/<...>/main/java`(test 视 `includeTests`),并并入每个 pom 的 `<build><sourceDirectory>`/`<testSourceDirectory>` | 测试代码默认不参与调用链;Maven 允许自定义源码目录,不读 pom 会漏掉这些文件 |
 
 ## 改哪儿 — 常见场景
