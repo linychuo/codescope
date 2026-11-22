@@ -1,6 +1,5 @@
 package com.codescope.mcp;
 
-import com.codescope.index.ProjectIndexCache;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -46,29 +45,29 @@ public final class McpServer {
      * the JVM kills the worker before it writes its response.
      */
     private static final long TOOL_CALL_EOF_WAIT_MILLIS = 10 * 60 * 1000L;
+    /**
+     * Cap on one stdin frame. A host that streams an unterminated object
+     * would otherwise make the accumulation buffer grow without bound.
+     */
+    private static final int MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
     private final ObjectMapper json = new ObjectMapper();
     private final ToolRegistry tools = new ToolRegistry();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Object stdoutLock = new Object();
-    private final ProjectIndexCache indexCache;
 
     public McpServer() {
-        this(new ProjectIndexCache());
-    }
-
-    public McpServer(ProjectIndexCache indexCache) {
-        this.indexCache = indexCache;
     }
 
     private final AtomicLong nextId = new AtomicLong(REQUEST_ID_BASE);
     // package-private so unit tests can drive server→client round-trips.
     final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 
-    // In-flight tools/call worker threads, keyed by request id, so a
-    // `notifications/cancelled` can interrupt the worker. Only
-    // tools/call is dispatched asynchronously (see dispatchAsync).
-    private final Map<Long, Thread> inFlightToolCalls = new ConcurrentHashMap<>();
+    // In-flight tools/call worker threads, keyed by the request id in its
+    // raw JSON form (numeric or string), so a `notifications/cancelled` can
+    // interrupt the worker and EOF can wait for it. Only tools/call is
+    // dispatched asynchronously (see dispatchAsync).
+    private final Map<String, Thread> inFlightToolCalls = new ConcurrentHashMap<>();
 
     /** Notified (off the I/O thread) with the first workspace root the host advertises. */
     private volatile Consumer<String> defaultProjectRootSink;
@@ -182,10 +181,28 @@ public final class McpServer {
         if (buf.size() == 0) return false;
         byte[] bytes = buf.toByteArray();
         int consumed = findObjectEnd(bytes);
-        if (consumed < 0) return false;   // incomplete — keep reading
+        if (consumed < 0) {
+            // Incomplete. Bound the buffer so a host that streams an
+            // unterminated object cannot grow it without limit.
+            if (bytes.length > MAX_FRAME_BYTES) {
+                sendError(null, -32700, "Parse error: frame exceeds "
+                        + MAX_FRAME_BYTES + " bytes");
+                buf.reset();
+                return true;
+            }
+            return false;   // incomplete — keep reading
+        }
         try {
             byte[] frame = new byte[consumed];
             System.arraycopy(bytes, 0, frame, 0, consumed);
+            // A syntactically valid non-object (array, string, number, null)
+            // is not a JSON-RPC message. Label it Invalid Request rather than
+            // Parse error; batch arrays are rejected, not processed.
+            if (!json.readTree(frame).isObject()) {
+                sendError(null, -32600, "Invalid Request: expected a JSON object");
+                buf.reset();
+                return true;
+            }
             @SuppressWarnings("unchecked")
             Map<String, Object> msg = json.readValue(frame, Map.class);
             // Drop the consumed bytes; keep any trailing data for the next
@@ -228,27 +245,27 @@ public final class McpServer {
             safeHandle(msg);
             return;
         }
-        Long id = coerceId(msg.get("id"));
-        if (id == null) {
-            // No numeric id to track: either a notification (handle()
-            // ignores it) or a request with a non-numeric string id
-            // (handle() replies using the raw id). Run it off-thread for
-            // consistency; there is just no entry to cancel.
+        Object idObj = msg.get("id");
+        // Track every request that has an id — numeric or string — so EOF
+        // waits for its response. A missing id is a notification: nothing to
+        // reply to, so it needs no tracking.
+        String key = idObj == null ? null : String.valueOf(idObj);
+        if (key == null) {
             Thread t = Thread.ofVirtual().name("tool-call-anon")
                     .unstarted(() -> safeHandle(msg));
             t.start();
             return;
         }
         Thread[] holder = new Thread[1];
-        Thread t = Thread.ofVirtual().name("tool-call-" + id).unstarted(() -> {
+        Thread t = Thread.ofVirtual().name("tool-call-" + key).unstarted(() -> {
             try {
                 safeHandle(msg);
             } finally {
-                inFlightToolCalls.remove(id, holder[0]);
+                inFlightToolCalls.remove(key, holder[0]);
             }
         });
         holder[0] = t;
-        inFlightToolCalls.put(id, t);
+        inFlightToolCalls.put(key, t);
         t.start();
     }
 
@@ -510,7 +527,7 @@ public final class McpServer {
                     // read loop is the only thread that can receive this
                     // notification during a slow tool call, so reaching
                     // here means the call has been running on a worker.
-                    Thread tool = inFlightToolCalls.remove(cancelledId);
+                    Thread tool = inFlightToolCalls.remove(String.valueOf(cancelledId));
                     if (tool != null) tool.interrupt();
                 }
                 return;

@@ -270,7 +270,7 @@ public final class MapperXmlIndexer {
      */
     private static String expandIncludes(String sql, String namespace,
                                          Map<String, Map<String, Fragment>> fragments,
-                                         Set<String> visited) {
+                                         Set<String> active) {
         Matcher m = INCLUDE_PATTERN.matcher(sql);
         StringBuilder out = new StringBuilder();
         while (m.find()) {
@@ -287,9 +287,17 @@ public final class MapperXmlIndexer {
             }
             String key = ns + "#" + id;
             Fragment frag = fragments.getOrDefault(ns, Map.of()).get(id);
-            String replacement = (frag != null && visited.add(key))
-                    ? expandIncludes(frag.text(), ns, fragments, visited)
-                    : "";
+            // `active` is only the current expansion stack (cycle guard), not
+            // a "already expanded" set: the same fragment may legitimately be
+            // included twice in one statement and must expand both times.
+            String replacement = "";
+            if (frag != null && active.add(key)) {
+                try {
+                    replacement = expandIncludes(frag.text(), ns, fragments, active);
+                } finally {
+                    active.remove(key);
+                }
+            }
             m.appendReplacement(out, Matcher.quoteReplacement(replacement));
         }
         m.appendTail(out);

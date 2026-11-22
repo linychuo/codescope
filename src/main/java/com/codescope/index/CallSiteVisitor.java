@@ -213,17 +213,29 @@ final class CallSiteVisitor extends ASTVisitor {
         // one with the same name + arity; synthesizing it anyway would let a
         // generated declaration shadow the real one (its line would be the
         // field's, because putDeclaration is first-wins).
-        Set<String> declared = new java.util.HashSet<>();
-        for (Object bd : node.bodyDeclarations()) {
-            if (bd instanceof MethodDeclaration md) {
-                declared.add(md.getName().getIdentifier() + "/" + md.parameters().size());
-            }
-        }
+        Set<String> declared = declaredAccessors(node);
         for (Object bd : node.bodyDeclarations()) {
             if (bd instanceof FieldDeclaration field) {
                 synthesizeLombokAccessors(field, fqn, kind, declared);
             }
         }
+    }
+
+    /**
+     * Method simple-name + arity keys declared directly on {@code type}.
+     * Lombok does not generate an accessor the class already declares, so
+     * both the class-level and the field-level synthesis paths must skip it
+     * (otherwise {@code putDeclaration}'s first-wins rule lets the field's
+     * location shadow the real method).
+     */
+    private static Set<String> declaredAccessors(TypeDeclaration type) {
+        Set<String> declared = new java.util.HashSet<>();
+        for (Object bd : type.bodyDeclarations()) {
+            if (bd instanceof MethodDeclaration md) {
+                declared.add(md.getName().getIdentifier() + "/" + md.parameters().size());
+            }
+        }
+        return declared;
     }
 
     /**
@@ -676,7 +688,9 @@ final class CallSiteVisitor extends ASTVisitor {
         // points at the first one encountered (same rule as init blocks).
         // Field-level Lombok @Getter/@Setter (issue #9 follow-up).
         if (lombokKindOf(node.modifiers()) != LombokAccessors.NONE) {
-            synthesizeLombokAccessors(node, callerClass, LombokAccessors.NONE, Set.of());
+            Set<String> declared = node.getParent() instanceof TypeDeclaration td
+                    ? declaredAccessors(td) : Set.of();
+            synthesizeLombokAccessors(node, callerClass, LombokAccessors.NONE, declared);
         }
         boolean isStatic = Modifier.isStatic(node.getModifiers());
         String synthName = isStatic ? "<clinit>" : "<class-init>";

@@ -142,26 +142,36 @@ public final class CalleeChainAnalyzer {
                 }
                 frameCallees.addAll(index.invokesOf(relatedKey));
             }
-            // Receiver static types of this frame's own call sites (looked up
-            // per callee — the site lives in the frame's body). A frame
-            // reached through a framework entry point carries them down so
-            // the delegation resolves to the right service (issue #9
-            // follow-up); inheriting the parent's set keeps it scoped.
-            Set<String> frameReceivers = new java.util.HashSet<>(f.receiverTypes);
+            // Receiver static types of this frame's own call sites, looked up
+            // per callee (the site lives in the frame's body). A callee must
+            // be delegated only with the receivers it is actually invoked on:
+            // unioning the receivers of sibling callees, or of ancestor
+            // frames, attaches mappers the call path can never reach.
+            Set<String> frameReceivers = new java.util.HashSet<>();
+            java.util.Map<MethodKey, Set<String>> calleeReceivers = new java.util.HashMap<>();
             for (MethodKey callee : frameCallees) {
+                Set<String> receivers = new java.util.HashSet<>();
                 List<ProjectIndex.CallSite> sites = index.callSitesOfSet(callee).get(f.key);
                 if (sites != null) {
                     for (ProjectIndex.CallSite site : sites) {
-                        if (site.receiverType() != null) frameReceivers.add(site.receiverType());
+                        if (site.receiverType() != null) receivers.add(site.receiverType());
                     }
                 }
+                calleeReceivers.put(callee, receivers);
+                frameReceivers.addAll(receivers);
             }
-            // Framework delegation, scoped to this frame's receivers. Kept
-            // out of the reverse call index so trace_callers on the mapper
-            // is not polluted by the library entry point.
+            // A frame reached through a framework entry point carries its
+            // receiver context down so a library frame with no project call
+            // sites can still resolve its delegation.
+            if (frameReceivers.isEmpty()) frameReceivers.addAll(f.receiverTypes);
+            // Framework delegation, scoped to each callee's own receivers.
+            // Kept out of the reverse call index so trace_callers on the
+            // mapper is not polluted by the library entry point.
             Set<MethodKey> delegated = new LinkedHashSet<>();
             for (MethodKey callee : frameCallees) {
-                for (String receiver : frameReceivers) {
+                Set<String> receivers = calleeReceivers.get(callee);
+                if (receivers.isEmpty()) receivers = f.receiverTypes;
+                for (String receiver : receivers) {
                     MethodKey target = index.delegationOf(callee, receiver);
                     if (target != null) delegated.add(target);
                 }

@@ -22,7 +22,7 @@ public final class Main {
         TraceCalleesTool traceCallees = new TraceCalleesTool(shared);
         FindCallSitesTool findCallSites = new FindCallSitesTool(shared);
         FindSymbolsTool findSymbols = new FindSymbolsTool(shared);
-        McpServer server = new McpServer(shared)
+        McpServer server = new McpServer()
                 .register(traceCallers)
                 .register(traceCallees)
                 .register(findCallSites)

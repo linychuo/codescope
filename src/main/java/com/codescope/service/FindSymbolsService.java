@@ -140,7 +140,8 @@ public final class FindSymbolsService {
         out.put("message", buildMessage(query, kind, matches, truncated, effectiveLimit, offset,
                 total));
         out.put("total", total);
-        out.put("symbols", buildSymbolsArray(query, matches, new SourceSnippet(projectRoot)));
+        out.put("symbols", buildSymbolsArray(query, matches,
+                SourceSnippet.against(index, projectRoot)));
         try {
             return json.writeValueAsString(out);
         } catch (JsonProcessingException e) {
@@ -167,8 +168,8 @@ public final class FindSymbolsService {
             base = base + " (capped at limit=" + limit + "; refine the query to see more)";
         }
         if (offset > 0 || truncated) {
-            base = base + " (showing " + (Math.min(offset + 1, total)) + "-"
-                    + (offset + matches.size()) + " of " + total
+            base = base + " (showing " + Math.min((long) offset + 1, total) + "-"
+                    + ((long) offset + matches.size()) + " of " + total
                     + "; pass offset/limit to paginate)";
         }
         return base;

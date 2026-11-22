@@ -84,8 +84,8 @@ class MethodResolverTest {
     @Test
     void overloadUnionSuffixEmptyForSingleSeed() {
         assertEquals("", MethodResolver.overloadUnionSuffix(List.of(
-                new MethodKey("a.b.C", "m", 1, List.of("int")))));
-        assertEquals("", MethodResolver.overloadUnionSuffix(List.of()));
+                new MethodKey("a.b.C", "m", 1, List.of("int"))), "callers"));
+        assertEquals("", MethodResolver.overloadUnionSuffix(List.of(), "callers"));
     }
 
     @Test
@@ -109,7 +109,7 @@ class MethodResolverTest {
         List<MethodKey> seeds = List.of(
                 new MethodKey("a.b.C", "m", 1, List.of("int")),
                 new MethodKey("a.b.C", "m", 1, List.of("java.lang.String")));
-        String suffix = MethodResolver.overloadUnionSuffix(seeds);
+        String suffix = MethodResolver.overloadUnionSuffix(seeds, "callers");
         assertTrue(suffix.contains("2 library overloads"),
                 "suffix must report overload count, got: " + suffix);
         assertTrue(suffix.contains("a.b.C#m/1(java.lang.String)"),

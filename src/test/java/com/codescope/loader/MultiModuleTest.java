@@ -7,9 +7,11 @@ import com.codescope.index.ProjectIndex;
 import com.codescope.index.ProjectIndexCache;
 import com.codescope.model.MethodKey;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Verifies multi-module Maven support and pom-finding behavior. */
 class MultiModuleTest {
@@ -112,6 +114,55 @@ class MultiModuleTest {
         Path effective = ProjectLoader.discoverEffectiveRoot(root);
         assertEquals(root, effective,
                 "aggregator should be its own effective root (no walk-up). Got: " + effective);
+    }
+
+    @Test
+    void diskCacheInvalidatesWhenSiblingModuleChanges(@TempDir Path tmp) throws Exception {
+        // Regression: the index covers the whole aggregator (the loader walks
+        // up from a sub-module), but the disk-cache fingerprint used to be
+        // computed on the raw sub-module root, so a sibling-module edit was
+        // invisible without an explicit refresh.
+        Path copy = tmp.resolve("mm");
+        copyDir(Path.of("src/test/resources/multi-module-fixture"), copy);
+        String old = System.getProperty("codescope.cache.dir");
+        Path cache = Files.createDirectories(tmp.resolve("cache"));
+        System.setProperty("codescope.cache.dir", cache.toString());
+        try {
+            ProjectIndex first = new ProjectIndexCache().loadOrRebuild(
+                    copy.resolve("app"), false, false);
+            assertTrue(first.knownMethods().stream().anyMatch(k -> k.methodName.equals("coreMethod")));
+
+            Path helper = copy.resolve("core/src/main/java/com/example/core/Helper.java");
+            Files.writeString(helper, """
+                    package com.example.core;
+                    public class Helper {
+                        public void coreMethod() { }
+                        public void newCoreMethod() { }
+                    }
+                    """);
+
+            ProjectIndex second = new ProjectIndexCache().loadOrRebuild(
+                    copy.resolve("app"), false, false);
+            assertTrue(second.knownMethods().stream().anyMatch(k -> k.methodName.equals("newCoreMethod")),
+                    "a sibling-module edit must invalidate the disk cache without refresh");
+        } finally {
+            if (old == null) System.clearProperty("codescope.cache.dir");
+            else System.setProperty("codescope.cache.dir", old);
+        }
+    }
+
+    private static void copyDir(Path src, Path dst) throws IOException {
+        try (var s = Files.walk(src)) {
+            for (Path p : s.toList()) {
+                Path target = dst.resolve(src.relativize(p).toString());
+                if (Files.isDirectory(p)) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(p, target);
+                }
+            }
+        }
     }
 
     @Test

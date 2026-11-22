@@ -129,6 +129,39 @@ class McpServerStdioTest {
     }
 
     @Test
+    void oneShotPipeWithStringIdDeliversResponse() throws Exception {
+        // JSON-RPC allows string ids. The worker must be tracked for EOF
+        // waiting regardless of id type, or the response is lost.
+        Process proc = startServer();
+        try {
+            BufferedReader out = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8));
+            OutputStream in = proc.getOutputStream();
+            send(in, "{\"jsonrpc\":\"2.0\",\"id\":\"init\",\"method\":\"initialize\",\"params\":{}}\n");
+            String args = JSON.writeValueAsString(java.util.Map.of(
+                    "class", "com.example.Target",
+                    "method", "leaf",
+                    "project", FIXTURE.toAbsolutePath().toString()));
+            send(in, String.format(
+                    "{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"tools/call\","
+                            + "\"params\":{\"name\":\"trace_callers\",\"arguments\":%s}}\n",
+                    args));
+            in.close();
+
+            assertEquals("init", readJson(out).path("id").asText(), "initialize response");
+            JsonNode callResp = readJson(out);
+            assertEquals("abc", callResp.path("id").asText(),
+                    "string-id tools/call response must arrive after stdin EOF");
+            assertTrue(callResp.path("result").path("content").size() >= 1,
+                    "string-id tools/call response must carry content");
+        } finally {
+            proc.destroy();
+            proc.waitFor(5, TimeUnit.SECONDS);
+            if (proc.isAlive()) proc.destroyForcibly();
+        }
+    }
+
+    @Test
     void returnsErrorForUnknownMethod() throws Exception {
         Process proc = startServer();
         try (BufferedReader out = new BufferedReader(

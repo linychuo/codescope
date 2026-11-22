@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,7 +41,8 @@ final class ClasspathCache {
      * @return the hex fingerprint for {@code projectRoot}, or null if it could
      *         not be computed (a null key disables the cache for that call).
      */
-    static String fingerprint(Path projectRoot, List<String> extraArgs) {
+    static String fingerprint(Path projectRoot, List<String> extraArgs,
+                              String settingsDigest) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             List<Path> poms = new ArrayList<>();
@@ -52,6 +54,11 @@ final class ClasspathCache {
                 md.update(Files.readAllBytes(pom));
             }
             md.update(String.join("\u0000", extraArgs == null ? List.<String>of() : extraArgs)
+                    .getBytes(StandardCharsets.UTF_8));
+            // Settings / local repository can change which jars are resolved
+            // without any pom edit; include their digest so the cached
+            // classpath is invalidated too.
+            md.update((settingsDigest == null ? "" : settingsDigest)
                     .getBytes(StandardCharsets.UTF_8));
             return hex(md.digest());
         } catch (Exception e) {
@@ -104,8 +111,22 @@ final class ClasspathCache {
         try {
             Path parent = file.getParent();
             if (parent != null) Files.createDirectories(parent);
-            Files.writeString(file, String.join(File.pathSeparator, classpath),
-                    StandardCharsets.UTF_8);
+            // Temp + atomic move: a concurrent reader must never observe a
+            // half-written classpath (which would parse as a valid but
+            // incomplete list and poison the index cache).
+            Path tmp = Files.createTempFile(parent, "classpath-", ".tmp");
+            try {
+                Files.writeString(tmp, String.join(File.pathSeparator, classpath),
+                        StandardCharsets.UTF_8);
+                try {
+                    Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                    Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
             evictOldEntries(parent);
         } catch (IOException | RuntimeException e) {
             // Best-effort.

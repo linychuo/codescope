@@ -56,6 +56,23 @@ class TraceCallersServiceTest {
     }
 
     @Test
+    void snippetsResolveWhenProjectIsASubModule() throws Exception {
+        // Regression: the index relativizes against the aggregator, but the
+        // snippet resolver used the raw --project path, so sibling-module
+        // nodes silently lost their snippet.
+        Path sub = Path.of("src/test/resources/multi-module-fixture/app");
+        String json = new TraceCallersService().traceCallersJson(
+                "com.example.core.Helper", "coreMethod", null, null, sub, false, false);
+        JsonNode tree = new ObjectMapper().readTree(json);
+        assertEquals("    public void coreMethod() {",
+                tree.path("target").path("snippet").asText(),
+                "target snippet must resolve against the effective root, got: " + tree.path("target"));
+        JsonNode caller = tree.path("target").path("callers").get(0);
+        assertFalse(caller.path("snippet").asText().isEmpty(),
+                "sibling-module caller snippet must be present, got: " + caller);
+    }
+
+    @Test
     void maxDepthIsHonouredByTheService() throws Exception {
         // Issue #9: depth control, end to end through the service.
         TraceCallersService svc = new TraceCallersService();

@@ -47,6 +47,19 @@ public final class SourceSnippet {
     }
 
     /**
+     * Builds a resolver against the root the {@code index} was built with.
+     * The index stores paths relative to the effective/aggregator root, so
+     * when {@code --project} pointed at a sub-module the caller's raw
+     * {@code fallback} root would resolve them to non-existent paths and
+     * silently drop every snippet. Falls back to {@code fallback} for a
+     * hand-built index with no recorded root.
+     */
+    public static SourceSnippet against(ProjectIndex index, Path fallback) {
+        String root = index == null ? null : index.root();
+        return new SourceSnippet(root != null ? Paths.get(root) : fallback);
+    }
+
+    /**
      * Returns the text of the 1-based {@code line} in {@code file}, with
      * trailing whitespace stripped (indentation is preserved), or
      * {@code null} when the file or line is unavailable. {@code line <= 0}

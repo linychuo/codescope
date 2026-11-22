@@ -262,6 +262,21 @@ public final class ProjectIndex implements Serializable {
     // comparison.
     private final Map<String, List<Symbol>> symbols = new ConcurrentHashMap<>();
 
+    /**
+     * The effective project root that the index's relative file paths are
+     * resolved against — the aggregator when {@code --project} pointed at a
+     * sub-module ({@link com.codescope.loader.ProjectLoader#discoverEffectiveRoot}).
+     * Stored as a {@code String} so the serialized cache stays portable.
+     * Null for a hand-built index (tests).
+     */
+    private String root;
+
+    /** Records the root the index's relative paths are relative to. */
+    public void setRoot(String root) { this.root = root; }
+
+    /** The root the index's relative paths are relative to, or null. */
+    public String root() { return root; }
+
     /** Records a source file that the indexer could not parse, for diagnostic reporting. */
     public void recordSkippedFile(String path, String reason) {
         skippedFiles.add(path + ": " + reason);
@@ -1013,13 +1028,11 @@ public final class ProjectIndex implements Serializable {
      * simply not reachable from {@code subType} through the recorded
      * hierarchy returns {@code false}.
      *
-     * <p>Only project-source type edges are recorded (library supertypes
-     * are skipped by the indexer), so a project type that extends a
-     * library type will not be reported as a subtype of that library
-     * type. That case cannot arise for the filter's intended use: the
-     * filter only runs when the callee is a project method, and a project
-     * method can only be the resolved callee of a call whose receiver
-     * type is the method's own class or a project supertype of it.
+     * <p>Both project and library supertype edges are recorded (see
+     * {@code CallSiteVisitor.recordTypeHierarchyFromBinding}), so a project
+     * type that extends a library type is correctly reported as a subtype
+     * of it. The filter's intended use is unchanged: a call site's receiver
+     * type must be hierarchy-comparable with the query class.
      */
     public boolean isSubtypeOf(String subType, String superType) {
         if (subType == null || superType == null) return true;
@@ -1252,14 +1265,27 @@ public final class ProjectIndex implements Serializable {
             String u = user.get(i);
             String d = declared.get(i);
             if (u == null || d == null) return false;
-            if (u.equals(d)) continue;
-            int dotU = u.lastIndexOf('.');
-            int dotD = d.lastIndexOf('.');
-            String tailU = dotU < 0 ? u : u.substring(dotU + 1);
-            String tailD = dotD < 0 ? d : d.substring(dotD + 1);
+            // Compare erased types: the user may pass the raw
+            // `java.util.List` while a hand-built index stores
+            // `java.util.List<java.lang.String>`. Taking lastIndexOf('.')
+            // on the generic form would land inside the type argument.
+            String uErased = eraseGenerics(u);
+            String dErased = eraseGenerics(d);
+            if (uErased.equals(dErased)) continue;
+            int dotU = uErased.lastIndexOf('.');
+            int dotD = dErased.lastIndexOf('.');
+            String tailU = dotU < 0 ? uErased : uErased.substring(dotU + 1);
+            String tailD = dotD < 0 ? dErased : dErased.substring(dotD + 1);
             if (!tailU.equals(tailD)) return false;
         }
         return true;
+    }
+
+    /** Drops a generic argument list: {@code java.util.List<String>} → {@code java.util.List}. */
+    private static String eraseGenerics(String type) {
+        if (type == null) return null;
+        int lt = type.indexOf('<');
+        return lt < 0 ? type : type.substring(0, lt);
     }
 
     /**

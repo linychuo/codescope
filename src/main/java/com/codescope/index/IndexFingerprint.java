@@ -123,9 +123,25 @@ final class IndexFingerprint {
                         public java.nio.file.FileVisitResult preVisitDirectory(
                                 Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
                             if (dir.equals(root)) return java.nio.file.FileVisitResult.CONTINUE;
-                            return isExcludedDir(dir.getFileName().toString())
-                                    ? java.nio.file.FileVisitResult.SKIP_SUBTREE
-                                    : java.nio.file.FileVisitResult.CONTINUE;
+                            String name = dir.getFileName().toString();
+                            if (name.startsWith(".") || name.equals("node_modules")) {
+                                return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                            }
+                            if (name.equals("target") || name.equals("build")) {
+                                // ProjectLoader deliberately indexes
+                                // annotation-processor output under
+                                // target/generated-sources (MapStruct, JAXB,
+                                // Spring Data). Those files are index inputs,
+                                // so they must be fingerprinted too; the rest
+                                // of build output is not.
+                                for (String gen : new String[]{
+                                        "generated-sources", "generated-test-sources"}) {
+                                    Path g = dir.resolve(gen);
+                                    if (Files.isDirectory(g)) walkInto(g, out);
+                                }
+                                return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                            }
+                            return java.nio.file.FileVisitResult.CONTINUE;
                         }
 
                         @Override
@@ -148,9 +164,13 @@ final class IndexFingerprint {
         }
     }
 
-    /** Mirrors the mapper XML scan's exclusions (build output, hidden dirs). */
-    private static boolean isExcludedDir(String name) {
-        return name.startsWith(".") || name.equals("target") || name.equals("node_modules");
+    /** Adds every regular file under {@code dir} (depth-bounded), best-effort. */
+    private static void walkInto(Path dir, List<Path> out) {
+        try (Stream<Path> s = Files.walk(dir, MAX_DEPTH)) {
+            s.filter(Files::isRegularFile).forEach(out::add);
+        } catch (IOException e) {
+            // best-effort: an unreadable generated tree just omits those files
+        }
     }
 
     /** The cache directory, overridable for tests. */

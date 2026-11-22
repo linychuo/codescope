@@ -91,12 +91,12 @@ java -Dcodescope.mvn.timeout=1200 -jar codescope.jar   # 覆盖为 1200 秒
 ## 限制
 
 - 支持 Maven 项目（调用 `mvn dependency:build-classpath` 获取依赖），Gradle 后续加入
-- `project` 必须是绝对路径
+- `project` 可为绝对或相对路径（相对路径按进程工作目录解析）；缺省时使用 host 通过 MCP `roots` 广播的工作区根
 - 重载需用 `arity` 或 `paramTypes` 消歧
 
 ## 测试
 
 ```bash
 mvn test
-# 339 个测试
+# 344 个测试
 ```

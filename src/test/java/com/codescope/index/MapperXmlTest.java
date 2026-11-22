@@ -187,6 +187,30 @@ class MapperXmlTest {
     }
 
     @Test
+    void repeatedIncludeIsExpandedEveryTime(@TempDir Path tmp) throws Exception {
+        // Regression: the cycle guard doubled as a repeat suppressor, so a
+        // fragment included twice in one statement was dropped the second
+        // time (the SQL silently lost a column).
+        writeJava(tmp, """
+                package com.example;
+                public interface UserMapper { String findById(Long id); }
+                """);
+        writeMapperXml(tmp, mapperXml("""
+                <sql id="cols">id, name</sql>
+                <select id="findById" resultType="String">
+                  SELECT <include refid="cols"/>, <include refid="cols"/> FROM user
+                </select>
+                """));
+        ProjectIndex index = build(tmp, "UserMapper.java");
+
+        List<ProjectIndex.MapperStatement> stmts =
+                index.mapperStatementsFor("com.example.UserMapper", "findById");
+        assertEquals(1, stmts.size());
+        assertEquals("SELECT id, name, id, name FROM user", stmts.get(0).sql(),
+                "a repeated include must expand every time");
+    }
+
+    @Test
     void resultMapIsIndexedButNotAttachedToCallees(@TempDir Path tmp) throws Exception {
         // Issue #9 follow-up: <resultMap> is part of the mapper XML and
         // searchable, but it is not a method implementation.

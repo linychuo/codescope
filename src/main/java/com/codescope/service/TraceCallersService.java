@@ -131,7 +131,7 @@ public final class TraceCallersService {
         // Library overload union suffix only when seeds collected >1 keys.
         // (For project targets, seeds == List.of(target) so size <= 1.)
         if (seeds.size() > 1) {
-            message = message + MethodResolver.overloadUnionSuffix(seeds);
+            message = message + MethodResolver.overloadUnionSuffix(seeds, "callers");
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
@@ -139,7 +139,7 @@ public final class TraceCallersService {
         // Issue #9: attach the source line for each node's declaration
         // location so a consumer can see the code without re-opening the
         // file. Null/undeclared nodes simply omit the key.
-        SourceSnippet snippets = new SourceSnippet(projectRoot);
+        SourceSnippet snippets = SourceSnippet.against(index, projectRoot);
         out.put("target", r.root().toJson(snippets::line));
         // Result.found is always true after the analyzer's contract change
         // (an empty chain with a "No callers" message is a valid answer,

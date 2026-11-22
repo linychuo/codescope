@@ -167,7 +167,7 @@ public final class Cli {
                 }
                 case "--arity" -> {
                     requireValue(args, i, "--arity");
-                    int n = parsePositiveInt(args[++i], "--arity");
+                    int n = parseNonNegativeInt(args[++i], "--arity");
                     p.arity = n;
                     p.aritySet = true;
                     i++;
@@ -190,19 +190,19 @@ public final class Cli {
                 }
                 case "--limit" -> {
                     requireValue(args, i, "--limit");
-                    p.limit = parsePositiveInt(args[++i], "--limit");
+                    p.limit = parseNonNegativeInt(args[++i], "--limit");
                     p.limitSet = true;
                     i++;
                 }
                 case "--max-depth" -> {
                     requireValue(args, i, "--max-depth");
-                    p.maxDepth = parsePositiveInt(args[++i], "--max-depth");
+                    p.maxDepth = parseNonNegativeInt(args[++i], "--max-depth");
                     p.maxDepthSet = true;
                     i++;
                 }
                 case "--offset" -> {
                     requireValue(args, i, "--offset");
-                    p.offset = parsePositiveInt(args[++i], "--offset");
+                    p.offset = parseNonNegativeInt(args[++i], "--offset");
                     p.offsetSet = true;
                     i++;
                 }
@@ -216,6 +216,19 @@ public final class Cli {
             }
         }
         warnIfIrrelevant(p, command);
+        int expectedPositional = switch (command) {
+            case "find-symbols" -> 1;
+            case "trace-callers", "trace-callees", "find-call-sites" -> 2;
+            default -> -1;   // unknown command: dispatch reports it
+        };
+        if (expectedPositional >= 0 && p.positional.size() > expectedPositional) {
+            throw new UsageException("Unexpected argument: "
+                    + p.positional.get(expectedPositional) + " (expected "
+                    + expectedPositional + " positional argument(s))");
+        }
+        if (p.limitSet && p.limit < 1) {
+            throw new UsageException("--limit must be >= 1, got " + p.limit);
+        }
         return p;
     }
 
@@ -264,7 +277,7 @@ public final class Cli {
      * error from {@link Integer#parseInt}; both are now a clean usage error
      * so the user knows the flag was wrong, not that the project is broken.
      */
-    private static int parsePositiveInt(String s, String opt) {
+    private static int parseNonNegativeInt(String s, String opt) {
         int n;
         try {
             n = Integer.parseInt(s);

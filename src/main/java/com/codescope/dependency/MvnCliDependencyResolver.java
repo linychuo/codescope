@@ -63,7 +63,9 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         // 33.8s warm run on MyBatis-3, most of it dependency metadata
         // resolution rather than the index build). Keyed by the pom contents
         // plus the extra args, so a dependency change is picked up.
-        String fingerprint = ClasspathCache.fingerprint(projectRoot, extraArgs);
+        List<String> effectiveArgs = effectiveExtraArgs();
+        String fingerprint = ClasspathCache.fingerprint(projectRoot, effectiveArgs,
+                settingsDigest(effectiveArgs));
         if (fingerprint != null) {
             List<String> cached = ClasspathCache.load(fingerprint);
             if (cached != null) return cached;
@@ -73,7 +75,47 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         return resolved;
     }
 
+    /**
+     * Resolves the classpath for {@code projectRoot}. When the pom is an
+     * aggregator ({@code <modules>}), the goal is invoked once per module
+     * and the results are merged: a single {@code dependency:build-classpath}
+     * on the aggregator runs the goal for every module, and each module
+     * overwrites the same {@code -Dmdep.outputFile}, so only the last
+     * module's classpath would survive.
+     */
     private List<String> resolveViaMaven(Path projectRoot) throws IOException {
+        List<Path> modules = moduleDirs(projectRoot);
+        if (modules.isEmpty()) return resolveSingleModule(projectRoot);
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+        for (Path module : modules) merged.addAll(resolveViaMaven(module));
+        return new ArrayList<>(merged);
+    }
+
+    /**
+     * Direct sub-module directories declared by {@code projectRoot/pom.xml},
+     * or an empty list for a standalone project. Best-effort: a malformed
+     * or missing module pom is skipped rather than aborting the whole
+     * resolution.
+     */
+    private static List<Path> moduleDirs(Path projectRoot) {
+        Path pom = projectRoot.resolve("pom.xml");
+        if (!Files.isRegularFile(pom)) return List.of();
+        try (InputStream in = Files.newInputStream(pom)) {
+            org.apache.maven.model.Model model =
+                    new org.apache.maven.model.io.xpp3.MavenXpp3Reader().read(in);
+            List<Path> out = new ArrayList<>();
+            for (String rel : model.getModules()) {
+                if (rel == null || rel.isBlank()) continue;
+                Path dir = projectRoot.resolve(rel).toAbsolutePath().normalize();
+                if (Files.isRegularFile(dir.resolve("pom.xml"))) out.add(dir);
+            }
+            return out;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private List<String> resolveSingleModule(Path projectRoot) throws IOException {
         // Create temp file for maven output
         Path outputFile = Files.createTempFile("codescope-mvn-cp-", ".tmp");
         try {
@@ -176,7 +218,12 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
             if (Files.isRegularFile(wrapper)) return wrapper.toAbsolutePath().toString();
         } else {
             Path wrapper = projectRoot.resolve("mvnw");
-            if (Files.isRegularFile(wrapper)) return wrapper.toAbsolutePath().toString();
+            // A wrapper checked out of an archive / mounted volume can lose
+            // its exec bit; ProcessBuilder would then fail with "Permission
+            // denied" with no fallback. Only use it when actually executable.
+            if (Files.isRegularFile(wrapper) && Files.isExecutable(wrapper)) {
+                return wrapper.toAbsolutePath().toString();
+            }
         }
 
         // 2. MAVEN_HOME environment variable
@@ -195,21 +242,8 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
         cmd.add(resolveMvnCommand(projectRoot));
         cmd.add("-f");
         cmd.add(projectRoot.resolve("pom.xml").toString());
-        // User-provided extra args (from CLI / factory)
-        extraArgs.stream().filter(s -> !s.isEmpty()).forEach(cmd::add);
-        // System property fallback: -Dcodescope.mvn.args=...
-        if (extraArgs.isEmpty()) {
-            String propArgs = System.getProperty(PROP_MVN_ARGS);
-            if (propArgs != null && !propArgs.isBlank()) {
-                addShellWords(cmd, propArgs);
-            }
-        }
-        // Env var fallback: CODESCOPE_MVN_ARGS
-        if (extraArgs.isEmpty() && System.getProperty(PROP_MVN_ARGS) == null) {
-            String envArgs = System.getenv(ENV_MVN_ARGS);
-            if (envArgs != null && !envArgs.isBlank()) {
-                addShellWords(cmd, envArgs);
-            }
+        for (String a : effectiveExtraArgs()) {
+            if (!a.isEmpty()) cmd.add(a);
         }
         cmd.add("dependency:build-classpath");
         cmd.add("-Dmdep.outputFile=" + outputFile.toAbsolutePath());
@@ -220,14 +254,89 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
     }
 
     /**
-     * Append whitespace-separated words to {@code cmd}, dropping empty
-     * segments. {@code "  -gs /x "} splits to {@code ["", "-gs", "/x"]};
-     * an empty argument passed through to Maven is at best ignored and at
-     * worst a malformed invocation.
+     * The extra Maven arguments actually in effect: the factory/CLI list if
+     * set, else {@code -Dcodescope.mvn.args}, else {@code CODESCOPE_MVN_ARGS}.
+     * Both fallback sources are parsed with {@link #splitShellWords} so a
+     * quoted path containing spaces survives.
      */
-    private static void addShellWords(List<String> cmd, String args) {
-        for (String word : args.split("\\s+")) {
-            if (!word.isEmpty()) cmd.add(word);
+    List<String> effectiveExtraArgs() {
+        if (!extraArgs.isEmpty()) return extraArgs;
+        String propArgs = System.getProperty(PROP_MVN_ARGS);
+        if (propArgs != null && !propArgs.isBlank()) return splitShellWords(propArgs);
+        String envArgs = System.getenv(ENV_MVN_ARGS);
+        if (envArgs != null && !envArgs.isBlank()) return splitShellWords(envArgs);
+        return List.of();
+    }
+
+    /**
+     * A digest of everything that can change the resolved classpath without
+     * touching a pom: the user {@code ~/.m2/settings.xml}, any {@code -gs}/
+     * {@code --settings} file referenced by the extra args, and an explicit
+     * {@code -Dmaven.repo.local=...}. Empty when none of them are present.
+     * Feeds {@link ClasspathCache} so a settings/local-repository change
+     * invalidates the cached classpath.
+     */
+    String settingsDigest(List<String> args) {
+        try {
+            java.security.MessageDigest md =
+                    java.security.MessageDigest.getInstance("SHA-256");
+            Path userSettings = Path.of(System.getProperty("user.home", "."),
+                    ".m2", "settings.xml");
+            if (Files.isRegularFile(userSettings)) {
+                md.update(Files.readAllBytes(userSettings));
+            }
+            for (int i = 0; i < args.size(); i++) {
+                String a = args.get(i);
+                if (("-gs".equals(a) || "--settings".equals(a)) && i + 1 < args.size()) {
+                    Path p = Path.of(args.get(i + 1));
+                    if (Files.isRegularFile(p)) md.update(Files.readAllBytes(p));
+                } else if (a.startsWith("-Dmaven.repo.local=")) {
+                    md.update(a.getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            byte[] d = md.digest();
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
         }
+    }
+
+    /**
+     * Splits a shell-style argument string on whitespace, honoring single and
+     * double quotes so a path with spaces stays one argument:
+     * {@code -gs "/x/My Settings/settings.xml"} → {@code ["-gs",
+     * "/x/My Settings/settings.xml"]}. Quote characters are stripped; an
+     * explicitly quoted empty string yields one empty argument.
+     */
+    static List<String> splitShellWords(String args) {
+        List<String> out = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inSingle = false, inDouble = false, started = false;
+        for (int i = 0; i < args.length(); i++) {
+            char c = args.charAt(i);
+            if (c == '\'' && !inDouble) {
+                inSingle = !inSingle;
+                started = true;
+            } else if (c == '"' && !inSingle) {
+                inDouble = !inDouble;
+                started = true;
+            } else if (Character.isWhitespace(c) && !inSingle && !inDouble) {
+                if (started) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    started = false;
+                }
+            } else {
+                cur.append(c);
+                started = true;
+            }
+        }
+        if (started) out.add(cur.toString());
+        return out;
     }
 }

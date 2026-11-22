@@ -256,13 +256,9 @@ public final class ProjectLoader {
      * sibling search (a pom in any ancestor directory).
      */
     private static Path resolveParentDirectory(Path current, Path pom) {
-        // Default Maven relativePath: ../pom.xml
-        Path defaultParent = current.getParent();
-        if (defaultParent != null
-                && Files.isRegularFile(defaultParent.resolve("pom.xml"))) {
-            return defaultParent;
-        }
-        // Read <relativePath> from the pom
+        // An explicit <relativePath> wins over Maven's default of
+        // ../pom.xml. Checking the default first (the previous behavior)
+        // resolved the wrong aggregator when both existed.
         String rel = readRelativePath(pom);
         if (rel != null && !rel.isEmpty()) {
             // relativePath is a path to the parent pom.xml (or its
@@ -280,13 +276,18 @@ public final class ProjectLoader {
             // to the child module's directory; in any well-formed
             // project that means `current` is a descendant of the
             // resolved directory. Ignore anything that fails this
-            // check and fall through to the sibling-search fallback.
+            // check and fall through to the default/fallback.
             Path dir = Files.isDirectory(resolved) ? resolved : resolved.getParent();
-            if (dir != null && current.toAbsolutePath().normalize().startsWith(dir)) {
-                if (Files.exists(resolved)) {
-                    return dir;
-                }
+            if (dir != null && current.toAbsolutePath().normalize().startsWith(dir)
+                    && Files.exists(resolved)) {
+                return dir;
             }
+        }
+        // Default Maven relativePath: ../pom.xml
+        Path defaultParent = current.getParent();
+        if (defaultParent != null
+                && Files.isRegularFile(defaultParent.resolve("pom.xml"))) {
+            return defaultParent;
         }
         // Last resort: walk up to the nearest directory that has a
         // pom.xml without a <parent> (the aggregator). This handles

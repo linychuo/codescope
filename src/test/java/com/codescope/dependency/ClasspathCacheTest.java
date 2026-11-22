@@ -32,7 +32,7 @@ class ClasspathCacheTest {
     @Test
     void roundTripsThroughDisk(@TempDir Path tmp) throws Exception {
         writePom(tmp, "a");
-        String fingerprint = ClasspathCache.fingerprint(tmp, List.of());
+        String fingerprint = ClasspathCache.fingerprint(tmp, List.of(), "");
         assertNotNull(fingerprint);
         ClasspathCache.save(fingerprint, List.of("/repo/a.jar", "/repo/b.jar"));
         assertEquals(List.of("/repo/a.jar", "/repo/b.jar"), ClasspathCache.load(fingerprint));
@@ -41,12 +41,12 @@ class ClasspathCacheTest {
     @Test
     void pomChangeInvalidates(@TempDir Path tmp) throws Exception {
         writePom(tmp, "a");
-        String before = ClasspathCache.fingerprint(tmp, List.of());
+        String before = ClasspathCache.fingerprint(tmp, List.of(), "");
         ClasspathCache.save(before, List.of("/repo/a.jar"));
         assertEquals(List.of("/repo/a.jar"), ClasspathCache.load(before));
 
         writePom(tmp, "b");
-        String after = ClasspathCache.fingerprint(tmp, List.of());
+        String after = ClasspathCache.fingerprint(tmp, List.of(), "");
         assertNotEquals(before, after, "a dependency change must change the key");
         assertNull(ClasspathCache.load(after), "the new key has no cached classpath yet");
     }
@@ -54,8 +54,8 @@ class ClasspathCacheTest {
     @Test
     void extraArgsArePartOfTheKey(@TempDir Path tmp) throws Exception {
         writePom(tmp, "a");
-        String plain = ClasspathCache.fingerprint(tmp, List.of());
-        String withSettings = ClasspathCache.fingerprint(tmp, List.of("-gs", "/tmp/s.xml"));
+        String plain = ClasspathCache.fingerprint(tmp, List.of(), "");
+        String withSettings = ClasspathCache.fingerprint(tmp, List.of("-gs", "/tmp/s.xml"), "");
         assertNotEquals(plain, withSettings,
                 "different Maven args can resolve to a different classpath");
     }

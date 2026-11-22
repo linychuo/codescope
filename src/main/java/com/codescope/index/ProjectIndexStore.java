@@ -42,9 +42,26 @@ public final class ProjectIndexStore {
     public static void save(ProjectIndex index, Path file) throws IOException {
         Path parent = file.getParent();
         if (parent != null) Files.createDirectories(parent);
-        try (ObjectOutputStream out = new ObjectOutputStream(
-                new BufferedOutputStream(Files.newOutputStream(file)))) {
-            out.writeObject(index);
+        // Temp + atomic move: a concurrent reader (or a crash mid-write) must
+        // never leave a truncated index that later deserializes as a
+        // corrupt-but-present cache entry.
+        Path tmp = Files.createTempFile(parent, "index-", ".tmp");
+        boolean moved = false;
+        try {
+            try (ObjectOutputStream out = new ObjectOutputStream(
+                    new BufferedOutputStream(Files.newOutputStream(tmp)))) {
+                out.writeObject(index);
+            }
+            try {
+                Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                moved = true;
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                moved = true;
+            }
+        } finally {
+            if (!moved) Files.deleteIfExists(tmp);
         }
         evictOldEntries(parent, file);
     }

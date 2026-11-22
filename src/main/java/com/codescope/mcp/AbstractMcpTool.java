@@ -1,5 +1,6 @@
 package com.codescope.mcp;
 
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -44,6 +45,14 @@ abstract class AbstractMcpTool implements Tool {
         if (v == null) return null;
         int n;
         if (v instanceof Number num) {
+            // Reject non-integral and out-of-int-range values instead of
+            // silently truncating (arity 4294967297 would become 1 and
+            // silently select the wrong overload).
+            double d = num.doubleValue();
+            if (d != Math.rint(d) || d < Integer.MIN_VALUE || d > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Optional argument '" + key
+                        + "' must be an integer in int range; got: " + v);
+            }
             n = num.intValue();
         } else if (v instanceof String s) {
             try {
@@ -114,7 +123,18 @@ abstract class AbstractMcpTool implements Tool {
      */
     protected Path resolveProjectRoot(Map<String, Object> args) {
         Object p = args.get("project");
-        if (p != null) return Paths.get(p.toString()).toAbsolutePath();
+        if (p != null) {
+            if (!(p instanceof String s) || s.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Optional argument 'project' must be a non-empty string; got: " + p);
+            }
+            try {
+                return Paths.get(s).toAbsolutePath();
+            } catch (InvalidPathException e) {
+                throw new IllegalArgumentException(
+                        "Optional argument 'project' is not a valid path: '" + s + "'");
+            }
+        }
         if (hostDefaultProject != null && !hostDefaultProject.isBlank()) {
             return Paths.get(hostDefaultProject).toAbsolutePath();
         }

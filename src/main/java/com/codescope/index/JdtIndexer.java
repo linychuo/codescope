@@ -44,6 +44,10 @@ public final class JdtIndexer {
                               Path projectRoot,
                               boolean includeTests) {
         ProjectIndex index = new ProjectIndex();
+        // Remember the root the loader passed (the effective/aggregator root)
+        // so the service layer can resolve the index's relative paths for
+        // source snippets even when --project pointed at a sub-module.
+        index.setRoot(projectRoot == null ? null : projectRoot.toString());
 
         // MyBatis mapper XML (issue #9 item 4): the XML is the
         // implementation of a mapper interface method, so index its

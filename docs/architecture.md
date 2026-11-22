@@ -122,8 +122,8 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 | `JdtIndexer.build` | 每个源文件一个 virtual thread + `Executors.newVirtualThreadPerTaskExecutor()` | 解析+ binding 解析会卡在 jar I/O 上;虚拟线程的阻塞是廉价的 |
 | `JdtIndexer.parseFile` | 解析器 compliance 固定为 JDT 支持的最新级别,并启用 preview 特性 | 默认 compliance 是 Java 1.8,record/var/文本块/switch 表达式等现代语法会被当成语法错误,整个文件被静默丢弃;preview 语法同理 |
 | shared `ProjectIndexCache` (injected by `Main`) | 同步 LRU,容量 8;固定大小的锁条(64 条 `ReentrantLock`)按 key 哈希分配,构建在缓存锁外进行 | 长时间会话里 host 可能把同一个工具指向多个 project;所有 MCP 工具共用一个 cache,跨 `tools/call` 复用索引构建结果;锁条让不同 project 并发构建且内存有界,LRU 的读写仍在全局锁内保持正确 |
-| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
-| `MavenClasspathResolver` | 保留不用(旧实现,纯文件系统解析 pom) | 作为离线 fallback 备用,不再被 `ProjectLoader` 引用 |
+| `MvnCliDependencyResolver` | 调用 `mvn dependency:build-classpath` 获取真实依赖树;聚合工程按 `<modules>` 逐模块解析并合并(单次调用对每个模块各跑一次,后写覆盖前写);单次调用有超时(默认 600s,`-Dcodescope.mvn.timeout` 覆盖) | 支持私服、镜像、`-gs` 自定义 settings.xml、`CODESCOPE_MVN_ARGS` 环境变量;由 `DependencyResolverFactory` 根据构建文件自动选择;没有超时,卡住的 Maven 会让工具无限挂起 |
+| `MavenClasspathResolver` | 保留但无生产调用方(旧实现,纯文件系统解析 pom) | 仅测试覆盖;不被 `ProjectLoader` 或任何生产代码引用,保留是既定决定 |
 | `ProjectLoader.collectSourceRoots0` | 匹配 `src/<...>/main/java`(test 视 `includeTests`),并并入每个 pom 的 `<build><sourceDirectory>`/`<testSourceDirectory>` | 测试代码默认不参与调用链;Maven 允许自定义源码目录,不读 pom 会漏掉这些文件 |
 
 ## 改哪儿 — 常见场景
@@ -148,7 +148,7 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 - **`analysis.HierarchyEdgeCaseTest`** — 方法层级边界:local class 方法、package-private 跨包不链接、record 紧凑构造器、泛型类型变量 override、自递归诊断
 - **`mcp.McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
 - **`mcp.McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
-- **`dependency.MavenClasspathResolverTest` / `dependency.MavenSettingsTest`** — pom 解析各自的边界(旧实现,保留作 offline fallback)
+- **`dependency.MavenClasspathResolverTest` / `dependency.MavenSettingsTest`** — pom 解析各自的边界(旧实现,保留但无生产调用方)
 - **`loader.MultiModuleTest`** — 多模块 Maven:跨模块 binding、子模块项目根回退到 aggregator、缓存相对路径
 - **`MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest`** — 依赖解析抽象层:解析 `mvn dependency:build-classpath` 输出、错误处理、构建工具自动检测
 - **`CliTest`** — CLI 前端(`java -jar codescope.jar <command>`)的协议测试:`Cli.run` 直驱(不触发 `System.exit`),覆盖子命令分发、必填 `--project`、缺位置参数、未知 option / kind、退出码 0/1/2、三个子命令在 codescope 自身上的 happy path。`Cli.dispatch` 改完直接看红绿

@@ -128,4 +128,63 @@ class MyBatisPlusDelegationTest {
         assertFalse(json.contains("MyOtherService"),
                 "the delegation must be scoped to the receiver, got: " + json);
     }
+
+    @Test
+    void receiverScopedDelegationDoesNotLeakSiblingMapper() {
+        // Regression: a frame's delegation used to be resolved with the union
+        // of its own call-site receivers AND its ancestors', so a sibling
+        // service's mapper appeared under a frame that could never reach it.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey run = new MethodKey("com.example.Facade", "run", 0, List.of());
+        MethodKey helper = new MethodKey("com.example.Facade", "helper", 1,
+                List.of("java.lang.Object"));
+        MethodKey getById = new MethodKey(MyBatisPlus.I_SERVICE, "getById", 1,
+                List.of("java.io.Serializable"));
+        MethodKey myMapper = new MethodKey("com.example.MyMapper", "selectById", 1,
+                List.of("java.io.Serializable"));
+        MethodKey otherMapper = new MethodKey("com.example.MyOtherMapper", "selectById", 1,
+                List.of("java.io.Serializable"));
+        for (MethodKey k : List.of(run, helper, getById, myMapper, otherMapper)) {
+            index.putDeclaration(k, new ProjectIndex.SourceLoc("F.java", 1));
+        }
+        index.recordInvocation(run, getById);
+        index.recordCallSite(run, getById, new ProjectIndex.SourceLoc("F.java", 2),
+                "com.example.MyService");
+        index.recordInvocation(run, helper);
+        index.recordCallSite(run, helper, new ProjectIndex.SourceLoc("F.java", 3),
+                "com.example.Facade");
+        index.recordInvocation(helper, getById);
+        index.recordCallSite(helper, getById, new ProjectIndex.SourceLoc("F.java", 4),
+                "com.example.MyOtherService");
+        index.recordDelegation(getById, "com.example.MyService", myMapper);
+        index.recordDelegation(getById, "com.example.MyOtherService", otherMapper);
+
+        com.codescope.analysis.CalleeChainAnalyzer.Result r =
+                new com.codescope.analysis.CalleeChainAnalyzer().traceCallees(
+                        index, run, List.of(run), "com.example.Facade");
+        com.codescope.analysis.CallNode helperNode =
+                find(r.root(), "com.example.Facade#helper/1");
+        assertNotNull(helperNode, "helper frame must be in the callee tree");
+        Set<String> helperSubtree = new java.util.HashSet<>();
+        collect(helperNode, helperSubtree);
+        assertTrue(helperSubtree.contains("com.example.MyOtherMapper#selectById/1"),
+                "the receiver's own mapper must be present, got: " + helperSubtree);
+        assertFalse(helperSubtree.contains("com.example.MyMapper#selectById/1"),
+                "a sibling receiver's mapper must not leak into helper, got: " + helperSubtree);
+    }
+
+    private static com.codescope.analysis.CallNode find(
+            com.codescope.analysis.CallNode node, String signature) {
+        if (signature.equals(node.signature)) return node;
+        for (com.codescope.analysis.CallNode c : node.callers) {
+            var found = find(c, signature);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static void collect(com.codescope.analysis.CallNode node, Set<String> out) {
+        out.add(node.signature);
+        for (com.codescope.analysis.CallNode c : node.callers) collect(c, out);
+    }
 }

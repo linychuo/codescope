@@ -111,14 +111,14 @@ public final class MethodResolver {
      * one display key. Returns the empty string when no union happened
      * (single seed or empty seeds list).
      */
-    public static String overloadUnionSuffix(List<MethodKey> seeds) {
+    public static String overloadUnionSuffix(List<MethodKey> seeds, String noun) {
         if (seeds.size() <= 1) return "";
         String overloads = seeds.stream()
                 .map(MethodKey::fullSignature)
                 .sorted()
                 .collect(Collectors.toList())
                 .toString();
-        return " (combined callers across " + seeds.size()
+        return " (combined " + noun + " across " + seeds.size()
                 + " library overloads: " + overloads + ")";
     }
 }

@@ -129,8 +129,13 @@ public final class ProjectIndexCache {
      * or a write failure simply falls back to a normal build.
      */
     private ProjectIndex buildIndex(IndexCacheKey key, boolean refresh) {
+        // Fingerprint the tree that is actually indexed. ProjectLoader
+        // walks up to the aggregator for a sub-module --project, so the
+        // index covers sibling modules; keying on the raw root would let a
+        // sibling-module edit go unnoticed and serve a stale index.
+        Path effectiveRoot = ProjectLoader.discoverEffectiveRoot(key.projectRoot());
         String fingerprint =
-                IndexFingerprint.compute(key.projectRoot(), key.includeTests());
+                IndexFingerprint.compute(effectiveRoot, key.includeTests());
         Path cacheFile = fingerprint == null
                 ? null
                 : IndexFingerprint.cacheDir().resolve("index-" + fingerprint + ".ser");

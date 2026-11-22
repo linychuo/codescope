@@ -156,20 +156,20 @@ public final class FindCallSitesService {
         // implementors (project types), not library overloads, so they
         // must not get that wording.
         if (target == null && seeds.size() > 1) {
-            message = message + MethodResolver.overloadUnionSuffix(seeds);
+            message = message + MethodResolver.overloadUnionSuffix(seeds, "call sites");
         }
         message = ProjectIndexCache.withSkippedFilesSuffix(message, index);
 
         // Pagination applies to the fully-built, stably-sorted list so the
         // window is deterministic across calls (the union's map iteration
         // order is not part of the contract).
-        SourceSnippet snippets = new SourceSnippet(projectRoot);
+        SourceSnippet snippets = SourceSnippet.against(index, projectRoot);
         List<Map<String, Object>> allSites = buildCallSitesArray(index, union, snippets);
         int total = allSites.size();
         List<Map<String, Object>> page = paginate(allSites, offset, limit);
         if (page.size() < total) {
-            message = message + " (showing " + (Math.min(offset + 1, total))
-                    + "-" + (offset + page.size()) + " of " + total
+            message = message + " (showing " + Math.min((long) offset + 1, total)
+                    + "-" + ((long) offset + page.size()) + " of " + total
                     + "; pass offset/limit to paginate)";
         }
 
@@ -355,7 +355,7 @@ public final class FindCallSitesService {
             entry.put("caller_line", decl != null ? decl.line() : 0);
             // Issue #9: the caller's declaration line and entry-point
             // label, matching the trace tools' node shape.
-            String callerSnippet = snippets.line(decl.file(), decl.line());
+            String callerSnippet = decl == null ? null : snippets.line(decl.file(), decl.line());
             if (callerSnippet != null) entry.put("caller_snippet", callerSnippet);
             String callerEntry = index.entryPointKindOf(e.getKey());
             if (callerEntry != null) entry.put("entryPoint", callerEntry);
