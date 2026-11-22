@@ -9,6 +9,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -49,19 +50,27 @@ final class IndexFingerprint {
             // a build-output tree (target/) can hold hundreds of thousands
             // of files that the index never reads.
             List<Path> files = new ArrayList<>();
-            collectFiles(projectRoot, files);
+            Set<Path> generated = new java.util.HashSet<>();
+            collectFiles(projectRoot, files, generated);
             files.sort(Comparator.comparing(Path::toString));
 
             // Sources and mapper XML: path + mtime + size is enough to
-            // detect edits without hashing every file's content.
+            // detect edits without hashing every file's content. Generated
+            // sources are the exception — they are rewritten on every build,
+            // so a byte-identical regeneration must not invalidate the
+            // cache; hash their content instead.
             for (Path p : files) {
-                String rel = projectRoot.relativize(p).toString();
                 String name = p.getFileName().toString();
                 if (name.endsWith(".java") || name.endsWith(".xml")) {
-                    md.update(rel.getBytes(StandardCharsets.UTF_8));
-                    md.update(Long.toString(Files.getLastModifiedTime(p).toMillis())
+                    md.update(projectRoot.relativize(p).toString()
                             .getBytes(StandardCharsets.UTF_8));
-                    md.update(Long.toString(Files.size(p)).getBytes(StandardCharsets.UTF_8));
+                    if (generated.contains(p)) {
+                        md.update(Files.readAllBytes(p));
+                    } else {
+                        md.update(Long.toString(Files.getLastModifiedTime(p).toMillis())
+                                .getBytes(StandardCharsets.UTF_8));
+                        md.update(Long.toString(Files.size(p)).getBytes(StandardCharsets.UTF_8));
+                    }
                 }
             }
             // Pom contents: a dependency change does not always move the
@@ -115,7 +124,7 @@ final class IndexFingerprint {
     }
 
     /** Collects the regular files under {@code root}, pruning excluded trees. */
-    private static void collectFiles(Path root, List<Path> out) {
+    private static void collectFiles(Path root, List<Path> out, Set<Path> generated) {
         try {
             Files.walkFileTree(root, java.util.EnumSet.noneOf(java.nio.file.FileVisitOption.class),
                     MAX_DEPTH, new java.nio.file.SimpleFileVisitor<>() {
@@ -137,7 +146,7 @@ final class IndexFingerprint {
                                 for (String gen : new String[]{
                                         "generated-sources", "generated-test-sources"}) {
                                     Path g = dir.resolve(gen);
-                                    if (Files.isDirectory(g)) walkInto(g, out);
+                                    if (Files.isDirectory(g)) walkInto(g, out, generated);
                                 }
                                 return java.nio.file.FileVisitResult.SKIP_SUBTREE;
                             }
@@ -165,9 +174,12 @@ final class IndexFingerprint {
     }
 
     /** Adds every regular file under {@code dir} (depth-bounded), best-effort. */
-    private static void walkInto(Path dir, List<Path> out) {
+    private static void walkInto(Path dir, List<Path> out, Set<Path> generated) {
         try (Stream<Path> s = Files.walk(dir, MAX_DEPTH)) {
-            s.filter(Files::isRegularFile).forEach(out::add);
+            for (Path p : s.filter(Files::isRegularFile).toList()) {
+                out.add(p);
+                generated.add(p);
+            }
         } catch (IOException e) {
             // best-effort: an unreadable generated tree just omits those files
         }

@@ -314,7 +314,22 @@ public final class ProjectIndex implements Serializable {
      */
     public MethodKey delegationOf(MethodKey from, String receiverType) {
         Map<String, MethodKey> byReceiver = delegations.get(from);
-        return byReceiver == null ? null : byReceiver.get(receiverType);
+        if (byReceiver == null) return null;
+        MethodKey exact = byReceiver.get(receiverType);
+        if (exact != null) return exact;
+        // The call site's receiver may be the implementation class rather
+        // than the service interface the delegation was recorded for
+        // (e.g. a `XxxServiceImpl`-typed expression vs `XxxService`). Fall
+        // back to a recorded supertype, but only when unambiguous: a class
+        // implementing two services must not pick one arbitrarily.
+        MethodKey match = null;
+        for (Map.Entry<String, MethodKey> e : byReceiver.entrySet()) {
+            if (isSubtypeOf(receiverType, e.getKey())) {
+                if (match != null) return null;   // ambiguous
+                match = e.getValue();
+            }
+        }
+        return match;
     }
 
     public void recordInvocation(MethodKey caller, MethodKey callee) {

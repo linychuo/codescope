@@ -48,8 +48,11 @@ public final class McpServer {
     /**
      * Cap on one stdin frame. A host that streams an unterminated object
      * would otherwise make the accumulation buffer grow without bound.
+     * Override with {@code -Dcodescope.max.frame.bytes=<n>} when a host
+     * legitimately sends larger messages (e.g. a very large roots list).
      */
-    private static final int MAX_FRAME_BYTES = 16 * 1024 * 1024;
+    private static final int MAX_FRAME_BYTES = Integer.getInteger(
+            "codescope.max.frame.bytes", 16 * 1024 * 1024);
 
     private final ObjectMapper json = new ObjectMapper();
     private final ToolRegistry tools = new ToolRegistry();
@@ -68,6 +71,14 @@ public final class McpServer {
     // interrupt the worker and EOF can wait for it. Only tools/call is
     // dispatched asynchronously (see dispatchAsync).
     private final Map<String, Thread> inFlightToolCalls = new ConcurrentHashMap<>();
+    /**
+     * Maps a request's raw id string to its unique in-flight key, so a
+     * {@code notifications/cancelled} can find the worker. The key is
+     * unique per request: keying {@link #inFlightToolCalls} on the raw id
+     * would collide for a numeric {@code 1} and a string {@code "1"}.
+     */
+    private final Map<String, String> toolKeyById = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong toolCallSeq = new java.util.concurrent.atomic.AtomicLong();
 
     /** Notified (off the I/O thread) with the first workspace root the host advertises. */
     private volatile Consumer<String> defaultProjectRootSink;
@@ -249,22 +260,25 @@ public final class McpServer {
         // Track every request that has an id — numeric or string — so EOF
         // waits for its response. A missing id is a notification: nothing to
         // reply to, so it needs no tracking.
-        String key = idObj == null ? null : String.valueOf(idObj);
-        if (key == null) {
+        String idKey = idObj == null ? null : String.valueOf(idObj);
+        if (idKey == null) {
             Thread t = Thread.ofVirtual().name("tool-call-anon")
                     .unstarted(() -> safeHandle(msg));
             t.start();
             return;
         }
+        String key = "call-" + toolCallSeq.incrementAndGet();
         Thread[] holder = new Thread[1];
-        Thread t = Thread.ofVirtual().name("tool-call-" + key).unstarted(() -> {
+        Thread t = Thread.ofVirtual().name("tool-call-" + idKey).unstarted(() -> {
             try {
                 safeHandle(msg);
             } finally {
                 inFlightToolCalls.remove(key, holder[0]);
+                toolKeyById.remove(idKey, key);
             }
         });
         holder[0] = t;
+        toolKeyById.put(idKey, key);
         inFlightToolCalls.put(key, t);
         t.start();
     }
@@ -527,7 +541,8 @@ public final class McpServer {
                     // read loop is the only thread that can receive this
                     // notification during a slow tool call, so reaching
                     // here means the call has been running on a worker.
-                    Thread tool = inFlightToolCalls.remove(String.valueOf(cancelledId));
+                    String key = toolKeyById.remove(String.valueOf(cancelledId));
+                    Thread tool = key == null ? null : inFlightToolCalls.remove(key);
                     if (tool != null) tool.interrupt();
                 }
                 return;

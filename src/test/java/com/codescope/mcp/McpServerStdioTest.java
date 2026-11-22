@@ -312,7 +312,10 @@ class McpServerStdioTest {
         if (cp == null || cp.isEmpty()) {
             throw new IllegalStateException("no classpath available");
         }
-        ProcessBuilder pb = new ProcessBuilder("java", "-cp", cp, "com.codescope.Main");
+        // Bound the subprocess's Maven call: a tool call that shells out to
+        // mvn must not hang the whole suite if the network/local repo wedges.
+        ProcessBuilder pb = new ProcessBuilder("java",
+                "-Dcodescope.mvn.timeout=30", "-cp", cp, "com.codescope.Main");
         Process proc = pb
                 .redirectError(ProcessBuilder.Redirect.PIPE)
                 .redirectOutput(ProcessBuilder.Redirect.PIPE)

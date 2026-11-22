@@ -20,6 +20,8 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
     private static final String PROP_MVN_TIMEOUT = "codescope.mvn.timeout";
     /** Default cap on one mvn invocation (10 minutes). */
     private static final long DEFAULT_TIMEOUT_SECONDS = 600;
+    /** Max concurrent per-module Maven invocations for an aggregator. */
+    private static final int MAX_MODULE_PARALLELISM = 4;
     private static final boolean IS_WINDOWS = System.getProperty("os.name")
             .toLowerCase(Locale.ROOT).contains("win");
 
@@ -86,9 +88,50 @@ public final class MvnCliDependencyResolver implements DependencyResolver {
     private List<String> resolveViaMaven(Path projectRoot) throws IOException {
         List<Path> modules = moduleDirs(projectRoot);
         if (modules.isEmpty()) return resolveSingleModule(projectRoot);
-        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
-        for (Path module : modules) merged.addAll(resolveViaMaven(module));
-        return new ArrayList<>(merged);
+        // Resolve modules concurrently (bounded): each is an independent
+        // `mvn -f <module>/pom.xml` invocation, so they overlap on I/O. The
+        // bound keeps concurrent access to ~/.m2 modest.
+        java.util.concurrent.Semaphore permits =
+                new java.util.concurrent.Semaphore(MAX_MODULE_PARALLELISM);
+        try (java.util.concurrent.ExecutorService pool =
+                     java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            List<java.util.concurrent.Future<List<String>>> futures =
+                    new ArrayList<>(modules.size());
+            for (Path module : modules) {
+                futures.add(pool.submit(() -> {
+                    try {
+                        permits.acquire();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return List.<String>of();
+                    }
+                    try {
+                        return resolveViaMaven(module);
+                    } finally {
+                        permits.release();
+                    }
+                }));
+            }
+            java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+            IOException failure = null;
+            for (java.util.concurrent.Future<List<String>> f : futures) {
+                try {
+                    merged.addAll(f.get());
+                } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable c = e.getCause();
+                    if (failure == null) {
+                        if (c instanceof IOException io) failure = io;
+                        else if (c instanceof RuntimeException re) throw re;
+                        else failure = new IOException(c);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted while resolving modules", e);
+                }
+            }
+            if (failure != null) throw failure;
+            return new ArrayList<>(merged);
+        }
     }
 
     /**

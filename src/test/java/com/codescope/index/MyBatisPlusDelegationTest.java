@@ -173,6 +173,23 @@ class MyBatisPlusDelegationTest {
                 "a sibling receiver's mapper must not leak into helper, got: " + helperSubtree);
     }
 
+    @Test
+    void delegationFallsBackToRecordedSupertypeForImplReceiver() {
+        // A call site whose receiver is typed as the impl class (not the
+        // service interface) must still resolve, via the recorded hierarchy.
+        ProjectIndex index = new ProjectIndex();
+        MethodKey getById = new MethodKey(MyBatisPlus.I_SERVICE, "getById", 1,
+                List.of("java.io.Serializable"));
+        MethodKey mapper = new MethodKey("com.example.MyMapper", "selectById", 1,
+                List.of("java.io.Serializable"));
+        index.recordDelegation(getById, "com.example.MyService", mapper);
+        index.recordTypeHierarchy("com.example.MyServiceImpl", "com.example.MyService");
+        assertEquals(mapper, index.delegationOf(getById, "com.example.MyServiceImpl"),
+                "an impl-typed receiver must resolve to its service's mapper");
+        assertNull(index.delegationOf(getById, "com.example.Unrelated"),
+                "an unrelated receiver must not match");
+    }
+
     private static com.codescope.analysis.CallNode find(
             com.codescope.analysis.CallNode node, String signature) {
         if (signature.equals(node.signature)) return node;

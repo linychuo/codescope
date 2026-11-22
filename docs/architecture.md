@@ -13,7 +13,7 @@ com.codescope
 ├── index/                   JdtIndexer、CallSiteVisitor、ProjectIndex、ProjectIndexCache、MethodHierarchyExtractor、MapperXmlIndexer、EntryPoints
 ├── analysis/                CallChainAnalyzer、CalleeChainAnalyzer、CallNode、MethodResolver
 ├── model/                   MethodKey
-├── dependency/              DependencyResolver(+Factory)、MvnCliDependencyResolver、MavenClasspathResolver、MavenSettings
+├── dependency/              DependencyResolver(+Factory)、MvnCliDependencyResolver、ClasspathCache
 └── loader/                  ProjectLoader
 ```
 
@@ -148,7 +148,6 @@ calls.computeIfAbsent(callee, k -> new LinkedHashSet<>()).add(caller);
 - **`analysis.HierarchyEdgeCaseTest`** — 方法层级边界:local class 方法、package-private 跨包不链接、record 紧凑构造器、泛型类型变量 override、自递归诊断
 - **`mcp.McpServerTest`** — 协议层:JSON-RPC 错误码、cancellation、string id、负 arity、错误响应完成 future 异常并格式化错误码、`method`/`params` 类型校验、尾随字节保留、不完整输入保留
 - **`mcp.McpServerStdioTest`** — 真起一个进程跑 stdio(只跑 `McpServerTest` 没覆盖的整条链路):initialize / tools/list / tools/call、错误响应、roots/list 反向 RPC、host 不声明 roots 时不去拉、`result: null` 这类畸形响应不影响后续调用
-- **`dependency.MavenClasspathResolverTest` / `dependency.MavenSettingsTest`** — pom 解析各自的边界(旧实现,保留但无生产调用方)
 - **`loader.MultiModuleTest`** — 多模块 Maven:跨模块 binding、子模块项目根回退到 aggregator、缓存相对路径
 - **`MvnCliDependencyResolverTest` / `DependencyResolverFactoryTest`** — 依赖解析抽象层:解析 `mvn dependency:build-classpath` 输出、错误处理、构建工具自动检测
 - **`CliTest`** — CLI 前端(`java -jar codescope.jar <command>`)的协议测试:`Cli.run` 直驱(不触发 `System.exit`),覆盖子命令分发、必填 `--project`、缺位置参数、未知 option / kind、退出码 0/1/2、三个子命令在 codescope 自身上的 happy path。`Cli.dispatch` 改完直接看红绿
